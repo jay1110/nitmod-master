@@ -1,0 +1,20 @@
+weaponDef
+{
+    client {
+        weaponConfig        "models/multiplayer/smokebomb/weapon.cfg"
+	  handsModel			"models/multiplayer/smokebomb/v_smokebomb_hand.mdc"
+               
+        flashDlightColor    1 0.7 0.5
+		weaponSelectedIcon	"icons/iconw_smokegrenade_1_select"
+		missileModel		"models/multiplayer/bomb/bomb.md3"
+		missileTrailFunc	"GrenadeTrail"
+
+		firstPerson {
+			model			"models/multiplayer/bomb/v_bomb.md3"
+			
+		}
+		thirdPerson {
+			model			"models/multiplayer/bomb/bomb.md3"
+		}
+	}
+}

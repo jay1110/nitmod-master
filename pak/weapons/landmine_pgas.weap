@@ -1,0 +1,25 @@
+weaponDef
+{
+	client {
+		weaponConfig		"models/multiplayer/landmine/weapon.cfg"
+		handsModel		"models/multiplayer/landmine/v_landmine_hand.md3"
+		
+		overheatSound		"sound/weapons/grenade/gren_smoke.wav"
+
+		weaponSelectedIcon	"icons/iconw_plandmine_1_select"
+		
+		missileModel		"models/multiplayer/landmine/plandmine.md3"
+		missileTrailFunc	"PyroSmokeTrail"
+		
+		modModel 0		"models/multiplayer/mine_marker/allied_marker2.md3"
+		modModel 1		"models/multiplayer/mine_marker/axis_marker2.md3"
+		
+		firstPerson {
+			model		"models/multiplayer/landmine/v_plandmine.md3"
+		}
+		
+		thirdPerson {
+			model		"models/multiplayer/landmine/plandmine.md3"
+		}
+	}
+}

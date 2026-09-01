@@ -1,0 +1,1486 @@
+//-------------------------------------------------------------
+// Venice_dm.script --- Nico$
+//-------------------------------------------------------------
+
+game_manager
+{
+	spawn
+	{
+
+		remapshader "models/mapobjects/tanks_sd/mg42turret" "models/mapobjects/tanks_c1/mg42turret_c1"
+		remapshader "models/mapobjects/tanks_sd/churchill_flat" "models/mapobjects/tanks_c1/churchill_flat_c1"
+
+		setstate outpost_sandbags default
+
+		remapshaderflush
+
+		//  37 DM spawns
+
+		create
+		{
+			scriptName "dmspawn1"
+			classname "team_CTF_greenspawn"
+			targetname "dmspawn1"
+			origin "-4360 -829 -127"
+			spawnflags 2	
+			angle 0
+		}
+
+		create
+		{
+			scriptName "dmspawn2"
+			classname "team_CTF_greenspawn"
+			targetname "dmspawn2"
+			origin "-3359 -847 -191"
+			spawnflags 2	
+			angle 0
+		}
+
+		create
+		{
+			scriptName "dmspawn3"
+			classname "team_CTF_greenspawn"
+			targetname "dmspawn3"
+			origin "-4374 459 -111"
+			spawnflags 2	
+			angle 90
+		}
+
+		create
+		{
+			scriptName "dmspawn4"
+			classname "team_CTF_greenspawn"
+			targetname "dmspawn4"
+			origin "-2104 -449 -191"
+			spawnflags 2
+			angle -90
+		}
+
+		create
+		{
+			scriptName "dmspawn5"
+			classname "team_CTF_greenspawn"
+			targetname "dmspawn5"
+			origin "-2173 -1118 -199"
+			spawnflags 2	
+			angle 179
+		}
+
+		create
+		{
+			scriptName "dmspawn6"
+			classname "team_CTF_greenspawn"
+			targetname "dmspawn6"
+			origin "-1765 -1726 104"
+			spawnflags 2	
+			angle -140
+		}
+
+		create
+		{
+			scriptName "dmspawn7"
+			classname "team_CTF_greenspawn"
+			targetname "dmspawn7"
+			origin "-1957 -1273 -199"
+			spawnflags 2	
+			angle -90
+		}
+
+		create
+		{
+			scriptName "dmspawn8"
+			classname "team_CTF_greenspawn"
+			targetname "dmspawn8"
+			origin "-3009 2269 -127"
+			spawnflags 2	
+			angle -90
+		}
+
+		create
+		{
+			scriptName "dmspawn9"
+			classname "team_CTF_greenspawn"
+			targetname "dmspawn9"
+			origin "-1461 2624 -161"
+			spawnflags 2	
+			angle -179
+		}
+
+		create
+		{
+			scriptName "dmspawn10"
+			classname "team_CTF_greenspawn"
+			targetname "dmspawn10"
+			origin "-2452 -153 296"
+			spawnflags 2	
+			angle 179
+		}
+
+		create
+		{
+			scriptName "dmspawn11"
+			classname "team_CTF_greenspawn"
+			targetname "dmspawn11"
+			origin "-317 -2211 -55"
+			spawnflags 2	
+			angle 90
+		}
+
+		create
+		{
+			scriptName "dmspawn12"
+			classname "team_CTF_greenspawn"
+			targetname "dmspawn12"
+			origin "-757 -1074 -127"
+			spawnflags 2	
+			angle -135
+		}
+
+		create
+		{
+			scriptName "dmspawn13"
+			classname "team_CTF_greenspawn"
+			targetname "dmspawn13"
+			origin "712 -43 -47"
+			spawnflags 2	
+			angle -90
+		}
+
+		create
+		{
+			scriptName "dmspawn14"
+			classname "team_CTF_greenspawn"
+			targetname "dmspawn14"
+			origin "-163 1032 80"
+			spawnflags 2	
+			angle -90
+		}
+
+		create
+		{
+			scriptName "dmspawn15"
+			classname "team_CTF_greenspawn"
+			targetname "dmspawn15"
+			origin "668 1078 -119"
+			spawnflags 2	
+			angle 90
+		}
+
+		create
+		{
+			scriptName "dmspawn16"
+			classname "team_CTF_greenspawn"
+			targetname "dmspawn16"
+			origin "-2663 1835 -127"
+			spawnflags 2	
+			angle -90
+		}
+
+		create
+		{
+			scriptName "dmspawn17"
+			classname "team_CTF_greenspawn"
+			targetname "dmspawn17"
+			origin "1840 3057 -165"
+			spawnflags 2	
+			angle -102
+		}
+
+		create
+		{
+			scriptName "dmspawn18"
+			classname "team_CTF_greenspawn"
+			targetname "dmspawn18"
+			origin "952 862 -215"
+			spawnflags 2	
+			angle 90
+		}
+
+		create
+		{
+			scriptName "dmspawn19"
+			classname "team_CTF_greenspawn"
+			targetname "dmspawn19"
+			origin "754 -630 160"
+			spawnflags 2	
+			angle 0
+		}
+
+		create
+		{
+			scriptName "dmspawn20"
+			classname "team_CTF_greenspawn"
+			targetname "dmspawn20"
+			origin "1607 -1073 -15"
+			spawnflags 2	
+			angle 90
+		}
+
+		create
+		{
+			scriptName "dmspawn21"
+			classname "team_CTF_greenspawn"
+			targetname "dmspawn21"
+			origin "2483 -752 -127"
+			spawnflags 2	
+			angle -45
+		}
+
+		create
+		{
+			scriptName "dmspawn22"
+			classname "team_CTF_greenspawn"
+			targetname "dmspawn22"
+			origin "2859 203 72"
+			spawnflags 2	
+			angle -30
+		}
+
+		create
+		{
+			scriptName "dmspawn23"
+			classname "team_CTF_greenspawn"
+			targetname "dmspawn23"
+			origin "1742 -1871 -199"
+			spawnflags 2	
+			angle 0
+		}
+
+		create
+		{
+			scriptName "dmspawn24"
+			classname "team_CTF_greenspawn"
+			targetname "dmspawn24"
+			origin "3600 416 -199"
+			spawnflags 2	
+			angle -90
+		}
+
+		create
+		{
+			scriptName "dmspawn25"
+			classname "team_CTF_greenspawn"
+			targetname "dmspawn25"
+			origin "2382 1342 -183"
+			spawnflags 2	
+			angle 90
+		}
+
+		create
+		{
+			scriptName "dmspawn26"
+			classname "team_CTF_greenspawn"
+			targetname "dmspawn26"
+			origin "2640 3374 -183"
+			spawnflags 2	
+			angle -90
+		}
+
+		create
+		{
+			scriptName "dmspawn27"
+			classname "team_CTF_greenspawn"
+			targetname "dmspawn27"
+			origin "3837 4500 -183"
+			spawnflags 2	
+			angle -179
+		}
+
+		create
+		{
+			scriptName "dmspawn28"
+			classname "team_CTF_greenspawn"
+			targetname "dmspawn28"
+			origin "1886 4209 -183"
+			spawnflags 2	
+			angle -120
+		}
+
+		create
+		{
+			scriptName "dmspawn29"
+			classname "team_CTF_greenspawn"
+			targetname "dmspawn29"
+			origin "808 2779 -183"
+			spawnflags 2	
+			angle -25
+		}
+
+		create
+		{
+			scriptName "dmspawn30"
+			classname "team_CTF_greenspawn"
+			targetname "dmspawn30"
+			origin "5262 4410 -183"
+			spawnflags 2	
+			angle -90
+		}
+
+		create
+		{
+			scriptName "dmspawn31"
+			classname "team_CTF_greenspawn"
+			targetname "dmspawn31"
+			origin "5387 1765 -215"
+			spawnflags 2	
+			angle 90
+		}
+
+		create
+		{
+			scriptName "dmspawn32"
+			classname "team_CTF_greenspawn"
+			targetname "dmspawn32"
+			origin "4530 2224 -151"
+			spawnflags 2	
+			angle -135
+		}
+
+		create
+		{
+			scriptName "dmspawn33"
+			classname "team_CTF_greenspawn"
+			targetname "dmspawn33"
+			origin "4012 1684 -199"
+			spawnflags 2	
+			angle -50
+		}
+
+		create
+		{
+			scriptName "dmspawn34"
+			classname "team_CTF_greenspawn"
+			targetname "dmspawn34"
+			origin "3916 570 -199"
+			spawnflags 2	
+			angle -45
+		}
+		
+		create
+		{
+			scriptName "dmspawn35"
+			classname "team_CTF_greenspawn"
+			targetname "dmspawn35"
+			origin "4878 5168 -175"
+			spawnflags 2	
+			angle 179
+		}
+		
+		create
+		{
+			scriptName "dmspawn36"
+			classname "team_CTF_greenspawn"
+			targetname "dmspawn36"
+			origin "4080 5184 -175"
+			spawnflags 2	
+			angle 0
+		}
+		
+		create
+		{
+			scriptName "dmspawn37"
+			classname "team_CTF_greenspawn"
+			targetname "dmspawn37"
+			origin "4496 5204 72"
+			spawnflags 2	
+			angle -90
+		}
+
+		//  37 DM spawns
+
+		//Game Rules
+		wm_axis_respawntime	5
+		wm_allied_respawntime	5
+		wm_number_of_objectives 1
+		wm_set_round_timelimit	5
+	}
+}
+
+//ALLIED COMMAND POST
+allied_radio_destroyed
+{
+	spawn
+	{
+		wait 200
+		setstate allied_radio_destroyed invisible
+		setstate allied_radio_destroyed_model invisible
+	}
+	trigger hide
+	{
+		setstate allied_radio_destroyed invisible
+		setstate allied_radio_destroyed_model invisible
+	}
+	trigger show
+	{
+		setstate allied_radio_destroyed default
+		setstate allied_radio_destroyed_model default
+	}
+}
+
+allied_radio_closed
+{
+	spawn
+	{
+		wait 200
+		setstate allied_radio_closed default
+		setstate allied_radio_closed_model default
+	}
+	trigger hide
+	{
+		setstate allied_radio_closed invisible
+		setstate allied_radio_closed_model invisible
+	}
+	trigger show
+	{
+		setstate allied_radio_closed default
+		setstate allied_radio_closed_model default
+	}
+}
+
+allied_radio_built
+{
+	spawn
+	{
+		wait 400
+		constructible_class 2
+		trigger allied_radio_built setup
+	}
+
+	trigger setup
+	{
+		sethqstatus 1 0
+	}
+
+	buildstart final
+	{
+		trigger allied_radio_built_model trans
+		trigger allied_radio_destroyed hide
+		trigger allied_radio_closed hide
+	}
+
+	decayed final
+	{
+		trigger allied_radio_built_model hide
+		trigger allied_radio_closed show
+	}
+
+	built final
+	{
+		trigger allied_radio_built_model show
+		trigger allied_radio_closed hide
+		trigger allied_radio_destroyed hide
+
+		trigger allied_radio_built_model enable_allied_features
+		enablespeaker allied_radio_sound
+	}
+
+	death
+	{
+		trigger allied_radio_built_model hide
+		trigger allied_radio_destroyed show
+
+		trigger allied_radio_built_model disable_allied_features
+		disablespeaker allied_radio_sound
+	}
+}
+
+allied_radio_built_model
+{
+	spawn
+	{
+		wait 400
+		setstate allied_radio_built_model invisible
+
+		accum 0 bitreset 0	// set if radio is built
+		accum 0 bitreset 1	// set if goal should be ignored
+	}
+
+	trigger show
+	{
+		setstate allied_radio_built_model default
+	}
+
+	trigger hide
+	{
+		setstate allied_radio_built_model invisible
+	}
+
+	trigger trans
+	{
+		setstate allied_radio_built_model underconstruction
+	}
+
+	trigger enable_allied_features
+	{
+		sethqstatus 1 1
+		wm_objective_status 6 1 1
+		wm_objective_status 6 0 2
+		accum 0 bitset 0
+	}
+
+	trigger disable_allied_features
+	{
+		sethqstatus 1 0
+		wm_objective_status 6 0 0
+		wm_objective_status 6 1 0
+
+		accum 0 bitreset 0
+	}
+}
+
+//AXIS COMMAND POST
+axis_radio_destroyed
+{
+	spawn
+	{
+		wait 200
+		setstate axis_radio_destroyed invisible
+		setstate axis_radio_destroyed_model invisible
+	}
+	trigger hide
+	{
+		setstate axis_radio_destroyed invisible
+		setstate axis_radio_destroyed_model invisible
+	}
+	trigger show
+	{
+		setstate axis_radio_destroyed default
+		setstate axis_radio_destroyed_model default
+	}
+}
+
+axis_radio_closed
+{
+	spawn
+	{
+		wait 200
+		setstate axis_radio_closed default
+		setstate axis_radio_closed_model default
+	}
+	trigger hide
+	{
+		setstate axis_radio_closed invisible
+		setstate axis_radio_closed_model invisible
+	}
+	trigger show
+	{
+		setstate axis_radio_closed default
+		setstate axis_radio_closed_model default
+	}
+}
+
+axis_radio_built
+{
+	spawn
+	{
+		wait 400
+		constructible_class 2
+		trigger axis_radio_built setup
+	}
+
+	trigger setup
+	{
+		sethqstatus 0 0
+	}
+
+	buildstart final
+	{
+		trigger axis_radio_built_model trans
+		trigger axis_radio_destroyed hide
+		trigger axis_radio_closed hide
+	}
+
+	decayed final
+	{
+		trigger axis_radio_built_model hide
+		trigger axis_radio_closed show
+	}
+
+	built final
+	{
+		trigger axis_radio_built_model show
+		trigger axis_radio_closed hide
+		trigger axis_radio_destroyed hide
+
+		trigger axis_radio_built_model enable_axis_features
+		enablespeaker axis_radio_sound
+	}
+
+	death
+	{
+		trigger axis_radio_built_model hide
+		trigger axis_radio_destroyed show
+
+		trigger axis_radio_built_model disable_axis_features
+		disablespeaker axis_radio_sound
+	}
+}
+
+axis_radio_built_model
+{
+	spawn
+	{
+		wait 400
+		setstate axis_radio_built_model invisible
+
+		accum 0 bitreset 0	// set if radio is built
+		accum 0 bitreset 1	// set if goal should be ignored
+	}
+
+	trigger show
+	{
+		setstate axis_radio_built_model default
+	}
+
+	trigger hide
+	{
+		setstate axis_radio_built_model invisible
+	}
+
+	trigger trans
+	{
+		setstate axis_radio_built_model underconstruction
+	}
+
+	trigger enable_axis_features
+	{	sethqstatus 0 1
+		wm_objective_status 7 0 1
+		wm_objective_status 7 1 2
+		accum 0 bitset 0
+	}
+
+	trigger disable_axis_features
+	{
+		sethqstatus 0 0
+		wm_objective_status 7 1 0
+		wm_objective_status 7 0 0
+
+		accum 0 bitreset 0
+	}
+}
+
+// ============================================================================
+// Tank stuff starts here
+// ============================================================================
+tank_sound
+{
+	spawn
+	{
+		wait 500
+		remove
+	}
+}
+
+tank
+{
+	spawn
+	{
+		wait 500
+		remove
+	}
+}
+
+//target_script_trigger
+tank_disabler
+{
+	spawn
+	{
+		wait 500
+		remove
+	}
+}
+
+//target_script_trigger
+tank_enabler
+{
+	spawn
+	{
+		wait 500
+		remove
+	}
+}
+
+//trigger_multiple
+tank_trigger
+{
+	spawn
+	{
+		wait 500
+		remove
+	}
+}
+
+//func_constructible
+tank_build
+{
+	spawn
+	{
+		wait 500
+		remove
+	}
+}
+
+
+//toi
+tank_construct
+{
+	spawn
+	{
+		wait 500
+		remove
+	}
+}
+
+tank_turret
+{
+	spawn
+	{
+		wait 500
+		remove
+	}
+}
+
+tank_smoke
+{
+	spawn
+	{
+		wait 500
+		remove
+	}
+}
+
+tank_explosion
+{
+	spawn
+	{
+		wait 500
+		remove
+	}
+}
+
+tank_explosion_sound
+{
+	spawn
+	{
+		wait 500
+		remove
+	}
+}
+
+tank_flash
+{
+	spawn
+	{
+		wait 500
+		remove
+	}
+}	
+
+// ============================================================================
+// Gun stuff starts here
+// ============================================================================
+gunlightoff
+{
+	spawn
+	{
+		wait 500
+		remove
+	}
+}
+
+gunlighton
+{
+	spawn
+	{
+		wait 500
+		remove
+	}
+}
+
+gun_sound
+{
+	spawn
+	{
+		wait 500
+		remove
+	}
+}
+
+at_gunbarrel
+{
+	spawn
+	{
+		wait 500
+		remove
+	}
+}
+
+at_gun
+{
+	spawn
+	{
+		wait 500
+		remove
+	}
+}	
+
+gun_build
+{
+	spawn
+	{
+		wait 500
+		remove
+	}
+}
+
+gun_construct
+{
+	spawn
+	{
+		wait 500
+		remove
+	}
+}
+
+gun_disabler
+{
+	spawn
+	{
+		wait 500
+		remove
+	}
+}
+
+gun_enabler
+{
+	spawn
+	{
+		wait 500
+		remove
+	}
+}
+
+gun_light_enabler
+{
+	spawn
+	{
+		wait 500
+		remove
+	}
+}
+
+gun_smoke
+{
+	spawn
+	{
+		wait 500
+		remove
+	}
+}
+
+gun_flash92
+{
+	spawn
+	{
+		wait 500
+		remove
+	}
+}	
+
+gun_flash113
+{
+	spawn
+	{
+		wait 500
+		remove
+	}
+}	
+
+gun_flash134
+{
+	spawn
+	{
+		wait 500
+		remove
+	}
+}	
+
+gun_flash155
+{
+	spawn
+	{
+		wait 500
+		remove
+	}
+}	
+
+// *********************************************
+// ******************* TRUCK *******************
+// *********************************************
+
+truck
+{
+	spawn
+	{
+		wait 50
+		faceangles 0 5 0 50
+		gotomarker truck_pc1 5000
+		alertentity truck_explo
+		alertentity truck_crates
+		gotomarker truck_pc2 1000
+		gotomarker truck_pc3 700
+		gotomarker truck_pc4 400
+		gotomarker truck_pc5 700
+		gotomarker truck_pc6 650
+		changemodel models/mapobjects/blitz_sd/blitzbody_damaged.md3
+		setstate truck_smoke default
+		remove
+	}
+}
+		
+truck_bwheel
+{
+	spawn
+	{
+		wait 500
+		remove
+	}
+}
+
+truck_fwheel
+{
+	spawn
+	{
+		wait 500
+		remove
+	}
+}
+
+truck_smoke
+{
+	spawn
+	{
+		wait 500
+		attachtotag truck tag_wfront
+		remove
+	}
+}
+
+truck_engine
+{
+	spawn
+	{
+		wait 500
+		attachtotag truck tag_wfront
+	}
+}
+
+hurt_barrelblast1
+{
+	spawn
+	{
+		wait 500
+		setstate hurt_barrelblast1 default
+		remove
+	}
+}
+
+hurt_truckblast
+{
+	spawn
+	{
+		wait 500
+		setstate hurt_truckblast default
+		remove
+	}
+}
+
+// *********************************************
+// ******************* MISC ********************
+// *********************************************
+//These gates are knocked down by the tank as it passes by the outpost.
+gate_right
+{
+	spawn
+	{
+		wait 500
+		faceangles 88 5 2 700
+	}
+}
+
+gate_left
+{
+	spawn
+	{
+		wait 500
+		faceangles 90 0 0 650
+	}
+}
+
+
+// *********************************
+// ******* LIBRARY EXPLOSION *******
+// *********************************
+
+doorframe
+{
+	spawn
+	{
+		alertentity lib_door1
+		setstate doorframe invisible
+		setstate doorframe_damaged default
+	}
+}
+
+boomtrigger
+{
+	spawn
+	{
+		wait 500
+		remove
+	}
+}
+
+hurt_barrelblast2
+{
+	spawn
+	{
+		wait 500
+		remove
+	}
+}
+
+hurt_barrelblast3
+{
+	spawn
+	{
+		wait 500
+		remove
+	}
+}
+
+hurt_barrelblast4
+{
+	spawn
+	{
+		wait 500
+		remove
+	}
+}
+
+hurt_libblast
+{
+	spawn
+	{
+		wait 500
+		remove
+	}
+}
+
+// **********************************************
+// ****************** BOAT STUFF ****************
+// **********************************************
+
+boat_smoke
+{
+	spawn
+	{
+		wait 500
+		remove
+	}		
+}
+
+// sound "thread"
+boat_engine
+{
+	spawn
+	{
+		wait 500
+		remove
+	}
+}
+
+boat_prop_hurt
+{
+	spawn
+	{
+		wait 500
+		remove
+	}
+}
+
+boat_build
+{
+	spawn
+	{
+		wait 500
+		remove
+	}
+}
+
+boat_construct
+{
+	spawn
+	{
+		wait 500
+		remove
+	}
+}
+
+boat
+{
+	spawn
+	{
+		wait 500
+		remove
+	}
+}
+
+boat_trigger
+{
+	spawn
+	{
+		wait 500
+		remove
+	}
+}
+
+boat_disabler
+{
+	spawn
+	{
+		wait 500
+		remove
+	}
+}
+
+boat_enabler
+{
+	spawn
+	{
+		wait 500
+		remove
+	}
+}
+
+// *********************************************
+// ****************** FLAG STUFF ***************
+// *********************************************
+
+relic_holder
+{
+	spawn
+	{
+		wait 500
+		remove
+	}
+}
+
+// *********************************************
+// ****************** RELIC STUFF **************
+// *********************************************
+
+relic
+{
+	spawn
+	{
+		wait 500
+		remove
+	}
+}
+
+relic_full
+{
+	spawn
+	{
+		wait 500
+		remove
+	}
+}
+
+relic_trans
+{
+	spawn
+	{
+		wait 500
+		remove
+	}
+}
+
+
+// *********************************************
+// **************** CONSTRUCTIBLES *************
+// *********************************************
+// ============================================================================
+// Axis MG42 Nest - in front of church
+// ============================================================================
+axischurchmg42nest
+{
+	spawn
+	{
+		wait 200
+		trigger self setup
+
+		constructible_class 2
+	}
+
+	trigger setup
+	{
+		setstate axischurchmg42 invisible
+		setstate axischurchmg42_materials default
+	}
+
+	buildstart final
+	{
+		setstate axischurchmg42 underconstruction
+	}
+
+	built final
+	{
+		setstate axischurchmg42 default
+		setstate axischurchmg42_materials invisible
+	}
+
+	decayed final
+	{
+		setstate axischurchmg42 invisible
+		setstate axischurchmg42_materials default
+	}
+
+	death
+	{
+		setstate axischurchmg42 invisible
+		setstate axischurchmg42_materials default
+		repairmg42 axischurchmg42
+	}
+}
+
+// ============================================================================
+// Axis MG42 Nest - in front of library
+// ============================================================================
+axislibmg42nest
+{
+	spawn
+	{
+		wait 200
+		trigger self setup
+
+		constructible_class 2
+	}
+
+	trigger setup
+	{
+		setstate axislibmg42 invisible
+		setstate axislibmg42_materials default
+	}
+
+	buildstart final
+	{
+		setstate axislibmg42 underconstruction
+	}
+
+	built final
+	{
+		setstate axislibmg42 default
+		setstate axislibmg42_materials invisible
+	}
+
+	decayed final
+	{
+		setstate axislibmg42 invisible
+		setstate axislibmg42_materials default
+	}
+
+	death
+	{
+		setstate axislibmg42 invisible
+		setstate axislibmg42_materials default
+		repairmg42 axislibmg42
+	}
+}
+
+// ============================================================================
+// Allied MG42 Nest - in the campo
+// ============================================================================
+alliedcampomg42nest
+{
+	spawn
+	{
+		wait 200
+		trigger self setup
+
+		constructible_class 2
+	}
+
+	trigger setup
+	{
+		setstate alliedcampomg42 invisible
+		setstate alliedcampomg42_materials default
+	}
+
+	buildstart final
+	{
+		setstate alliedcampomg42 underconstruction
+	}
+
+	built final
+	{
+		setstate alliedcampomg42 default
+		setstate alliedcampomg42_materials invisible
+	}
+
+	decayed final
+	{
+		setstate alliedcampomg42 invisible
+		setstate alliedcampomg42_materials default
+	}
+
+	death
+	{
+		setstate alliedcampomg42 invisible
+		setstate alliedcampomg42_materials default
+		repairmg42 alliedcampomg42
+	}
+}
+
+// ============================================================================
+// Allied FootBridge
+// ============================================================================
+footbridge
+{
+	spawn
+	{
+		wait 500
+		
+		setstate footbridge default
+		setstate footbridge_materials invisible
+		setstate footbridge_toi invisible
+	}
+}
+
+// ============================================================================
+// Axis BoatBarriers
+// ============================================================================
+boatbarrier1
+{
+	spawn
+	{
+		wait 500
+		trigger self remove
+	}
+
+	trigger remove
+	{
+		setstate boatbarrier1_toi invisible
+		setstate boatbarrier1_materials invisible
+
+		remove
+	}
+}
+
+boatbarrier2
+{
+	spawn
+	{
+		wait 500
+		trigger self remove
+	}
+
+	trigger remove
+	{
+		setstate boatbarrier2_toi invisible
+		setstate boatbarrier2_materials invisible
+
+		remove
+	}
+}
+// ============================================================================
+// Axis TankBarrier
+// ============================================================================
+tankbarrier
+{
+	spawn
+	{
+		wait 400
+		trigger tankbarrier remove
+	}
+
+	trigger remove
+	{
+		setstate tankbarrier_toi invisible
+		setstate tankbarrier_materials invisible
+		setstate tankbarrier_teeth invisible
+
+		remove
+	}
+}
+
+/////////////////////////////////////////////////////////////
+side_entrance
+{
+	spawn
+	{
+		wait 250
+		trigger self death
+		remove
+	}
+
+	death
+	{
+		setstate side_entrance_destroyed default
+		setstate side_entrance_toi invisible
+	}
+}
+
+lib_side_wall
+{
+	spawn
+	{
+		wait 250
+		setstate lib_side_wall_built invisible
+		setstate lib_side_wall_destroyed default
+		setstate lib_side_wall_toi invisible
+		alertentity lib_side_explosion
+	}
+}
+
+church_rubble
+{
+	spawn
+	{
+		wait 500
+		remove
+	}
+}
+
+piano_trigger1
+{
+	trigger play
+	{
+		togglespeaker piano_fmajor
+	}
+}
+
+piano_trigger2
+{
+	trigger play
+	{
+		togglespeaker piano_gmajor
+	}
+}
+
+piano_trigger3
+{
+	trigger play
+	{
+		togglespeaker piano_aminor
+	}
+}
+
+piano_trigger4
+{
+	trigger play
+	{
+		togglespeaker piano_cmajor
+	}
+}

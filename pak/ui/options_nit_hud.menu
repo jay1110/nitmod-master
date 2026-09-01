@@ -1,0 +1,83 @@
+#include "ui/menudef.h"
+#define WINDOW_X		16
+#define WINDOW_Y		16
+#define WINDOW_WIDTH	450
+#define WINDOW_HEIGHT	406
+#define GROUP_NAME		"grpOptionsNitHud"
+#include "ui/menumacros.h"
+
+menuDef {
+	name		"options_nit_hud"
+	visible		0
+	fullscreen	0
+	rect		WINDOW_X WINDOW_Y WINDOW_WIDTH WINDOW_HEIGHT
+	style		WINDOW_STYLE_FILLED
+
+	onESC {
+		close options_nit_hud ;
+		open options_nit; 
+		}
+
+	WINDOW( "^7N^1!^7tmod HUD Options", 94 )
+
+#define SUBWINDOW_WIDTH		WINDOW_WIDTH-12
+#define SUBWINDOWL_WIDTH	(0.4*SUBWINDOW_WIDTH)
+#define MSG_Y 			32
+#define MSG_HEIGHT		56
+#define SHOW_Y 			MSG_Y+MSG_HEIGHT+4
+#define SHOW_HEIGHT		84
+#define HUD_Y			SHOW_Y+SHOW_HEIGHT+4
+#define HUD_HEIGHT		104
+#define MISC_Y			HUD_Y+HUD_HEIGHT+4
+#define MISC_HEIGHT		86
+
+	SUBWINDOW( 6, (MSG_Y), SUBWINDOW_WIDTH+1, MSG_HEIGHT, "^3Obituaries" )
+	
+	MULTI( 68, (MSG_Y)+18, (SUBWINDOWL_WIDTH), 10, "Max Popups:", .2, 8, "cg_numPopups", cvarFloatList { "^1Off" 0 "^21" 1 "^22" 2 "^23" 3 "^24" 4 "^25" 5 "^26" 6 "^27" 7 "^28" 8 }, "Max popups that can be displayed" )
+	YESNO( 70, (MSG_Y)+30, (SUBWINDOWL_WIDTH)-4, 10, "Descriptive Text:", .2, 8, "cg_descriptiveText", "Show Spectator Info" )
+	MULTI( 55, (MSG_Y)+42, (SUBWINDOWL_WIDTH)+70, 10, "Kills notifications:", .2, 8, "cg_obituary", cvarFloatList { "Console Only" 0 "Left popup area" 1 "Chat area" 2 "Graphic (killer - victim)" 3 "Graphic (victim - killer)" 4 }, "Where do you want kills notifications to be displayed" )
+
+	SUBWINDOW( 6, (SHOW_Y), (SUBWINDOW_WIDTH), SHOW_HEIGHT, "^3SHOW" )
+	
+	LABEL( 2, (SHOW_Y)+18, .55*(SUBWINDOW_WIDTH)-4, 10, "Crosshair Name Drawing:", .20, ITEM_ALIGN_LEFT, 8, 8 )
+	CHECKBOXACTIONBITFLAG( 190, (SHOW_Y)+18, 50, 10, "Enable", .2, 10, 8, "cg_drawCrosshairNames", 1, togglecvarbit cg_drawCrosshairNames 1, "Enable Name Drawing" )
+	CHECKBOXACTIONBITFLAG( 250, (SHOW_Y)+18, 50, 10, "Ranks", .2, 10, 8, "cg_drawCrosshairNames", 2, togglecvarbit cg_drawCrosshairNames 2, "Draw Player Ranks" )
+	MULTI( 38, (SHOW_Y)+30, .55*(SUBWINDOW_WIDTH)-4, 10, "Draw Location:", .2, 8, "cg_locations", cvarFloatList { "Coordinates only" 0 "Fire-Team only" 1 "Team-Chat only" 2 "Team-Chat+Fire-Team" 3 }, "Location View Options" )
+	SLIDER( 38, (SHOW_Y)+42, .55*(SUBWINDOW_WIDTH)-4, 10, "Locations Max Chars:", .2, 8, "cg_locationMaxChars" 0 1 25, "Sets Fireteam Locations Max Characters" )
+	YESNO( 38, (SHOW_Y)+54, .55*(SUBWINDOW_WIDTH)-4, 10, "Auto Select FT Buddies:", .2, 8, "cg_FTAutoSelect", "Automatically Select Buddies In A Fireteam" )
+	SLIDER( 38, (SHOW_Y)+66, .55*(SUBWINDOW_WIDTH)-4, 10, "Auto Map Zoom:", .2, 8, "cg_automapZoom" 5.159 1 7.43, "Sets Zoom Level Automatically When Map Loads" )
+
+	SUBWINDOW( 6, (HUD_Y), (SUBWINDOW_WIDTH), HUD_HEIGHT, "^3HUD" )
+	
+	MULTI( 8, (HUD_Y)+18, .55*(SUBWINDOW_WIDTH)-4, 10, "HUD Color:", .2, 8, "cg_hudBackgroundColor", cvarStrList { "Default"; ".16 .2 .17 .8"; "White"; "1 1 1 .8"; "Yellow"; "1 1 0 .8"; "Red"; "1 0 0 .8"; "Green"; "0 1 0 .8"; "Blue"; "0 0 1 .8"; "Magenta"; "1 0 1 .8"; "Cyan"; "0 1 1 .8"; "Orange"; "1 .5 0 .8"; "Purple"; "0.5 0 0.5 .8"; "Light Blue"; ".5 .5 1 .8"; "Medium Blue"; "0 0 .5 .8"; "Dark Blue"; "0 0 0.15 .8" ;"Light Red"; "1 .25 .25 .8"; "Medium Red"; ".5 0 0 .8"; "Dark Red"; "0.15 0 0 .8"; "Light Green"; ".25 1 .25 .8"; "Medium Green"; "0 .5 0 .8"; "Dark Green"; "0 .15 0 .8"; "Medium Cyan"; "0 .5 .5 .8"; "Medium Yellow"; ".5 .5 0 .8"; "Medium Orange"; ".5 .25 0 .8"; "Light Grey"; ".6 .6 .6 .8"; "Medium Grey"; ".3 .3 .3 .8"; "Dark Grey"; ".1 .1 .1 .8"; "Black"; "0 0 0 .8" }, "HUD Background Color" )
+	MULTI( 8, (HUD_Y)+30, .55*(SUBWINDOW_WIDTH)-4, 10, "HUD Border Color:", .2, 8, "cg_hudBorderColor", cvarStrList { "Default"; ".5 .5 .5 .5"; "White"; "1 1 1 .8"; "Yellow"; "1 1 0 .8"; "Red"; "1 0 0 .8"; "Green"; "0 1 0 .8"; "Blue"; "0 0 1 .8"; "Magenta"; "1 0 1 .8"; "Cyan"; "0 1 1 .8"; "Orange"; "1 .5 0 .8"; "Purple"; "0.5 0 0.5 .8"; "Light Blue"; ".5 .5 1 .8"; "Medium Blue"; "0 0 .5 .8"; "Dark Blue"; "0 0 0.15 .8"; "Light Red"; "1 .25 .25 .8"; "Medium Red"; ".5 0 0 .8"; "Dark Red"; "0.15 0 0 .8"; "Light Green"; ".25 1 .25 .8"; "Medium Green"; "0 .5 0 .8"; "Dark Green"; "0 .15 0 .8"; "Medium Cyan"; "0 .5 .5 .8"; "Medium Yellow"; ".5 .5 0 .8"; "Medium Orange"; ".5 .25 0 .8"; "Light Grey"; ".6 .6 .6 .8"; "Medium Grey"; ".3 .3 .3 .8"; "Dark Grey"; ".1 .1 .1 .8"; "Black"; "0 0 0 .8" }, "HUD Border Color" )
+	SLIDER( 8, (HUD_Y)+42, .55*(SUBWINDOW_WIDTH)-4, 10, "HUD Alpha:", .2, 8, "cg_hudAlpha" .8 0 1, "Transparency of HUD" )
+	MULTI( 8, (HUD_Y)+54, .55*(SUBWINDOW_WIDTH)-4, 10, "TDM Score:", .2, 8, "cg_TDMScorePos", cvarFloatList{ "Center" 0 "Right (near Time, FPS, etc...)" 1 }, "Change Team Death Match score drawing position (only works on server running Team Death Match gametype)" )
+	
+
+	LABEL( 42, (HUD_Y)+66, .55*(SUBWINDOW_WIDTH)-4, 10, "HUD Options:", .20, ITEM_ALIGN_LEFT, 8, 8 )
+	CHECKBOXACTIONBITFLAG( 220, (HUD_Y)+66, 120, 10, "Left side stats", .2, 10, 8, "cg_HUDFlags", 1, togglecvarbit cg_HUDFlags 1, "Draw 'on screen stats' (spree, kills, deaths, etc...) on the left side" )
+	CHECKBOXACTIONBITFLAG( 330, (HUD_Y)+66, 80, 10, "Popups on top", .2, 10, 8, "cg_HUDFlags", 2, togglecvarbit cg_HUDFlags 2, "Draw popups on top (experimental, may overlap with banners and firetam overlay)" )
+	CHECKBOXACTIONBITFLAG( 315, (HUD_Y)+78, 200, 10, "N!tmod style kill notification", .2, 10, 8, "cg_HUDFlags", 4, togglecvarbit cg_HUDFlags 4, "Use N!tmod style kill notification ('You killed ...')" )
+	CHECKBOXACTIONBITFLAG( 220, (HUD_Y)+90, 80, 10, "Left side spree", .2, 10, 8, "cg_HUDFlags", 8, togglecvarbit cg_HUDFlags 8, "Draw killing or losing spree notifications on the left side" )
+	CHECKBOXACTIONBITFLAG( 330, (HUD_Y)+90, 80, 10, "Modern Ammo Bar", .2, 10, 8, "cg_HUDFlags", 16, togglecvarbit cg_HUDFlags 16, "Draw modern ammo bar on HUD instead of ET default xx/xx" )
+
+	
+
+	SUBWINDOW( 6, (MISC_Y), (SUBWINDOW_WIDTH), MISC_HEIGHT, "^3Misc." )
+	
+	YESNO( 50, (MISC_Y)+18, 130, 10, "Draw FPS:", .2, 8, "cg_drawFPS", "Draw Frames Per Second" )
+	YESNO( 50, (MISC_Y)+30, 130, 10, "Draw Lagometer:", .2, 8, "cg_lagometer", "Draw LagoMeter" )
+	YESNO( 50, (MISC_Y)+42, 130, 10, "Draw Ping:", .2, 8, "cg_drawPing", "Draw Ping" )	
+	YESNO( 50, (MISC_Y)+54, 180, 10, "Objective Hints:", .2, 8, "cg_objectiveHints", "Draw objective hints on screen (experimental)" )
+	YESNO( 50, (MISC_Y)+66, 180, 10, "Wounded player names:", .2, 8, "cg_woundedNames", "Draw names above players waiting for revives, or above medics when waiting for a revive (experimental)" )
+	MULTI( 180, (MISC_Y)+18, 180, 10, "Draw Speed:", .2, 8, "cg_drawSpeed", cvarFloatList{ "No" 0 "Yes" 1 "Yes + Max Acheived" 2 }, "Draw Speed" )
+	MULTI( 180, (MISC_Y)+30, 180, 10, "Speed Units:", .2, 8, "cg_speedunit", cvarFloatList{ "Units per Second (UPS)" 0 "Kilometers per Hour (KPH)" 1 "Miles per Hour (MPH)" 2 }, "Change Unit For Displaying Speed" )
+	YESNO( 180, (MISC_Y)+42, 180, 10, "Country Flags:", .2, 8, "cg_countryflags", "Draw Country-Flags" )
+	MULTI( 180, (MISC_Y)+54, 180, 10, "Draw Clock:", .2, 8, "cg_drawTime", cvarFloatList{ "No" 0 "Yes (24hr)" 1 "Yes (12hr)" 2 }, "Draw Clock" )
+	YESNO( 180, (MISC_Y)+66, 180, 10, "Draw banners:", .2, 8, "cg_drawBanners", "Draw server banners" )
+	
+
+	BUTTON( 6, WINDOW_HEIGHT-24, SUBWINDOW_WIDTH, 18, "^7BACK", .3, 14, close options_nit_hud ; open options_nit )
+
+}

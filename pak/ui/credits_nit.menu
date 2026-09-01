@@ -1,0 +1,61 @@
+#include "ui/menudef.h"
+#define WINDOW_X		16
+#define WINDOW_Y		16
+#define WINDOW_WIDTH	608
+#define WINDOW_HEIGHT	448
+#define GROUP_NAME		"grpNitmodCredits"
+#include "ui/menumacros.h"
+	
+menuDef {
+	name		"credits_nit"
+	visible		0
+	fullscreen	0
+	rect		WINDOW_X WINDOW_Y WINDOW_WIDTH WINDOW_HEIGHT
+	style		WINDOW_STYLE_FILLED
+	
+	onESC {
+		close credits_nit ;
+		open options_nit
+	}
+
+	itemDef {
+		name		"window"
+		group		GROUP_NAME
+		rect		0 0 WINDOW_WIDTH WINDOW_HEIGHT
+		style		WINDOW_STYLE_GRADIENT
+		backcolor	0.01 0.01 0.01 .95
+		border		WINDOW_BORDER_KCGRADIENT
+		bordercolor	1 .01 .01 1
+		visible		1
+		decoration
+	}
+	
+
+#define CREDITS_Y	84
+
+	CREDIT( 300, 30, 640, 80, "^7N^1!^7TMOD ^gCREDITS", .5, ITEM_ALIGN_CENTER, ITEM_ALIGN_CENTER, ITEM_ALIGN_CENTER )
+	
+	CREDIT( 300, 70, 640, 80, "^gDEVELOPED BY", .35, ITEM_ALIGN_CENTER, ITEM_ALIGN_CENTER, ITEM_ALIGN_CENTER )
+
+	CREDIT( (0.5*WINDOW_WIDTH)-100, CREDITS_Y+10, 200, 12, "^7N^1!^7trox^0*", .4, ITEM_ALIGN_CENTER, 100, 8 )
+	LABELWHITE( (0.5*WINDOW_WIDTH)-100, CREDITS_Y+25, 200, 12, "^g(Lead Programmer)", .2, ITEM_ALIGN_CENTER, 100, 8 )
+	CREDIT( (0.5*WINDOW_WIDTH)-100, CREDITS_Y+50, 200, 12, "^hN^7ico^h$", .4, ITEM_ALIGN_CENTER, 100, 8 )
+	LABELWHITE( (0.5*WINDOW_WIDTH)-100, CREDITS_Y+65, 200, 12, "^g(Programmer, inactive)", .2, ITEM_ALIGN_CENTER, 100, 8 )
+	CREDIT( (0.5*WINDOW_WIDTH)-100, CREDITS_Y+90, 200, 12, "^77Killer", .4, ITEM_ALIGN_CENTER, 100, 8 )
+	LABELWHITE( (0.5*WINDOW_WIDTH)-100, CREDITS_Y+105, 200, 12, "^g(Programmer, inactive)", .2, ITEM_ALIGN_CENTER, 100, 8 )
+
+#define THANKS_Y	CREDITS_Y + 130
+
+
+	CREDIT( 300, THANKS_Y+30, 640, 80, "^gSPECIAL THANKS", .35, ITEM_ALIGN_CENTER, ITEM_ALIGN_CENTER, ITEM_ALIGN_CENTER )
+
+	CREDIT( 300, THANKS_Y+60, 640, 8, "YCN-Hosting (for hosting test server in the past)", .2, ITEM_ALIGN_CENTER, ITEM_ALIGN_CENTER, ITEM_ALIGN_CENTER )
+	CREDIT( 300, THANKS_Y+78, 640, 8, "Everyone who reported bugs & gave new ideas!", .2, ITEM_ALIGN_CENTER, ITEM_ALIGN_CENTER, ITEM_ALIGN_CENTER )
+	CREDIT( 300, THANKS_Y+96, 640, 8, "^8b^7L^8i^7N^8k", .2, ITEM_ALIGN_CENTER, ITEM_ALIGN_CENTER, ITEM_ALIGN_CENTER )
+	CREDIT( 300, THANKS_Y+114, 640, 8, "NoQuarter Team", .2, ITEM_ALIGN_CENTER, ITEM_ALIGN_CENTER, ITEM_ALIGN_CENTER )
+	CREDIT( 300, THANKS_Y+132, 640, 8, "ETPub Team", .2, ITEM_ALIGN_CENTER, ITEM_ALIGN_CENTER, ITEM_ALIGN_CENTER )
+
+	CREDIT( 6, WINDOW_HEIGHT-52, WINDOW_WIDTH-12, 8, "^3Visit ^7www.etmods.net ^3for more informations or support.", .3, ITEM_ALIGN_CENTER, (.5*(WINDOW_WIDTH-24)), 8 )
+	BUTTON( 6+.33*(WINDOW_WIDTH-24)+6, WINDOW_HEIGHT-24, .34*(WINDOW_WIDTH-24), 18, "^7BACK", .3, 14, close credits_nit ; open options_nit )
+}
+

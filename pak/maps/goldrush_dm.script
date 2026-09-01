@@ -1,0 +1,923 @@
+game_manager
+{
+	spawn
+	{
+		create
+		{
+			scriptName "dmspawn1"
+			classname "team_CTF_greenspawn"
+			targetname "dmspawn1"
+			origin "-3040 -223 38"
+			spawnflags 2	
+			angle 140
+		}
+
+		create
+		{
+			scriptName "dm_spawn2"
+			classname "team_CTF_greenspawn"
+			targetname "dm_spawn2"
+			origin "-2285 -1118 120"
+			spawnflags 2	
+			angle 30
+		}
+
+		create
+		{
+			scriptName "dm_spawn3"
+			classname "team_CTF_greenspawn"
+			targetname "dm_spawn3"
+			origin "-1022 -1153 24"
+			spawnflags 2	
+			angle 11
+		}
+		
+		create
+		{
+			scriptName "dm_spawn4"
+			classname "team_CTF_greenspawn"
+			targetname "dm_spawn4"
+			origin "-1537 -611 112"
+			spawnflags 2	
+			angle 0
+		}
+
+		create
+		{
+			scriptName "dm_spawn5"
+			classname "team_CTF_greenspawn"
+			targetname "dm_spawn5"
+			origin "-1327 1498 272"
+			spawnflags 2	
+			angle -179
+		}
+
+		create
+		{
+			scriptName "dm_spawn6"
+			classname "team_CTF_greenspawn"
+			targetname "dm_spawn6"
+			origin "-983 1384 396"
+			spawnflags 2	
+			angle 0
+		}
+		
+		create
+		{
+			scriptName "dm_spawn7"
+			classname "team_CTF_greenspawn"
+			targetname "dm_spawn7"
+			origin "-125 3970 456"
+			spawnflags 2	
+			angle -90
+		}
+
+		create
+		{
+			scriptName "dm_spawn8"
+			classname "team_CTF_greenspawn"
+			targetname "dm_spawn8"
+			origin "449 2397 338"
+			spawnflags 2	
+			angle -90
+		}
+
+		create
+		{
+			scriptName "dm_spawn9"
+			classname "team_CTF_greenspawn"
+			targetname "dm_spawn9"
+			origin "547 664 91"
+			spawnflags 2	
+			angle -45
+		}
+		
+		create
+		{
+			scriptName "dm_spawn10"
+			classname "team_CTF_greenspawn"
+			targetname "dm_spawn10"
+			origin "1523 379 224"
+			spawnflags 2	
+			angle 180
+		}
+
+		create
+		{
+			scriptName "dm_spawn11"
+			classname "team_CTF_greenspawn"
+			targetname "dm_spawn11"
+			origin "2157 380 -327"
+			spawnflags 2	
+			angle 90
+		}
+
+		create
+		{
+			scriptName "dm_spawn12"
+			classname "team_CTF_greenspawn"
+			targetname "dm_spawn12"
+			origin "3115 481 -175"
+			spawnflags 2	
+			angle -125
+		}
+		
+		create
+		{
+			scriptName "dm_spawn13"
+			classname "team_CTF_greenspawn"
+			targetname "dm_spawn13"
+			origin "2529 -1116 -351"
+			spawnflags 2	
+			angle 57
+		}
+
+		create
+		{
+			scriptName "dm_spawn14"
+			classname "team_CTF_greenspawn"
+			targetname "dm_spawn14"
+			origin "2827 -1954 -383"
+			spawnflags 2	
+			angle -45
+		}
+
+		create
+		{
+			scriptName "dm_spawn15"
+			classname "team_CTF_greenspawn"
+			targetname "dm_spawn15"
+			origin "1891 -3041 -295"
+			spawnflags 2	
+			angle 0
+		}
+
+		create
+		{
+			scriptName "dm_spawn16"
+			classname "team_CTF_greenspawn"
+			targetname "dm_spawn16"
+			origin "491 -274 -196"
+			spawnflags 2	
+			angle -80
+		}
+
+		// Game rules
+		wm_axis_respawntime	5
+		wm_allied_respawntime	5
+		wm_number_of_objectives 1
+		wm_set_round_timelimit	5
+
+		wait 50
+		// Set all the non-LMS entities invisible
+		setstate bank_door2 invisible
+		setstate bank_door1 invisible
+		setstate bankdoors_toi invisible
+		setstate bankdoors_cm_marker invisible
+		setstate defense1_toi invisible
+		setstate defense1_hurt invisible
+		setstate defense1_flag invisible
+		setstate defense1_wire invisible
+		setstate defense1_teeth1 invisible
+		setstate defense1_teeth2 invisible
+		setstate defense1_materials invisible
+		setstate defense1_materials_clip invisible
+		setstate defense2_toi invisible
+		setstate defense2_hurt invisible
+		setstate defense2_flag invisible
+		setstate defense2_materials invisible
+		setstate defense2_materials_clip invisible
+		setstate defense2_wire invisible
+		setstate defense2_teeth1 invisible
+		setstate defense2_teeth2 invisible
+		setstate defense3_toi invisible
+		setstate defense3_hurt invisible
+		setstate defense3_flag invisible
+		setstate defense3_materials invisible
+		setstate defense3_materials_clip invisible
+		setstate defense3_wire invisible
+		setstate defense3_teeth1 invisible
+		setstate defense3_teeth2 invisible
+		setstate defense4_toi invisible
+		setstate defense4_hurt invisible
+		setstate defense4_flag invisible
+		setstate defense4_materials invisible
+		setstate defense4_materials_clip invisible
+		setstate defense4_wire invisible
+		setstate defense4_teeth1 invisible
+		setstate defense4_teeth2 invisible
+		setstate doorframe invisible
+		setstate goldbars_toi invisible
+		setstate goldbars_cm_marker invisible
+		setstate kill_tank invisible
+		setstate mg42_3 invisible
+		setstate north_hacabinet_toi invisible
+		setstate north_hacabinet_cm_marker invisible
+		setstate tank invisible
+		setstate tank_smoke invisible
+		setstate truck invisible
+		setstate truck_smoke invisible
+
+		// start triggered loops on/off as required (eg: command post radio sounds)
+		disablespeaker allies_compost_sound
+		disablespeaker axis_compost_sound
+		disablespeaker allies_compost_sound_lms
+		disablespeaker axis_compost_sound_lms
+
+		wait 1000
+	}
+}
+
+tankdepot_axis_spawns
+{
+	spawn
+	{
+		setstate tankdepot_axis_spawns invisible
+	}
+}
+
+tankdepotblob
+{
+	spawn
+	{
+		setstate tankdepotblob invisible
+	}
+}
+
+ceilingfan
+{
+	spawn
+	{
+		wait 100
+		setrotation	0 300 0
+	}
+}
+
+neutral_compost_toi_lms
+{
+	spawn
+	{
+		wait 50
+		setstate neutral_compost_toi_lms invisible
+	}
+}
+
+neutral_compost_clip_lms
+{
+	spawn
+	{
+		wait 400
+		remove
+	}
+}
+
+neutral_compost_closed_clip_lms
+{
+	spawn
+	{
+		wait 400
+		remove
+	}
+}
+
+neutral_compost_closed_model_lms
+{
+	spawn
+	{
+		wait 400
+		remove
+	}
+}
+
+allied_compost_built_lms
+{
+	spawn
+	{
+		wait 400
+		remove
+	}
+}
+
+allied_compost_built_model_lms
+{
+	spawn
+	{
+		wait 400
+		remove
+	}
+}
+
+axis_compost_built_lms
+{
+	spawn
+	{
+		wait 400
+		remove
+	}
+}
+
+axis_compost_built_model_lms
+{
+	spawn
+	{
+		wait 400
+		remove
+	}
+}
+
+tank
+{
+	spawn
+	{
+		wait 100
+		remove
+	}
+}
+
+tank_disabler
+{
+	spawn
+	{
+		wait 100
+		remove
+	}
+}
+
+tank_enabler
+{
+	spawn
+	{
+		wait 100
+		remove
+	}
+}
+
+tank_trigger
+{
+	spawn
+	{
+		wait 200
+		remove
+	}
+}
+
+tank_build
+{
+	spawn
+	{
+		wait 100
+		remove
+	}
+}
+
+tank_construct
+{
+	spawn
+	{
+		wait 100
+		remove
+	}
+}
+
+
+
+tank_smoke
+{
+	spawn
+	{
+		wait 100
+		remove
+	}
+}
+
+tank_flash
+{
+	spawn
+	{
+		wait 100
+		remove
+	}
+}
+
+tank_shooter
+{
+	spawn
+	{
+		wait 100
+		remove
+	}
+}
+
+tank_rtrack
+{
+	spawn
+	{
+		wait 100
+		remove
+	}
+}
+
+tank_ltrack
+{
+	spawn
+	{
+		wait 100
+		remove
+	}
+}
+
+tank_turret
+{
+	spawn
+	{
+		wait 100
+		remove
+	}
+}
+
+tank_shell
+{
+	spawn
+	{
+		wait 500
+		remove
+	}
+}
+
+rubble2_damaged
+{
+	spawn
+	{
+		wait 500
+		remove
+	}
+}
+
+goldbars_toi
+{
+	spawn
+	{
+		wait 500
+		remove
+	}
+}
+
+goldbars_cm_marker
+{
+	spawn
+	{
+		wait 500
+		remove
+	}
+}
+
+gold_full_0
+{
+	spawn
+	{
+		wait 500
+		remove
+	}
+}
+
+gold_full_1
+{
+	spawn
+	{
+		wait 500
+		remove
+	}
+}
+
+gold_trans_0
+{
+	spawn
+	{
+		wait 500
+		remove
+	}
+}
+
+gold_trans_1
+{
+	spawn
+	{
+		wait 500
+		remove
+	}
+}
+
+truck
+{
+	spawn
+	{
+		wait 100
+		remove
+	}
+}
+
+truck_disabler
+{
+	spawn
+	{
+		wait 100
+		remove
+	}
+}
+
+truck_enabler
+{
+	spawn
+	{
+		wait 100
+		remove
+	}
+}
+
+truck_trigger
+{
+	spawn
+	{
+		wait 200
+		remove
+	}
+}
+
+truck_build
+{
+	spawn
+	{
+		wait 100
+		remove
+	}
+}
+
+truck_construct
+{
+	spawn
+	{
+		wait 100
+		remove
+	}
+}
+
+truck_smoke
+{
+	spawn
+	{
+		wait 100
+		remove
+	}
+}
+
+truck_fwheel
+{
+	spawn
+	{
+		wait 100
+		remove
+	}
+}
+
+truck_bwheel1
+{
+	spawn
+	{
+		wait 100
+		remove
+	}
+}
+
+truck_bwheel2
+{
+	spawn
+	{
+		wait 100
+		remove
+	}
+}
+
+truck_engine
+{
+	spawn
+	{
+		wait 100
+		remove
+	}
+}
+
+goldbar_holder
+{
+	spawn
+	{
+		wait 100
+		remove
+	}
+}
+
+doorframe
+{
+	spawn
+	{
+		wait 50
+		remove
+	}
+}
+
+bankdoors_toi
+{
+	spawn
+	{
+		wait 500
+		remove
+	}
+}
+
+bankdoors_cm_marker
+{
+	spawn
+	{
+		wait 500
+		remove
+	}
+}
+
+bank_door1
+{
+	spawn
+	{
+		wait 500
+		remove
+	}
+}
+
+boomtrigger
+{
+	spawn
+	{
+		wait 500
+		remove
+	}
+}
+
+hurt_barrelblast1
+{
+	spawn
+	{
+		wait 500
+		remove
+	}
+}
+
+hurt_barrelblast2
+{
+	spawn
+	{
+		wait 500
+		remove
+	}
+}
+
+hurt_barrelblast3
+{
+	spawn
+	{
+		wait 500
+		remove
+	}
+}
+
+hurt_bankblast
+{
+	spawn
+	{
+		wait 500
+		remove
+	}
+}
+
+defense1
+{
+	spawn
+	{
+		wait 500
+		remove
+	}
+}
+
+defense1_toi
+{
+	spawn
+	{
+		wait 500
+		remove
+	}
+}
+
+defense2
+{
+	spawn
+	{
+		wait 500
+		remove
+	}
+}
+
+defense2_toi
+{
+	spawn
+	{
+		wait 500
+		remove
+	}
+}
+
+defense3
+{
+	spawn
+	{
+		wait 500
+		remove
+	}
+}
+
+defense3_toi
+{
+	spawn
+	{
+		wait 500
+		remove
+	}
+}
+
+defense4
+{
+	spawn
+	{
+		wait 500
+		remove
+	}
+}
+
+defense4_toi
+{
+	spawn
+	{
+		wait 500
+		remove
+	}
+}
+
+tankbay_commandpost_wires
+{
+	spawn
+	{
+		wait 400
+		remove
+	}
+}
+
+neutral_compost_toi
+{
+	spawn
+	{
+		wait 50
+		setstate neutral_compost_toi invisible
+	}
+}
+
+neutral_compost_clip
+{
+	spawn
+	{
+		wait 400
+		remove
+	}
+}
+
+neutral_compost_closed_clip
+{
+	spawn
+	{
+		wait 400
+		remove
+	}
+}
+
+neutral_compost_closed_model
+{
+	spawn
+	{
+		wait 400
+		remove
+	}
+}
+
+allied_compost_built
+{
+	spawn
+	{
+		wait 400
+		remove
+	}
+}
+
+allied_compost_built_model
+{
+	spawn
+	{
+		wait 400
+		remove
+	}
+}
+
+axis_compost_built
+{
+	spawn
+	{
+		wait 400
+		remove
+	}
+}
+
+axis_compost_built_model
+{
+	spawn
+	{
+		wait 400
+		remove
+	}
+}
+
+north_hacabinet_toi
+{
+	spawn
+	{
+		wait 500
+		remove
+	}
+}
+
+north_hacabinet_cm_marker
+{
+	spawn
+	{
+		wait 500
+		remove
+	}
+}
+
+north_trigger_ammo
+{
+	spawn
+	{
+		wait 400
+		remove
+	}
+}
+
+north_ammocabinet
+{
+	spawn
+	{
+		wait 400
+		remove
+	}
+}
+
+
+north_ammocabinet_clip
+{
+	spawn
+	{
+		wait 400
+		remove
+	}
+}
+
+north_trigger_heal
+{
+	spawn
+	{
+		wait 400
+		remove
+	}
+}
+
+north_healthcabinet
+{
+	spawn
+	{
+		wait 400
+		remove
+	}
+}
+
+north_healthcabinet_clip
+{
+	spawn
+	{
+		wait 400
+		remove
+	}
+}

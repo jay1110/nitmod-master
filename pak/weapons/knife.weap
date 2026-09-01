@@ -1,0 +1,34 @@
+weaponDef
+{
+	client {
+		droppedangleshack
+		pickupModel				"models/multiplayer/knife/knife_throw.md3"
+
+		weaponConfig			"models/multiplayer/knife/weapon.cfg"
+		handsModel				"models/multiplayer/knife/v_knife_hand.md3"
+
+		flashSound				"sound/weapons/knife/knife_slash1.wav"
+		flashSound				"sound/weapons/knife/knife_slash2.wav"
+		flashSound				"sound/weapons/knife/knife_slash3.wav"
+
+		weaponSelectedIcon		"icons/iconw_knife_1_select"
+
+		firstPerson {
+			model				"models/multiplayer/knife/v_knife.md3"
+			axisskin			"models/multiplayer/knife/knife_axis.skin"
+			alliedskin			"models/multiplayer/knife/knife_allied.skin"
+			
+			weaponLink
+			{
+				part 0
+				{
+					tag			"tag_barrel"
+					model		"models/multiplayer/knife/v_knife_barrel.md3"
+				}
+			}
+		}
+
+		thirdPerson {
+			model				"models/multiplayer/knife/knife.md3"
+		}
+}

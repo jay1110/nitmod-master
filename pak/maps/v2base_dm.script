@@ -1,0 +1,1178 @@
+//
+// Map: V2 Base
+// BSP: v2base
+// Author: SteelRat
+
+game_manager
+{
+	spawn
+	{
+		//  35 DM spawns
+		
+		create
+		{
+			scriptName "dmspawn1"
+			classname "team_CTF_greenspawn"
+			targetname "dmspawn1"
+			origin "-1466 1330 40"
+			spawnflags 2
+			angle 130
+		}
+		
+		create
+		{
+			scriptName "dmspawn2"
+			classname "team_CTF_greenspawn"
+			targetname "dmspawn2"
+			origin "-1840 1760 -287"
+			spawnflags 2
+			angle 135
+		}
+		
+		create
+		{
+			scriptName "dmspawn3"
+			classname "team_CTF_greenspawn"
+			targetname "dmspawn3"
+			origin "-1067 2660 -311"
+			spawnflags 2
+			angle -50
+		}
+		
+		create
+		{
+			scriptName "dmspawn4"
+			classname "team_CTF_greenspawn"
+			targetname "dmspawn4"
+			origin "-338 2274 384"
+			spawnflags 2
+			angle 180
+		}
+		
+		create
+		{
+			scriptName "dmspawn5"
+			classname "team_CTF_greenspawn"
+			targetname "dmspawn5"
+			origin "-500 2077 240"
+			spawnflags 2
+			angle 140
+		}
+		
+		create
+		{
+			scriptName "dmspawn6"
+			classname "team_CTF_greenspawn"
+			targetname "dmspawn6"
+			origin "-381 299 40"
+			spawnflags 2
+			angle 130
+		}
+		
+		create
+		{
+			scriptName "dmspawn7"
+			classname "team_CTF_greenspawn"
+			targetname "dmspawn7"
+			origin "-2714 1172 -239"
+			spawnflags 2
+			angle 45
+		}
+		
+		create
+		{
+			scriptName "dmspawn8"
+			classname "team_CTF_greenspawn"
+			targetname "dmspawn8"
+			origin "-1054 1824 -295"
+			spawnflags 2
+			angle 130
+		}
+		
+		create
+		{
+			scriptName "dmspawn9"
+			classname "team_CTF_greenspawn"
+			targetname "dmspawn9"
+			origin "-727 991 -165"
+			spawnflags 2
+			angle -70
+		}
+		
+		create
+		{
+			scriptName "dmspawn10"
+			classname "team_CTF_greenspawn"
+			targetname "dmspawn10"
+			origin "-210 1825 -335"
+			spawnflags 2
+			angle 90
+		}
+		
+		create
+		{
+			scriptName "dmspawn11"
+			classname "team_CTF_greenspawn"
+			targetname "dmspawn11"
+			origin "-445 2708 -335"
+			spawnflags 2
+			angle -90
+		}
+		
+		create
+		{
+			scriptName "dmspawn12"
+			classname "team_CTF_greenspawn"
+			targetname "dmspawn12"
+			origin "-971 1194 -335"
+			spawnflags 2
+			angle 40
+		}
+		
+		create
+		{
+			scriptName "dmspawn13"
+			classname "team_CTF_greenspawn"
+			targetname "dmspawn13"
+			origin "-1103 -746 44"
+			spawnflags 2
+			angle -130
+		}
+		
+		create
+		{
+			scriptName "dmspawn14"
+			classname "team_CTF_greenspawn"
+			targetname "dmspawn14"
+			origin "-2142 -616 48"
+			spawnflags 2
+			angle 30
+		}
+		
+		create
+		{
+			scriptName "dmspawn15"
+			classname "team_CTF_greenspawn"
+			targetname "dmspawn15"
+			origin "-674 -993 40"
+			spawnflags 2
+			angle 175
+		}
+		
+		create
+		{
+			scriptName "dmspawn16"
+			classname "team_CTF_greenspawn"
+			targetname "dmspawn16"
+			origin "-277 -835 264"
+			spawnflags 2
+			angle -40
+		}
+		
+		create
+		{
+			scriptName "dmspawn17"
+			classname "team_CTF_greenspawn"
+			targetname "dmspawn17"
+			origin "-146 -85 424"
+			spawnflags 2
+			angle 50
+		}
+		
+		create
+		{
+			scriptName "dmspawn18"
+			classname "team_CTF_greenspawn"
+			targetname "dmspawn18"
+			origin "556 -695 264"
+			spawnflags 2
+			angle -180
+		}
+		
+		create
+		{
+			scriptName "dmspawn19"
+			classname "team_CTF_greenspawn"
+			targetname "dmspawn19"
+			origin "415 170 96"
+			spawnflags 2
+			angle -135
+		}
+		
+		create
+		{
+			scriptName "dmspawn20"
+			classname "team_CTF_greenspawn"
+			targetname "dmspawn20"
+			origin "686 1485 41"
+			spawnflags 2
+			angle -50
+		}
+		
+		create
+		{
+			scriptName "dmspawn21"
+			classname "team_CTF_greenspawn"
+			targetname "dmspawn21"
+			origin "683 1963 46"
+			spawnflags 2
+			angle 45
+		}
+		
+		create
+		{
+			scriptName "dmspawn22"
+			classname "team_CTF_greenspawn"
+			targetname "dmspawn22"
+			origin "1050 1497 232"
+			spawnflags 2
+			angle 35
+		}
+		
+		create
+		{
+			scriptName "dmspawn23"
+			classname "team_CTF_greenspawn"
+			targetname "dmspawn23"
+			origin "1500 1506 400"
+			spawnflags 2
+			angle 135
+		}
+		
+		create
+		{
+			scriptName "dmspawn24"
+			classname "team_CTF_greenspawn"
+			targetname "dmspawn24"
+			origin "581 2173 256"
+			spawnflags 2
+			angle 140
+		}
+		
+		create
+		{
+			scriptName "dmspawn25"
+			classname "team_CTF_greenspawn"
+			targetname "dmspawn25"
+			origin "-262 2087 448"
+			spawnflags 2
+			angle 35
+		}
+		
+		create
+		{
+			scriptName "dmspawn26"
+			classname "team_CTF_greenspawn"
+			targetname "dmspawn26"
+			origin "-102 2459 655"
+			spawnflags 2
+			angle -90
+		}
+		
+		create	//trick spawn sur antenne x)
+		{
+			scriptName "dmspawn27"
+			classname "team_CTF_greenspawn"
+			targetname "dmspawn27"
+			origin "-195 873 812"
+			spawnflags 2
+			angle 70
+		}
+		
+		create
+		{
+			scriptName "dmspawn28"
+			classname "team_CTF_greenspawn"
+			targetname "dmspawn28"
+			origin "292 -769 40"
+			spawnflags 2
+			angle -40
+		}
+		
+		create
+		{
+			scriptName "dmspawn29"
+			classname "team_CTF_greenspawn"
+			targetname "dmspawn29"
+			origin "2900 -2481 699"
+			spawnflags 2
+			angle 170
+		}
+		
+		create
+		{
+			scriptName "dmspawn30"
+			classname "team_CTF_greenspawn"
+			targetname "dmspawn30"
+			origin "-2191 -1648 68"
+			spawnflags 2
+			angle -45
+		}
+		
+		create
+		{
+			scriptName "dmspawn31"
+			classname "team_CTF_greenspawn"
+			targetname "dmspawn31"
+			origin "-2349 -1169 57"
+			spawnflags 2
+			angle -45
+		}
+		
+		//  34 DM spawns
+
+                // Game rules
+                wm_axis_respawntime		5
+                wm_allied_respawntime		5
+                wm_number_of_objectives		1
+                wm_set_round_timelimit		0
+
+
+		wait 500
+
+		accum 4 set 0    // Controls the flag
+		
+
+
+// Objectives
+		// 1: Documents
+		// 2: Transmit docs
+		// 3: V2 Base Wall
+		// 4: Flag
+		// 5: Storage Wall
+		// 6: Allied command post
+		// 7: Axis command post
+
+
+		wait 250
+
+		// Stopwatch mode defending team (0=Axis, 1=Allies)
+		wm_set_defending_team	0
+
+		// Winner on expiration of round timer (0=Axis, 1=Allies)
+		wm_setwinner	0
+
+		wait 500
+		setautospawn	"Axis Spawn"	0
+		setautospawn	"Allied Spawn"	1
+
+		wait 2000
+		wm_addteamvoiceannounce 0 "axis_hq_compost_construct"
+		wm_addteamvoiceannounce 1 "allies_hq_compost_construct"
+		wm_teamvoiceannounce 0 "axis_hq_compost_construct"
+		wm_teamvoiceannounce 1 "allies_hq_compost_construct"
+		
+
+	}
+	trigger objective1
+	{
+	wm_objective_status 1 1 1		// Allies have transmitted the docs
+	wm_objective_status 1 0 2		// Axis have not prevented Allies from transmitting
+	wm_set_main_objective 1 0 0
+	wm_set_main_objective 1 1 1
+	accum 1 set 1
+	disablespeaker sirens
+	wm_announce "Allied team has transmitted the war documents!"
+	trigger game_manager checkgame
+	}	
+	trigger axis_object_stolen
+	{
+	wm_objective_status 1 1 1		// Allies have stolen the docs
+	wm_objective_status 1 0 2		// Axis have lost the docs
+	setstate docsmarker invisible
+	enablespeaker sirens
+	}
+	trigger axis_object_returned
+	{
+	wm_objective_status 1 0 1		// Axis have returned the docs
+	wm_objective_status 1 1 2		// Allies have lost the docs
+	accum 1 set 0
+	setstate docsmarker default
+	disablespeaker sirens
+	}
+
+	trigger allies_flag
+	{
+
+		wm_objective_status 4 0 2  // Obj4, Axis have not captured the tower.
+		wm_objective_status 4 1 1  // Obj4, Allies have captured the tower.
+		wm_announce	"Allies captures the Tower!"
+
+	}
+	
+	trigger axis_flag
+	{
+		wm_objective_status 4 0 1  // Obj4, Axis have captured the tower.
+		wm_objective_status 4 1 2  // Obj4, Allies have not captured the tower.
+
+
+		wm_announce	"Axis captures the Tower!"
+	}
+
+	trigger checkgame
+	{
+	accum 1 abort_if_not_equal 1
+	wm_setwinner 1
+	wait 1500
+	wm_endround
+	}
+
+	trigger objective2
+	{
+	wm_announce "Allies have destroyed the Base Wall!"
+	wm_objective_status 3 0 2  // Obj3, Axis have lost the Base Wall.
+	wm_objective_status 3 1 1  // Obj3, Allies have destroyed the Base Wall.
+	wait 200
+	trigger game_manager checkgame	
+	}
+	trigger objective3
+	{
+	wm_announce "Allies have destroyed the Storage Wall!"
+	wm_objective_status 5 0 2  // Obj3, Axis have lost the Storage Wall.
+	wm_objective_status 5 1 1  // Obj3, Allies have destroyed the Storage Wall.
+	wait 200
+	trigger game_manager checkgame	
+	}
+
+
+
+}
+basewall
+{	
+	spawn
+	{
+	wait 200
+	setstate debris3 invisible
+	constructible_class 3
+	remove
+	}
+	death
+	{
+	setstate debris3 default
+	trigger game_manager objective2
+	}
+}
+storagewall
+{	
+	spawn
+	{
+	wait 50
+	setstate debris2 invisible
+	constructible_class 3
+	remove
+	}
+	death
+	{
+	setstate debris2 default
+	trigger game_manager objective3
+	}
+}
+docsmarker
+	spawn
+	{	
+	setstate docsmarker default
+	remove
+	}
+	death
+	{
+	}
+}
+transmitter_obj
+	{
+	spawn
+	{
+	wait 500
+	remove
+	}
+	death
+	{
+	trigger game_manager objective1
+	}
+}
+
+
+// ================================================
+// ============    FORWARD SPAWN     ==============
+// ================================================
+
+forward_spawn
+{
+	spawn
+	{
+	// accum 4 set 2	// 0-Axis, 1-Allied
+		remove
+	}
+
+
+	trigger axis_capture
+	{
+
+		accum 4 abort_if_not_equal 1
+
+		accum 4 set 0
+
+		trigger game_manager axis_flag
+
+		setautospawn	"Forward Spawn"	0
+		setautospawn	"Allied Spawn"	1
+
+		wait 1000
+
+		// *----------------------------------- vo ------------------------------------------*
+		//wm_teamvoiceannounce 0 "radar_axis_bunker_stop"
+
+		//wm_teamvoiceannounce 1 "radar_allies_bunker_capture"
+
+		//wm_addteamvoiceannounce 0 "radar_axis_bunker_stop"
+
+		//wm_addteamvoiceannounce 1 "radar_allies_bunker_capture"
+		// *---------------------------------------------------------------------------------*
+	}
+
+	trigger allied_capture
+	{
+
+		accum 4 abort_if_not_equal 0
+
+		accum 4 set 1
+
+		trigger game_manager allies_flag
+
+		setautospawn	"Axis Spawn"	0
+		setautospawn	"Forward Spawn"	1
+
+		wait 1000
+
+		// *----------------------------------- vo ------------------------------------------*
+		//wm_teamvoiceannounce 0 "radar_axis_bunker_captured"
+
+		//wm_teamvoiceannounce 1 "radar_allies_bunker_captured"
+
+		//wm_addteamvoiceannounce 0 "radar_axis_bunker_captured"
+
+		//wm_addteamvoiceannounce 1 "radar_allies_bunker_captured"
+		// *---------------------------------------------------------------------------------*
+
+	}
+}
+
+axis_radio_destroyed 
+{ 
+   spawn 
+   { 
+      wait 400 
+      setstate axis_radio_destroyed invisible 
+      setstate axis_radio_destroyed_model invisible 
+   } 
+
+   trigger hide 
+   { 
+      setstate axis_radio_destroyed invisible 
+      setstate axis_radio_destroyed_model invisible 
+   } 
+
+   trigger show 
+   { 
+      accum 0 abort_if_equal 0 
+      setstate axis_radio_destroyed default 
+      setstate axis_radio_destroyed_model default 
+   } 
+
+   trigger enable 
+   { 
+      accum 0 set 1 
+   } 
+} 
+
+axis_radio_closed 
+{ 
+   trigger hide 
+   { 
+      setstate axis_radio_closed invisible 
+      setstate axis_radio_closed_model invisible 
+   } 
+
+   trigger show 
+   { 
+      accum 0 abort_if_equal 1 
+      setstate axis_radio_closed default 
+      setstate axis_radio_closed_model default 
+   } 
+
+   trigger disable 
+   { 
+      accum 0 set 1 
+   } 
+} 
+
+axis_radio_built 
+{ 
+   spawn 
+   { 
+      wait 400 
+
+      constructible_class 2 
+
+      trigger axis_radio_built setup 
+   } 
+
+   trigger setup 
+   { 
+      setchargetimefactor 0 soldier 1 
+      setchargetimefactor 0 lieutenant 1 
+      setchargetimefactor 0 medic 1 
+      setchargetimefactor 0 engineer 1 
+      setchargetimefactor 0 covertops 1 
+      sethqstatus 0 0 
+   } 
+
+   buildstart final 
+   { 
+      trigger axis_radio_built_model trans 
+
+      trigger axis_radio_destroyed hide 
+      trigger axis_radio_closed    hide 
+   } 
+
+   built final 
+   { 
+      trigger axis_radio_built_model show 
+
+      trigger axis_radio_destroyed enable 
+      trigger axis_radio_closed    disable 
+
+      trigger axis_radio_built_model enable_axis_features 
+
+      enablespeaker axis_compost_sound 
+   } 
+
+   decayed final 
+   { 
+      trigger axis_radio_built_model hide 
+
+      trigger axis_radio_destroyed show 
+      trigger axis_radio_closed    show 
+   } 
+
+   death 
+   { 
+      trigger axis_radio_built_model hide 
+
+      trigger axis_radio_destroyed show 
+
+      trigger axis_radio_built_model disable_axis_features 
+
+      disablespeaker axis_compost_sound 
+   } 
+} 
+
+axis_radio_built_model 
+{ 
+   spawn 
+   { 
+      wait 400 
+      setstate axis_radio_built_model invisible 
+   } 
+
+   trigger show 
+   { 
+      setstate axis_radio_built_model default 
+   } 
+
+   trigger hide 
+   { 
+      setstate axis_radio_built_model invisible 
+   } 
+
+   trigger trans 
+   { 
+      setstate axis_radio_built_model underconstruction 
+   } 
+
+   trigger enable_axis_features 
+   { 
+      setchargetimefactor 0 soldier 0.75 
+      setchargetimefactor 0 lieutenant 0.75 
+      setchargetimefactor 0 medic 0.75 
+      setchargetimefactor 0 engineer 0.75 
+      setchargetimefactor 0 covertops 0.75 
+      sethqstatus 0 1 
+
+      wm_announce   "Axis Command Post constructed. Charge speed increased!" 
+
+      // *----------------------------------- vo ------------------------------------------* 
+      wm_teamvoiceannounce 0 "axis_hq_compost_constructed" 
+
+      wm_teamvoiceannounce 1 "allies_hq_compost_constructed_axis" 
+
+      wm_removeteamvoiceannounce 0 "axis_hq_compost_construct" 
+      // *----------------------------------- vo ------------------------------------------* 
+
+      wm_objective_status 7 0 1 
+      wm_objective_status 7 1 0 
+
+   } 
+
+   trigger disable_axis_features 
+   { 
+      // Some kind of UI pop-up to alert players 
+      wm_announce   "Allied team has destroyed the Axis Command Post!" 
+
+      // *----------------------------------- vo ------------------------------------------* 
+      wm_addteamvoiceannounce 0 "axis_hq_compost_construct" 
+
+      wm_teamvoiceannounce 0 "axis_hq_compost_damaged" 
+      // *----------------------------------- vo ------------------------------------------* 
+
+      setchargetimefactor 0 soldier 1 
+      setchargetimefactor 0 lieutenant 1 
+      setchargetimefactor 0 medic 1 
+      setchargetimefactor 0 engineer 1 
+      setchargetimefactor 0 covertops 1 
+      sethqstatus 0 0 
+
+      wm_objective_status 7 0 0 
+      wm_objective_status 7 1 1 
+   } 
+}
+
+
+allied_radio_destroyed 
+{ 
+   spawn 
+   { 
+      wait 400 
+      setstate allied_radio_destroyed invisible 
+      setstate allied_radio_destroyed_model invisible 
+   } 
+
+   trigger hide 
+   { 
+      setstate allied_radio_destroyed invisible 
+      setstate allied_radio_destroyed_model invisible 
+   } 
+
+   trigger show 
+   { 
+      accum 2 abort_if_equal 0 
+      setstate allied_radio_destroyed default 
+      setstate allied_radio_destroyed_model default 
+   } 
+
+   trigger enable 
+   { 
+      accum 2 set 1 
+   } 
+} 
+
+allied_radio_closed 
+{ 
+   trigger hide 
+   { 
+      setstate allied_radio_closed invisible 
+      setstate allied_radio_closed_model invisible 
+   } 
+
+   trigger show 
+   { 
+      accum 2 abort_if_equal 1 
+      setstate allied_radio_closed default 
+      setstate allied_radio_closed_model default 
+   } 
+
+   trigger disable 
+   { 
+      accum 2 set 1 
+   } 
+} 
+
+allied_radio_built 
+{ 
+   spawn 
+   { 
+      wait 400 
+
+      constructible_class 2 
+
+      trigger allied_radio_built setup 
+   } 
+
+   trigger setup 
+   { 
+      setchargetimefactor 1 soldier 1 
+      setchargetimefactor 1 lieutenant 1 
+      setchargetimefactor 1 medic 1 
+      setchargetimefactor 1 engineer 1 
+      setchargetimefactor 1 covertops 1 
+      sethqstatus 1 0 
+   } 
+
+   buildstart final 
+   { 
+      trigger allied_radio_built_model trans 
+
+      trigger allied_radio_destroyed hide 
+      trigger allied_radio_closed    hide 
+   } 
+
+   built final 
+   { 
+      trigger allied_radio_built_model show 
+
+      trigger allied_radio_destroyed enable 
+      trigger allied_radio_closed    disable 
+
+      trigger allied_radio_built_model enable_allied_features 
+
+      enablespeaker allied_compost_sound 
+   } 
+
+   decayed final 
+   { 
+      trigger allied_radio_built_model hide 
+
+      trigger allied_radio_destroyed show 
+      trigger allied_radio_closed    show 
+   } 
+
+   death 
+   { 
+      trigger allied_radio_built_model hide 
+
+      trigger allied_radio_destroyed show 
+
+      trigger allied_radio_built_model disable_allied_features 
+
+      disablespeaker allied_compost_sound 
+   } 
+} 
+
+allied_radio_built_model 
+{ 
+   spawn 
+   { 
+      wait 400 
+      setstate allied_radio_built_model invisible 
+   } 
+
+   trigger show 
+   { 
+      setstate allied_radio_built_model default 
+   } 
+
+   trigger hide 
+   { 
+      setstate allied_radio_built_model invisible 
+   } 
+
+   trigger trans 
+   { 
+      setstate allied_radio_built_model underconstruction 
+   } 
+
+   trigger enable_allied_features 
+   { 
+      setchargetimefactor 1 soldier 0.75 
+      setchargetimefactor 1 lieutenant 0.75 
+      setchargetimefactor 1 medic 0.75 
+      setchargetimefactor 1 engineer 0.75 
+      setchargetimefactor 1 covertops 0.75 
+      sethqstatus 1 1 
+
+      wm_announce   "Allied Command Post constructed. Charge speed increased!" 
+
+      // *----------------------------------- vo ------------------------------------------* 
+      wm_teamvoiceannounce 1 "allies_hq_compost_constructed" 
+
+      wm_teamvoiceannounce 0 "allies_hq_compost_constructed_axis" 
+
+      wm_removeteamvoiceannounce 1 "allies_hq_compost_construct" 
+      // *----------------------------------- vo ------------------------------------------* 
+
+      wm_objective_status 6 1 1 
+      wm_objective_status 6 0 0 
+
+   } 
+
+   trigger disable_allied_features 
+   { 
+      // Some kind of UI pop-up to alert players 
+      wm_announce   "Axis team has destroyed the Allied Command Post!" 
+
+      // *----------------------------------- vo ------------------------------------------* 
+      wm_addteamvoiceannounce 1 "allies_hq_compost_construct" 
+
+      wm_teamvoiceannounce 1 "allies_hq_compost_damaged" 
+      // *----------------------------------- vo ------------------------------------------* 
+
+      setchargetimefactor 1 soldier 1 
+      setchargetimefactor 1 lieutenant 1 
+      setchargetimefactor 1 medic 1 
+      setchargetimefactor 1 engineer 1 
+      setchargetimefactor 1 covertops 1 
+      sethqstatus 1 0 
+
+      wm_objective_status 6 1 0 
+      wm_objective_status 6 0 1 
+   } 
+} 
+construction_script 
+{ 
+   spawn 
+   { 
+      wait 200 
+      constructible_class 2 
+      trigger self startup 
+	remove
+   } 
+
+   buildstart final 
+   { 
+   } 
+
+   built final 
+   { 
+      setstate construction_extra default 
+      setstate construction_mg42  default 
+      setstate const_tower        invisible 
+
+      // Some kind of UI pop-up to alert players 
+      wm_announce   "Allied team has constructed the Spawn MG42!" 
+   } 
+
+   decayed final 
+   { 
+      trigger self startup 
+   } 
+
+   death 
+   { 
+      trigger self startup 
+      // Some kind of UI pop-up to alert players 
+      wm_announce   "Axis team has destroyed the Spawn MG42!" 
+   } 
+
+   trigger startup 
+   { 
+      setstate construction_extra invisible 
+      setstate construction_mg42  invisible 
+      setstate const_tower        default 
+      repairmg42 construction_mg42 
+   } 
+} 
+allied_mg1_toi
+{
+	// First corner after crossing bridge - Barrel
+	trigger rubble_corner3
+	{
+		wait 850
+	}
+}
+allied_mg1
+{
+	spawn
+	{
+		wait 400
+		setstate almg3 invisible
+		constructible_class 2
+	}
+
+	trigger setup
+	{
+		setstate allied_mg1_materials default
+		setstate allied_mg1_materials_clip default
+		setstate allied_mg1_flag default
+		setstate almg3 invisible
+
+
+	}
+
+	buildstart final
+	{
+		setstate allied_mg1_materials default
+		setstate allied_mg1_materials_clip default
+		setstate allied_mg1_flag default
+		setstate almg3 underconstruction
+
+	}
+
+	built final
+	{
+		setstate allied_mg1_materials invisible
+		setstate allied_mg1_materials_clip invisible
+		setstate allied_mg1_flag invisible
+		setstate almg3 default
+
+
+
+
+		wm_announce "The Field MG42 has been constructed."
+
+		// *----------------------------------- vo ------------------------------------------*
+		//wm_teamvoiceannounce 0 "goldrush_axis_tankbar_constructed"
+
+		//wm_removeteamvoiceannounce 0 "goldrush_axis_tankbar_construct"
+		//wm_removeteamvoiceannounce 0 "goldrush_axis_tankbars_construct"
+		// *---------------------------------------------------------------------------------*
+	}
+
+	decayed final
+	{
+		setstate allied_mg1_materials default
+		setstate allied_mg1_materials_clip default
+		setstate allied_mg1_flag default
+		setstate almg3 invisible
+
+
+
+	}
+
+	death
+	{
+		setstate allied_mg1_materials default
+		setstate allied_mg1_materials_clip default
+		setstate allied_mg1_flag default
+		setstate almg3 invisible
+
+
+
+
+
+		wm_announce "The Field MG42 has been destroyed."
+
+		// *----------------------------------- vo ------------------------------------------*
+		//wm_addteamvoiceannounce 0 "goldrush_axis_tankbar_construct"
+
+		//wm_teamvoiceannounce 0 "goldrush_axis_tankbar_destroyed"
+
+		//wm_teamvoiceannounce 1 "goldrush_allies_tankbar_destroyed"
+		// *---------------------------------------------------------------------------------*
+	}
+
+	trigger remove
+	{
+		setstate allied_mg1_toi invisible
+		setstate allied_mg1_materials invisible
+		setstate allied_mg1_materials_clip invisible
+		setstate allied_mg1_flag invisible
+		setstate almg3 default
+
+		// *----------------------------------- vo ------------------------------------------*
+		//wm_removeteamvoiceannounce 0 "goldrush_axis_tankbar_construct"
+		//wm_removeteamvoiceannounce 0 "goldrush_axis_tankbars_construct"
+
+		//wm_removeteamvoiceannounce 1 "goldrush_allies_tankbar_destroy"
+		//wm_removeteamvoiceannounce 1 "goldrush_allies_tankbars_destroy"
+		// *---------------------------------------------------------------------------------*
+
+		remove
+	}
+}
+allied_mg2_toi
+{
+	trigger rubble_corner3
+	{
+		wait 850
+	}
+}
+allied_mg2
+{
+	spawn
+	{
+		wait 400
+		trigger allied_mg2 setup
+
+		constructible_class 2
+	}
+
+	trigger setup
+	{
+		setstate allied_mg2 default
+		setstate allied_mg2_materials invisible
+		setstate allied_mg2_materials_clip invisible
+		setstate allied_mg2_flag invisible
+
+
+	}
+
+	buildstart final
+	{
+		setstate allied_mg2_materials default
+		setstate allied_mg2_materials_clip default
+		setstate allied_mg2_flag default
+
+
+	}
+
+	built final
+	{
+		setstate allied_mg2_materials invisible
+		setstate allied_mg2_materials_clip invisible
+		setstate allied_mg2_flag invisible
+
+
+
+
+
+		wm_announce "The fortress Ladder has been constructed."
+
+		// *----------------------------------- vo ------------------------------------------*
+		//wm_teamvoiceannounce 0 "goldrush_axis_tankbar_constructed"
+
+		//wm_removeteamvoiceannounce 0 "goldrush_axis_tankbar_construct"
+		//wm_removeteamvoiceannounce 0 "goldrush_axis_tankbars_construct"
+		// *---------------------------------------------------------------------------------*
+	}
+
+	decayed final
+	{
+		setstate allied_mg2_materials default
+		setstate allied_mg2_materials_clip default
+		setstate allied_mg2_flag default
+
+
+
+
+	}
+
+	death
+	{
+		setstate allied_mg2_materials default
+		setstate allied_mg2_materials_clip default
+		setstate allied_mg2_flag default
+
+
+
+
+
+
+		wm_announce "The fortress Ladder has been destroyed."
+
+		// *----------------------------------- vo ------------------------------------------*
+		//wm_addteamvoiceannounce 0 "goldrush_axis_tankbar_construct"
+
+		//wm_teamvoiceannounce 0 "goldrush_axis_tankbar_destroyed"
+
+		//wm_teamvoiceannounce 1 "goldrush_allies_tankbar_destroyed"
+		// *---------------------------------------------------------------------------------*
+	}
+
+	trigger remove
+	{
+		setstate allied_mg2_toi invisible
+		setstate allied_mg2_materials invisible
+		setstate allied_mg2_materials_clip invisible
+		setstate allied_mg2_flag invisible
+
+
+		// *----------------------------------- vo ------------------------------------------*
+		//wm_removeteamvoiceannounce 0 "goldrush_axis_tankbar_construct"
+		//wm_removeteamvoiceannounce 0 "goldrush_axis_tankbars_construct"
+
+		//wm_removeteamvoiceannounce 1 "goldrush_allies_tankbar_destroy"
+		//wm_removeteamvoiceannounce 1 "goldrush_allies_tankbars_destroy"
+		// *---------------------------------------------------------------------------------*
+
+		remove
+	}
+}

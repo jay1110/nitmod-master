@@ -1,0 +1,174 @@
+game_manager
+{
+        spawn
+        {
+		//  26 DM spawns
+		
+		create
+		{
+			scriptName "dmspawn1"
+			classname "team_CTF_greenspawn"
+			targetname "dmspawn1"
+			origin "-216 384 56"
+			spawnflags 2
+			angle -45
+		}
+		
+		create
+		{
+			scriptName "dmspawn2"
+			classname "team_CTF_greenspawn"
+			targetname "dmspawn2"
+			origin "207 381 240"
+			spawnflags 2
+			angle -130
+		}
+		
+		create
+		{
+			scriptName "dmspawn3"
+			classname "team_CTF_greenspawn"
+			targetname "dmspawn3"
+			origin "313 396 240"
+			spawnflags 2
+			angle -80
+		}
+		
+		create
+		{
+			scriptName "dmspawn4"
+			classname "team_CTF_greenspawn"
+			targetname "dmspawn4"
+			origin "-333 335 240"
+			spawnflags 2
+			angle -90
+		}
+		
+		create
+		{
+			scriptName "dmspawn5"
+			classname "team_CTF_greenspawn"
+			targetname "dmspawn5"
+			origin "-317 401 48"
+			spawnflags 2
+			angle -130
+		}
+		
+		create
+		{
+			scriptName "dmspawn6"
+			classname "team_CTF_greenspawn"
+			targetname "dmspawn6"
+			origin "320 396 48"
+			spawnflags 2
+			angle -50
+		}
+		
+		create
+		{
+			scriptName "dmspawn7"
+			classname "team_CTF_greenspawn"
+			targetname "dmspawn7"
+			origin "1224 -415 48"
+			spawnflags 2
+			angle -50
+		}
+		
+		create
+		{
+			scriptName "dmspawn8"
+			classname "team_CTF_greenspawn"
+			targetname "dmspawn8"
+			origin "1265 -350 56"
+			spawnflags 2
+			angle 45
+		}
+		
+		create
+		{
+			scriptName "dmspawn9"
+			classname "team_CTF_greenspawn"
+			targetname "dmspawn9"
+			origin "1324 -155 198"
+			spawnflags 2
+			angle 135
+		}
+		
+		create
+		{
+			scriptName "dmspawn10"
+			classname "team_CTF_greenspawn"
+			targetname "dmspawn10"
+			origin "1431 -550 227"
+			spawnflags 2
+			angle 150
+		}
+		
+		create
+		{
+			scriptName "dmspawn11"
+			classname "team_CTF_greenspawn"
+			targetname "dmspawn11"
+			origin "1432 473 448"
+			spawnflags 2
+			angle -140
+		}
+		
+		create
+		{
+			scriptName "dmspawn12"
+			classname "team_CTF_greenspawn"
+			targetname "dmspawn12"
+			origin "-1212 -411 72"
+			spawnflags 2
+			angle -130
+		}
+		
+		create
+		{
+			scriptName "dmspawn13"
+			classname "team_CTF_greenspawn"
+			targetname "dmspawn13"
+			origin "-1266 -350 56"
+			spawnflags 2
+			angle 135
+		}
+		
+		create
+		{
+			scriptName "dmspawn14"
+			classname "team_CTF_greenspawn"
+			targetname "dmspawn14"
+			origin "-1327 -153 184"
+			spawnflags 2
+			angle 40
+		}
+		
+		create
+		{
+			scriptName "dmspawn15"
+			classname "team_CTF_greenspawn"
+			targetname "dmspawn15"
+			origin "-1443 483 448"
+			spawnflags 2
+			angle -50
+		}
+		
+		create
+		{
+			scriptName "dmspawn16"
+			classname "team_CTF_greenspawn"
+			targetname "dmspawn16"
+			origin "-1444 -512 228"
+			spawnflags 2
+			angle 20
+		}
+		
+
+		// Game rules
+                wm_axis_respawntime		5
+                wm_allied_respawntime		5
+                wm_number_of_objectives		1
+                wm_set_round_timelimit		0
+	}
+} 	

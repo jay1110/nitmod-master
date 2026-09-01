@@ -1,0 +1,683 @@
+// ==============================
+//  supply_dm.script --- Nico$
+// ==============================
+
+// spawn script debugged by mortis the wise Jan 22 2005
+// roof clip stairwell exploit by mortis the wise Jun 26 2005
+// satchel control exploit fix by mortis the wise Jun 27 2005
+// disabled music speakers by mortis and deej Dec 2 2005
+// improved music disabling by mortis May 26 2006
+// disabled annoying alarm when truck is inside the base by arni 15.09.2006
+
+game_manager {
+        spawn {
+
+                // mortis - roof clip
+                create
+                {
+                        scriptName "bugfix1"
+                        classname "func_fakebrush"
+                        origin "1072 -1824 502"
+                        contents 1  
+                        mins "-180 -150 -10"
+                        maxs "180 150 10"
+                }
+
+                // mortis - satchel exploit fix part one
+                create
+                {
+                        scriptName "bugfix2"
+                        classname "func_fakebrush"
+                        origin "672 -1632 384"
+                        contents 1  
+                        mins "-32 -4 -64"
+                        maxs "32 4 64"
+                }
+
+                // mortis - satchel exploit fix part two
+                create
+                {
+                        scriptName "bugfix3"
+                        classname "func_fakebrush"
+                        origin "704 -1600 384"
+                        contents 1  
+                        mins "-4 -32 -64"
+                        maxs "4 32 64"
+                }
+
+                // mortis - satchel exploit fix part three
+                create
+                {
+                        scriptName "bugfix4"
+                        classname "func_fakebrush"
+                        origin "704 -1584 384"
+                        contents 1  
+                        mins "0 -4 -64"
+                        maxs "48 4 64"
+                }
+
+		//  24 DM spawns
+
+		create
+		{
+			scriptName "dmspawn1"
+			classname "team_CTF_greenspawn"
+			targetname "dmspawn1"
+			origin "-2013 323 232"
+			spawnflags 2	
+			angle -144
+		}
+
+		create
+		{
+			scriptName "dmspawn2"
+			classname "team_CTF_greenspawn"
+			targetname "dmspawn2"
+			origin "-1876 37 40"
+			spawnflags 2	
+			angle 83
+		}
+
+		create
+		{
+			scriptName "dmspawn3"
+			classname "team_CTF_greenspawn"
+			targetname "dmspawn3"
+			origin "-545 1282 -79"
+			spawnflags 2	
+			angle 130
+		}
+
+		create
+		{
+			scriptName "dmspawn4"
+			classname "team_CTF_greenspawn"
+			targetname "dmspawn4"
+			origin "-2760 2061 168"
+			spawnflags 2	
+			angle 14
+		}
+
+		create
+		{
+			scriptName "dmspawn5"
+			classname "team_CTF_greenspawn"
+			targetname "dmspawn5"
+			origin "-1791 2954 168"
+			spawnflags 2	
+			angle -131
+		}
+
+		create
+		{
+			scriptName "dmspawn6"
+			classname "team_CTF_greenspawn"
+			targetname "dmspawn6"
+			origin "-499 2761 -87"
+			spawnflags 2	
+			angle 150
+		}
+
+		create
+		{
+			scriptName "dmspawn7"
+			classname "team_CTF_greenspawn"
+			targetname "dmspawn7"
+			origin "-6 2074 -87"
+			spawnflags 2	
+			angle 90
+		}
+
+		create
+		{
+			scriptName "dmspawn8"
+			classname "team_CTF_greenspawn"
+			targetname "dmspawn8"
+			origin "-6 2169 136"
+			spawnflags 2	
+			angle 113
+		}
+
+		create
+		{
+			scriptName "dmspawn9"
+			classname "team_CTF_greenspawn"
+			targetname "dmspawn9"
+			origin "-424 2236 280"
+			spawnflags 2	
+			angle 17
+		}
+
+		create
+		{
+			scriptName "dmspawn10"
+			classname "team_CTF_greenspawn"
+			targetname "dmspawn10"
+			origin "-21 2765 -87"
+			spawnflags 2	
+			angle 20
+		}
+
+		create
+		{
+			scriptName "dmspawn11"
+			classname "team_CTF_greenspawn"
+			targetname "dmspawn11"
+			origin "2363 839 288"
+			spawnflags 2	
+			angle 0
+		}
+
+		create
+		{
+			scriptName "dmspawn12"
+			classname "team_CTF_greenspawn"
+			targetname "dmspawn12"
+			origin "2083 424 256"
+			spawnflags 2	
+			angle 179
+		}
+
+		create
+		{
+			scriptName "dmspawn13"
+			classname "team_CTF_greenspawn"
+			targetname "dmspawn13"
+			origin "2193 -1101 40"
+			spawnflags 2	
+			angle 155
+		}
+
+		create
+		{
+			scriptName "dmspawn14"
+			classname "team_CTF_greenspawn"
+			targetname "dmspawn14"
+			origin "-810 -1156 64"
+			spawnflags 2	
+			angle -32
+		}
+
+		create
+		{
+			scriptName "dmspawn15"
+			classname "team_CTF_greenspawn"
+			targetname "dmspawn15"
+			origin "-272 -667 40"
+			spawnflags 2	
+			angle 50
+		}
+
+		create
+		{
+			scriptName "dmspawn16"
+			classname "team_CTF_greenspawn"
+			targetname "dmspawn216"
+			origin "1055 -2018 40"
+			spawnflags 2	
+			angle -50
+		}
+
+		create
+		{
+			scriptName "dmspawn17"
+			classname "team_CTF_greenspawn"
+			targetname "dmspawn17"
+			origin "807 -1629 80"
+			spawnflags 2	
+			angle 90
+		}
+
+		create
+		{
+			scriptName "dmspawn18"
+			classname "team_CTF_greenspawn"
+			targetname "dmspawn18"
+			origin "804 -1703 200"
+			spawnflags 2	
+			angle -135
+		}
+
+		create
+		{
+			scriptName "dmspawn19"
+			classname "team_CTF_greenspawn"
+			targetname "dmspawn19"
+			origin "685 -1704 360"
+			spawnflags 2	
+			angle 0
+		}
+
+		create
+		{
+			scriptName "dmspawn20"
+			classname "team_CTF_greenspawn"
+			targetname "dmspawn20"
+			origin "589 -1171 360"
+			spawnflags 2	
+			angle -35
+		}
+
+		create
+		{
+			scriptName "dmspawn21"
+			classname "team_CTF_greenspawn"
+			targetname "dmspawn21"
+			origin "466 -1408 360"
+			spawnflags 2	
+			angle 157
+		}
+
+		create
+		{
+			scriptName "dmspawn22"
+			classname "team_CTF_greenspawn"
+			targetname "dmspawn22"
+			origin "-482 -1871 40"
+			spawnflags 2	
+			angle 0
+		}
+
+		create
+		{
+			scriptName "dmspawn23"
+			classname "team_CTF_greenspawn"
+			targetname "dmspawn23"
+			origin "633 -2700 -87"
+			spawnflags 2	
+			angle -90
+		}
+
+		create
+		{
+			scriptName "dmspawn24"
+			classname "team_CTF_greenspawn"
+			targetname "dmspawn24"
+			origin "375 -1879 -119"
+			spawnflags 2	
+			angle 0
+		}
+
+		delete
+		{
+			targetname "truckcrate_clip"
+		}
+
+		//  24 DM spawns
+
+                // Game rules
+                wm_axis_respawntime		5
+                wm_allied_respawntime		5
+                wm_number_of_objectives		1
+                wm_set_round_timelimit		5
+        }
+}
+
+forwardflag {
+        spawn {
+                wait 500
+		remove
+        }
+}
+
+forwardgate {
+        spawn {
+                wait 500
+		remove
+        }
+}
+
+forwardgate2 {
+        spawn {
+                wait 500
+		remove
+        }
+}
+
+depotgate {
+        spawn {
+                wait 500
+		remove
+        }
+}
+
+depotwestwall {
+        spawn {
+                wait 500
+                remove
+        }
+}
+
+depoteastwall {
+        spawn {
+                wait 500
+		remove
+        }
+}
+
+fence {
+        spawn {
+                wait 500
+		trigger self remove
+        }
+
+        trigger remove {
+                setstate fence_toi invisible
+                setstate fence_materials invisible
+                setstate fence_materials_clip invisible
+                setstate fence_flag invisible
+                setstate fence invisible
+                remove
+        }
+}
+
+
+neutralcp_closed {
+        spawn {
+                accum 0 set 0
+        }
+
+        trigger show {
+                accum 0 abort_if_equal 1
+                setstate neutralcp_closed default
+        }
+
+        trigger disable        {
+                accum 0 set 1
+        }
+}
+
+axiscp_broken {
+        spawn {
+                wait 200
+                accum 0 set 0
+                setstate axiscp_broken invisible
+        }
+
+        trigger show {
+                accum 0 abort_if_equal 0
+                setstate axiscp_broken default
+        }
+
+        trigger enable {
+                accum 0 set 1
+        }
+
+        trigger disable        {
+                accum 0 set 0
+        }
+}
+
+alliedcp_broken {
+        spawn {
+                wait 200
+                accum 0 set 0
+                setstate alliedcp_broken invisible
+        }
+
+        trigger show {
+                accum 0 abort_if_equal 0
+                setstate alliedcp_broken default
+        }
+
+        trigger enable {
+                accum 0 set 1
+        }
+
+        trigger disable {
+                accum 0 set 0
+        }
+}
+
+alliedcp_built {
+        trigger setup {
+                sethqstatus 1 0
+        }
+
+        trigger enable_allied_features {
+                sethqstatus 0 1
+                wm_objective_status        8 0 0
+                wm_objective_status        8 1 1
+        }
+
+        trigger disable_allied_features {
+                sethqstatus 0 0
+                wm_objective_status        8 0 0
+                wm_objective_status        8 1 0
+        }
+}
+
+axiscp_built {
+        trigger setup {
+                sethqstatus 0 0
+        }
+
+        trigger enable_axis_features {
+                sethqstatus 0 1
+                wm_objective_status        8 0 1
+                wm_objective_status        8 1 0
+        }
+
+        trigger disable_axis_features {
+                sethqstatus 0 0
+                wm_objective_status        8 0 0
+                wm_objective_status        8 1 0
+        }
+}
+
+alliedcp_constructor {
+        spawn {
+                wait 50
+                constructible_class        2
+                setstate alliedcp_built invisible
+                trigger alliedcp_built setup
+        }
+
+        buildstart final {
+                setstate alliedcp_built underconstruction
+                setstate alliedcp_broken invisible
+                setstate axiscp_broken invisible
+                setstate neutralcp_closed invisible
+        }
+
+        built final {
+                setstate alliedcp_built default
+
+                trigger alliedcp_broken enable
+                trigger axiscp_broken disable
+                trigger neutralcp_closed disable
+
+                trigger alliedcp_built enable_allied_features
+                trigger alliedcpspawns_obj on
+                enablespeaker cpsound
+        }
+
+        decayed final {
+                setstate alliedcp_built invisible
+
+                trigger alliedcp_broken show
+                trigger axiscp_broken show
+                trigger neutralcp_closed show
+        }
+
+        death {
+                setstate alliedcp_built invisible
+
+                trigger alliedcp_broken show
+
+                trigger alliedcp_built disable_allied_features
+                trigger alliedcpspawns_obj off
+                disablespeaker cpsound
+        }
+}
+
+axiscp_constructor {
+        spawn {
+                wait 50
+                constructible_class        2
+                setstate axiscp_built invisible
+                trigger axiscp_built setup
+        }
+
+        buildstart final {
+                setstate axiscp_built underconstruction
+                setstate axiscp_broken invisible
+                setstate alliedcp_broken invisible
+                setstate neutralcp_closed invisible
+        }
+
+        built final {
+                setstate axiscp_built default
+
+                trigger axiscp_broken enable
+                trigger alliedcp_broken disable
+                trigger neutralcp_closed disable
+
+                trigger axiscp_built enable_axis_features
+                enablespeaker cpsound
+        }
+
+        decayed final {
+                setstate axiscp_built invisible
+
+                trigger axiscp_broken show
+                trigger alliedcp_broken show
+                trigger neutralcp_closed show
+        }
+
+        death {
+                setstate axiscp_built invisible
+
+                trigger axiscp_broken show
+
+                trigger axiscp_built disable_axis_features
+                disablespeaker cpsound
+        }
+}
+
+alliedcpspawns_obj        {
+        spawn {
+                wait 50
+                setstate alliedcpspawns_obj invisible
+                setstate alliedcpspawns invisible
+        }
+
+        trigger on {
+                setstate alliedcpspawns_obj default
+                setstate alliedcpspawns default
+        }
+
+        trigger off {
+                setstate alliedcpspawns_obj invisible
+                setstate alliedcpspawns invisible
+        }
+}
+
+alliedcpspawns {
+        spawn {
+                wait 50
+                setstate alliedcpspawns invisible
+        }
+}
+
+cranecontrol {
+        spawn {
+                wait 400
+                constructible_class 2
+                trigger self remove
+        }
+        trigger remove {
+                setstate crane_toi invisible
+                setstate crane_materials invisible
+                setstate crane_materials_clip invisible
+                setstate crane_flag invisible
+                setstate crane invisible
+                remove
+        }
+}
+
+crane_enabler {
+        spawn {
+                wait 500
+		remove
+        }
+}
+
+cranearmx {
+        spawn {
+        }
+}
+
+cranearmz {
+        spawn {
+        }
+}
+
+cranearmz2 {
+        spawn {
+        }
+}
+
+goldcrate {
+        spawn {
+                wait 500
+		remove
+        }
+}
+
+truck_disabler {
+    	spawn	{
+		wait 500
+		remove
+	}
+}
+
+truck_enabler {
+	spawn	{
+		
+		wait 500
+		remove
+	}
+}
+
+truck {
+        spawn {
+		wait 500
+		remove
+        }
+}
+
+truck_move_trigger {
+        spawn {
+		wait 500
+		remove
+        }
+}
+
+truck_obj_inf {
+        spawn {
+		wait 500
+		remove
+        }
+}
+
+truckfrontwheels {
+        spawn {
+		wait 500
+		remove
+        }
+}
+
+truckbackwheels {
+        spawn {
+		wait 500
+		remove
+        }
+}
+
+truckcrate {
+        spawn {
+		wait 500
+		remove
+        }
+}

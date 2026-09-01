@@ -1,0 +1,14 @@
+// Game type info
+//N!trox* - Jan 23rd 2012 - Updated to allow ingame server browser displaying something else than "???" for gametypes above 5
+
+gametypes {
+  { 0 "Single Player" "SP" "Playing with yourself. Woohoo." }
+  { 1 "Cooperative" "Coop" "Playing with yourself. And with others. More woohoo." }
+  { 2 "Objective" "Obj" "Instead of playing through each Map of a Campaign, the Teams can go straight to battle in a single map of their choosing." }
+  { 3 "Stopwatch" "SW" "Each Team struggles to complete the Map's Mission Objectives against the clock. The Teams then swap sides to try to better their opponents' time." }
+  { 4 "Campaign" "Cmpgn" "Both teams battle across a series of maps. Skills and Rewards awarded to each player will persist from map to map." }
+  { 5 "Last Man Standing" "LMS" "Both Teams meet in a map for a fight to the death. Each player only has one life. Use it well." }
+  { 6 "Map Voting" "MapVote" "Both teams battle across a series of maps. Players can vote for the next map during intermission" }
+  { 7 "Team Death Match" "TDM" "Both teams battle across a series of maps, they have to reach a defined score to win a round" }
+  { 8 "Death Match" "DM" "Free For All! First player reaching the frag limit wins the round." }
+}

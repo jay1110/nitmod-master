@@ -1,0 +1,122 @@
+#ifndef NITMOD_CORE_H
+#define NITMOD_CORE_H
+
+/* Nitmod / nitrox helpers not in admin/weapons */
+
+#include "nitmod_types.h"
+#include "nitmod_globals.h"
+
+uint32_t Nit_RemoveWordInString(char *param_1,char *param_2);
+bool nitmod_NCSvar(uint8_t *param_1);
+bool nitrox_PreciseBBoxCollision(float *param_1,float *param_2,float *param_3,float *param_4);
+bool nitrox_CreateDirectory(uint32_t param_1);
+uint32_t nitrox_CrazyGravityCmd(int param_1,int param_2);
+void Nit_GibAll(void);
+void nitrox_bigBufferPrint(int param_1);
+void nitrox_QueryScreenshot(void);
+uint nitrox_SortByKDRatio(int *param_1,int *param_2);
+void nitrox_ResetNumObjectives(void);
+uint32_t nitrox_CustomVoteDescription(int param_1,int param_2,int param_3);
+void nitrox_SpawnArtyHint(int param_1);
+void nitrox_DrawHitboxesOnShoot(uint8_t *param_1);
+void nitrox_ClampFloat(float *param_1,float param_2,float param_3);
+void nitrox_ClampInt(int *param_1,float param_2,float param_3);
+void nitrox_stripLeadingSpaces(char *param_1);
+uint32_t nitrox_XPSave_LoadXP(int param_1);
+uint nitrox_XPSave_WriteXP(int param_1);
+void nitrox_XPSave_WriteAllXP(void);
+void nitrox_XPSave_ClearXP(void);
+void nitrox_OpenCrashLog(void);
+void Nit_SecShrubLogin(int param_1);
+void Nit_SecShrubLogout(int param_1);
+bool Nit_SecureShrubEnabled(void);
+void Nit_SecureShrubError(uint32_t param_1,uint32_t param_2);
+void nitmod_cp(int param_1,uint32_t param_2);
+void nitmod_SendChargeTimes(int param_1);
+void nitmod_Sound_Global(uint32_t param_1);
+void Nit_SCLogin(int param_1);
+void Nit_SCLogout(int param_1);
+bool Nit_SCEnabled(void);
+void nitmod_objective(uint param_1,int param_2,int param_3,int param_4,int param_5);
+void Nit_HitSound(int param_1,uint32_t param_2);
+void nitmod_SendMapEndStats(int param_1);
+bool nitmod_IsSimpleCSVar(uint8_t *param_1);
+void nitmod_SimpleCS(int param_1);
+void nitmod_makeSC(void);
+void nitmod_removeSC(void);
+void nitmod_SendNCS(int param_1);
+void nitmod_SoundEvent(int param_1,uint32_t param_2);
+void nitmod_Announce(uint32_t param_1,uint32_t param_2,uint32_t param_3);
+void nitmod_TeamScores(void);
+uint8_t * nitrox_XPSave_encode64(int param_1,uint8_t *param_2);
+bool nitrox_CheckNGUIDSum(char *param_1);
+uint32_t nitrox_GUIDCheckValid(char *param_1,uint32_t param_2);
+uint32_t nitrox_AlphaNumValid(char *param_1);
+void nitrox_user_register(int param_1);
+void nitrox_user_login(int param_1);
+void nitrox_DBConnect(void);
+void nitrox_InitUsersTable(void);
+void nitrox_InitMailsTable(void);
+void nitrox_LoadUsers(void);
+void nitrox_SaveUsers(uint32_t param_1,uint32_t param_2);
+void nitrox_MailTo(uint32_t param_1);
+void nitrox_CheckMails(uint32_t param_1);
+void nitrox_DeleteMail(uint32_t param_1,uint32_t param_2);
+void nitrox_SaveSingleUser(uint32_t param_1,uint32_t param_2);
+uint32_t nitrox_SaveDB(uint32_t param_1,uint32_t param_2);
+void nitrox_SaveDB_console(void);
+void nitrox_InitEventsQueue(void);
+uint32_t nitrox_TempEventFromQueue(float *param_1,int param_2);
+void nitrox_InitTempHeadQueue(void);
+uint32_t nitrox_TempHeadFromQueue(void);
+void nitrox_FreeTempHead(int param_1);
+void nitrox_InitTempLegQueue(void);
+void nitrox_TempLegFromQueue(void);
+void nitrox_FreeTempLeg(uint32_t param_1);
+void nitrox_TempMissileCam(int param_1,uint32_t param_2);
+void nitrox_Uptime(void);
+uint8_t * nitrox_FindByClassNameHash(int param_1,int param_2);
+uint8_t * nitrox_FindByScriptNameHash(int param_1,int param_2);
+uint8_t * nitrox_FindByInteger(int param_1,int param_2,int param_3);
+uint8_t * nitrox_FindByFloat(int param_1,int param_2,float param_3);
+uint8_t * nitrox_FindByVector(int param_1,int param_2,uint32_t param_3);
+void nitrox_InitEntityArray(uint32_t *param_1);
+void nitrox_AddEntityToEntityArray(int *param_1,int param_2);
+void nitrox_RemoveEntityFromEntityArray(int *param_1,int param_2);
+bool nitrox_NextKey(uint32_t *param_1,char *param_2);
+void nitrox_CacheClientIP(int param_1,char *param_2);
+long double nitrox_HitboxHeight(int param_1,int param_2);
+void nitrox_ParseMaxHP(void);
+void nitrox_SendSkillLevels(int param_1);
+void nitrox_SetConfigstring(uint param_1,char *param_2);
+void nitrox_GetConfigstring(uint param_1,uint32_t param_2,int param_3);
+void nitrox_UpdateConfigstrings(void);
+int nitrox_CSIndex(char *param_1,int param_2,int param_3,int param_4);
+void nitrox_SendNewGameState(int param_1);
+void nitrox_SendConfigString(int param_1);
+void nitrox_SendClassesMaxHP(void);
+void nitrox_DumpNCSFull(int param_1);
+uint nitrox_LoadDBFile_commands(void);
+uint nitrox_LoadDBFile_levels(void);
+void nitrox_SaveDBFile_levels(void);
+void nitrox_CreateLevelZero(void);
+uint32_t nitrox_LoadDBFiles(uint32_t param_1,int param_2);
+bool nitrox_CreateScreenshotsFolder(void);
+uint32_t nitrox_GetTokenForString(char *param_1);
+void nitrox_ClearInvalidUsers_part_0(void);
+void nitrox_ClearInvalidUsers(void);
+uint32_t nitrox_LevelExists(int param_1);
+int * nitrox_LevelPointer(int param_1);
+void nitrox_OpenNxACListenSocket(void);
+void nitrox_OpenMasterSocket(void);
+void nitrox_CloseMasterSocket(void);
+void nitrox_SendStatsToMaster(int param_1);
+void nitrox_QueryGlobalStats(char *param_1);
+void nitrox_PlayerStatsReceivedFromMaster(int param_1);
+void nitrox_ClearSocketInfos(int param_1);
+void nitrox_ReadSocketData(void);
+void nitrox_CheckGlobalAwards(int param_1,int param_2,int param_3);
+void nitrox_NxAC_ReportCvarViolationToMaster(int param_1,int param_2,uint32_t param_3);
+
+#endif
+

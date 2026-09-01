@@ -1,0 +1,1212 @@
+game_manager
+{
+	spawn
+	{
+		//  26 DM spawns
+		
+		create
+		{
+			scriptname "dmspwn1"
+			classname "team_CTF_greenspawn"
+			targetname "dmspwn1"
+			origin "-1494 -4032 1266"
+			spawnflags 2
+			angle 0
+		}
+
+		create
+		{
+			scriptname "dmspwn2"
+			classname "team_CTF_greenspawn"
+			targetname "dmspwn2"
+			origin "-54 -1475 1541"
+			spawnflags 2
+			angle -70
+		}
+
+		create
+		{
+			scriptname "dmspwn3"
+			classname "team_CTF_greenspawn"
+			targetname "dmspwn3"
+			origin "-3543 -603 1443"
+			spawnflags 2
+			angle 0
+		}
+
+		create
+		{
+			scriptname "dmspwn4"
+			classname "team_CTF_greenspawn"
+			targetname "dmspwn4"
+			origin "-3840 -1256 1411"
+			spawnflags 2
+			angle -60
+		}
+
+		create
+		{
+			scriptname "dmspwn5"
+			classname "team_CTF_greenspawn"
+			targetname "dmspwn5"
+			origin "-1793 -2888 1288"
+			spawnflags 2
+			angle -90
+		}
+		create
+		{
+			scriptname "dmspwn7"
+			classname "team_CTF_greenspawn"
+			targetname "dmspwn7"
+			origin "-2995 -4791 1399"
+			spawnflags 2
+			angle 0
+		}
+
+		create
+		{
+			scriptname "dmspwn8"
+			classname "team_CTF_greenspawn"
+			targetname "dmspwn8"
+			origin "819 -4130 1279"
+			spawnflags 2
+			angle -50
+		}
+		create
+		{
+			scriptname "dmspwn9"
+			classname "team_CTF_greenspawn"
+			targetname "dmspwn9"
+			origin "3421 -716 1744"
+			spawnflags 2
+			angle 133
+		}
+		create
+		{
+			scriptname "dmspwn10"
+			classname "team_CTF_greenspawn"
+			targetname "dmspwn10"
+			origin "3021 -973 1708"
+			spawnflags 2
+			angle 125
+		}
+		create
+		{
+			scriptname "dmspwn11"
+			classname "team_CTF_greenspawn"
+			targetname "dmspwn11"
+			origin "-707 -3456 1672"
+			spawnflags 2
+			angle 90
+		}
+		create
+		{
+			scriptname "dmspwn12"
+			classname "team_CTF_greenspawn"
+			targetname "dmspwn12"
+			origin "-947 -269 1384"
+			spawnflags 2
+			angle 140
+		}
+		create
+		{
+			scriptname "dmspwn13"
+			classname "team_CTF_greenspawn"
+			targetname "dmspwn13"
+			origin "-1737 1201 1312"
+			spawnflags 2
+			angle -177
+		}
+		create
+		{
+			scriptname "dmspwn14"
+			classname "team_CTF_greenspawn"
+			targetname "dmspwn14"
+			origin "-2479 3479 1456"
+			spawnflags 2
+			angle -50
+		}
+		create
+		{
+			scriptname "dmspwn15"
+			classname "team_CTF_greenspawn"
+			targetname "dmspwn15"
+			origin "686 5052 1348"
+			spawnflags 2
+			angle -111
+		}
+		create
+		{
+			scriptname "dmspwn16"
+			classname "team_CTF_greenspawn"
+			targetname "dmspwn16"
+			origin "2387 2946 1385"
+			spawnflags 2
+			angle 0
+		}
+		create
+		{
+			scriptname "dmspwn17"
+			classname "team_CTF_greenspawn"
+			targetname "dmspwn17"
+			origin "2867 3911 1564"
+			spawnflags 2
+			angle 0
+		}
+		create
+		{
+			scriptname "dmspwn18"
+			classname "team_CTF_greenspawn"
+			targetname "dmspwn18"
+			origin "2830 3285 1564"
+			spawnflags 2
+			angle -77
+		}
+		create
+		{
+			scriptname "dmspwn19"
+			classname "team_CTF_greenspawn"
+			targetname "dmspwn19"
+			origin "-375 4173 1551"
+			spawnflags 2
+			angle -90
+		}
+		create
+		{
+			scriptname "dmspwn20"
+			classname "team_CTF_greenspawn"
+			targetname "dmspwn20"
+			origin "-860 2017 1436"
+			spawnflags 2
+			angle -55
+		}
+		create
+		{
+			scriptname "dmspwn21"
+			classname "team_CTF_greenspawn"
+			targetname "dmspwn21"
+			origin "1393 2505 1373"
+			spawnflags 2
+			angle 100
+		}
+		create
+		{
+			scriptname "dmspwn22"
+			classname "team_CTF_greenspawn"
+			targetname "dmspwn22"
+			origin "-8 1491 1436"
+			spawnflags 2
+			angle 85
+		}
+		create
+		{
+			scriptname "dmspwn23"
+			classname "team_CTF_greenspawn"
+			targetname "dmspwn23"
+			origin "-1254 526 1453"
+			spawnflags 2
+			angle -90
+		}
+		create
+		{
+			scriptname "dmspwn24"
+			classname "team_CTF_greenspawn"
+			targetname "dmspwn24"
+			origin "-2875 -1653 1335"
+			spawnflags 2
+			angle -113
+		}
+		create
+		{
+			scriptname "dmspwn25"
+			classname "team_CTF_greenspawn"
+			targetname "dmspwn25"
+			origin "-1528 -3671 1472"
+			spawnflags 2
+			angle 135
+		}
+		create
+		{
+			scriptname "dmspwn26"
+			classname "team_CTF_greenspawn"
+			targetname "dmspwn26"
+			origin "-1982 -3794 1288"
+			spawnflags 2
+			angle -37
+		}
+		
+		//  26 DM spawns
+
+		// Game rules
+		wm_axis_respawntime	5
+		wm_allied_respawntime	5
+		wm_number_of_objectives 1
+		wm_set_round_timelimit	5
+
+		wait 50
+		disablespeaker allies_compost_sound
+		disablespeaker axis_compost_sound
+		wait 1000
+	}
+}
+
+thunderstuff
+{
+	spawn
+	{
+		accum 0 set 0 //randomiser to play different lightnings and thunders
+		trigger self random
+	}
+
+	trigger random
+	{
+		accum 0 random 5
+		accum 0 trigger_if_equal 0 thunderstuff thunder01
+		accum 0 trigger_if_equal 1 thunderstuff thunder02
+		accum 0 trigger_if_equal 2 thunderstuff thunder03
+		accum 0 trigger_if_equal 3 thunderstuff thunder04
+		accum 0 trigger_if_equal 4 thunderstuff thunder05
+		wait 25000
+		trigger self random
+	}
+
+	trigger thunder01
+	{
+		alertentity lightning01
+		togglespeaker thunderspeaker01
+	}
+
+	trigger thunder02
+	{
+		alertentity lightning02
+		togglespeaker thunderspeaker02
+	}
+
+	trigger thunder03
+	{
+		alertentity lightning03
+		togglespeaker thunderspeaker03
+	}
+
+	trigger thunder04
+	{
+		alertentity lightning04
+		togglespeaker thunderspeaker04
+	}
+
+	trigger thunder05
+	{
+		alertentity lightning05
+		togglespeaker thunderspeaker05
+	}
+}
+
+truckbox1
+{
+	spawn
+	{
+		wait 50
+		setstate truckbox1 invisible
+	}
+
+	trigger visible
+	{
+		setstate truckbox1 default
+	}
+
+	trigger invisible
+	{
+		setstate truckbox1 invisible
+	}
+}
+
+truckbox2
+{
+	spawn
+	{
+		wait 50
+		setstate truckbox2 invisible
+	}
+
+	trigger visible
+	{
+		setstate truckbox2 default
+	}
+
+	trigger invisible
+	{
+		setstate truckbox2 invisible
+	}
+}
+
+truckboxtrans1
+{
+	spawn
+	{
+		wait 50
+		setstate truckboxtrans1 invisible
+	}
+
+	trigger visible
+	{
+		setstate truckboxtrans1 default
+	}
+
+	trigger invisible
+	{
+		setstate truckboxtrans1 invisible
+	}
+}
+
+truckboxtrans2
+{
+	spawn
+	{
+		wait 50
+		setstate truckboxtrans2 invisible
+	}
+
+	trigger visible
+	{
+		setstate truckboxtrans2 default
+	}
+
+	trigger invisible
+	{
+		setstate truckboxtrans2 invisible
+	}
+}
+
+circuit1_radartop
+{
+	spawn
+	{
+		accum 1 set 0	// 0:Down 1:Up
+		accum 2 set 0	// 0:Stationary 1:Moving
+		wait 50
+		trigger circuit1_radartop up
+	}
+
+	trigger up
+	{
+		accum 1 abort_if_equal 1		// Abort if UP already
+		accum 2 abort_if_equal 1		// Abort if moving already
+		accum 2 set 1				// Moving, DND
+		startanimation 0 35 15 nolerp norandom noloop
+		wait 2500
+		startanimation 34 1 15 norandom noloop	// Client PVS issue
+		setrotation 0 30 0
+		accum 2 set 0				// Finished
+		accum 1 set 1				// Now in UP status
+	}
+
+	trigger down
+	{
+		accum 1 abort_if_equal 0		// Abort if DOWN already
+		accum 2 abort_if_equal 1		// Abort if moving already
+		accum 2 set 1				// Moving, DND
+		stoprotation
+		startanimation 34 29 15 nolerp norandom noloop
+		wait 2500
+		startanimation 0 1 15 norandom noloop	// Client PVS issue
+		accum 2 set 0				// Finished
+		accum 1 set 0				// Now in DOWN status
+	}
+}
+
+circuit2_radartop
+{
+	spawn
+	{
+		accum 1 set 0	// 0:Down 1:Up
+		accum 2 set 0	// 0:Stationary 1:Moving
+		wait 2500	// Offset so both radar's don't start at the same time
+		trigger circuit2_radartop up
+	}
+
+	trigger up
+	{
+		accum 1 abort_if_equal 1		// Abort if UP already
+		accum 2 abort_if_equal 1		// Abort if moving already
+		accum 2 set 1				// Moving, DND
+		startanimation 0 35 15 nolerp norandom noloop
+		wait 2500
+		startanimation 34 1 15 norandom noloop	// Client PVS issue
+		setrotation 0 30 0
+		accum 2 set 0				// Finished
+		accum 1 set 1				// Now in UP status
+	}
+
+	trigger down
+	{
+		accum 1 abort_if_equal 0		// Abort if DOWN already
+		accum 2 abort_if_equal 1		// Abort if moving already
+		accum 2 set 1				// Moving, DND
+		stoprotation
+		startanimation 34 29 15 nolerp norandom noloop
+		wait 2500
+		startanimation 0 1 15 norandom noloop	// Client PVS issue
+		accum 2 set 0				// Finished
+		accum 1 set 0				// Now in DOWN status
+	}
+}
+
+circuitboard1_trigger
+{
+	spawn
+	{
+		wait 50
+		remove
+	}
+}
+
+circuitboard2_trigger
+{
+	spawn
+	{
+		wait 50
+		remove
+	}
+}
+
+circuit1
+{
+	spawn
+	{
+		wait 50
+		remove
+	}
+}
+
+circuit2
+{
+	spawn
+	{
+		wait 50
+		remove
+	}
+}
+
+axis_radio_destroyed
+{
+	spawn
+	{
+		wait 200
+		accum 0 set 0
+		setstate axis_radio_destroyed invisible
+		setstate axis_radio_destroyed_model invisible
+	}
+
+	trigger hide
+	{
+		setstate axis_radio_destroyed invisible
+		setstate axis_radio_destroyed_model invisible
+	}
+
+	trigger show
+	{
+		accum 0 abort_if_equal 0
+		setstate axis_radio_destroyed default
+		setstate axis_radio_destroyed_model default
+	}
+
+	trigger enable
+	{
+		accum 0 set 1
+	}
+
+	trigger disable
+	{
+		accum 0 set 0
+	}
+}
+
+allied_radio_destroyed
+{
+	spawn
+	{
+		wait 200
+		accum 0 set 0
+		setstate allied_radio_destroyed invisible
+		setstate allied_radio_destroyed_model invisible
+	}
+
+	trigger hide
+	{
+		setstate allied_radio_destroyed invisible
+		setstate allied_radio_destroyed_model invisible
+	}
+
+	trigger show
+	{
+		accum 0 abort_if_equal 0
+		setstate allied_radio_destroyed default
+		setstate allied_radio_destroyed_model default
+	}
+
+	trigger enable
+	{
+		accum 0 set 1
+	}
+
+	trigger disable
+	{
+		accum 0 set 0
+	}
+}
+
+neutral_radio_closed
+{
+	spawn
+	{
+		accum 0 set 0
+	}
+
+	trigger hide
+	{
+		setstate neutral_radio_closed invisible
+		setstate neutral_radio_closed_model invisible
+	}
+
+	trigger show
+	{
+		accum 0 abort_if_equal 1
+		setstate neutral_radio_closed default
+		setstate neutral_radio_closed_model default
+	}
+
+	trigger disable
+	{
+		accum 0 set 1
+	}
+}
+
+allied_radio_built
+{
+	spawn
+	{
+		wait 50
+		constructible_class	2
+		trigger allied_radio_built setup
+	}
+
+	trigger setup
+	{
+		sethqstatus 1 0
+	}
+
+	buildstart final
+	{
+		trigger allied_radio_built_model trans
+		trigger axis_radio_destroyed hide
+		trigger allied_radio_destroyed hide
+		trigger neutral_radio_closed 	hide
+	}
+
+	built final
+	{
+		trigger allied_radio_built_model show
+		trigger allied_radio_destroyed enable
+		trigger axis_radio_destroyed disable
+		trigger neutral_radio_closed 	disable
+		trigger allied_radio_built_model enable_allied_features
+
+		enablespeaker allies_compost_sound
+	}
+
+	decayed final
+	{
+		trigger allied_radio_built_model hide
+		trigger allied_radio_destroyed show
+		trigger axis_radio_destroyed show
+		trigger neutral_radio_closed 	show
+	}
+
+	death
+	{
+		trigger allied_radio_built_model hide
+		trigger allied_radio_destroyed show
+		trigger allied_radio_built_model disable_allied_features
+
+		disablespeaker allies_compost_sound
+	}
+}
+
+axis_radio_built
+{
+	spawn
+	{
+		wait 50
+		constructible_class	2
+
+		wait 150
+		trigger axis_radio_built setup
+	}
+
+	trigger setup
+	{
+		sethqstatus 0 0
+	}
+
+	buildstart final
+	{
+		trigger axis_radio_built_model trans
+		trigger axis_radio_destroyed hide
+		trigger allied_radio_destroyed hide
+		trigger neutral_radio_closed 	hide
+	}
+
+	built final
+	{
+		trigger axis_radio_built_model show
+		trigger axis_radio_destroyed enable
+		trigger allied_radio_destroyed enable
+		trigger neutral_radio_closed 	disable
+		trigger axis_radio_built_model enable_axis_features
+
+		enablespeaker axis_compost_sound
+	}
+
+	decayed final
+	{
+		trigger axis_radio_built_model hide
+		trigger axis_radio_destroyed show
+		trigger allied_radio_destroyed show
+		trigger neutral_radio_closed 	show
+	}
+
+	death
+	{
+		trigger axis_radio_built_model hide
+		trigger axis_radio_destroyed show
+		trigger axis_radio_built_model disable_axis_features
+
+		disablespeaker axis_compost_sound
+	}
+}
+
+axis_radio_built_model
+{
+	spawn
+	{
+		accum 1 set 0
+		wait 200
+		setstate axis_radio_built_model invisible
+	}
+
+	trigger show
+	{
+		setstate axis_radio_built_model default
+	}
+
+	trigger hide
+	{
+		setstate axis_radio_built_model invisible
+	}
+
+	trigger trans
+	{
+		setstate axis_radio_built_model underconstruction
+	}
+
+	trigger enable_axis_features
+	{
+		sethqstatus 0 1
+	}
+
+	trigger disable_axis_features
+	{
+		sethqstatus 0 0
+	}
+}
+
+allied_radio_built_model
+{
+	spawn
+	{
+		accum 1 set 0
+		wait 200
+		setstate allied_radio_built_model invisible
+	}
+
+	trigger show
+	{
+		setstate allied_radio_built_model default
+		enablespeaker neutral_radio_sound
+	}
+
+	trigger hide
+	{
+		setstate allied_radio_built_model invisible
+		disablespeaker neutral_radio_sound
+	}
+
+	trigger trans
+	{
+		setstate allied_radio_built_model underconstruction
+	}
+
+	trigger enable_allied_features
+	{
+		accum 1 set 1
+		sethqstatus 0 1
+	}
+
+	trigger disable_allied_features
+	{
+		sethqstatus 0 0
+	}
+}
+
+// Axis ONLY - old house on main road
+mg42_clip_1
+{
+	spawn
+	{
+		wait 50
+		constructible_class	2
+		trigger mg42_clip_1 setup
+	}
+
+	trigger setup
+	{
+		setstate mg42_1 invisible
+
+		setstate mg42_materials_1 default
+		setstate mg42_materials_clip_1 default
+		setstate mg42_flag_1 default
+	}
+
+	buildstart final
+	{
+		setstate mg42_1 underconstruction
+
+		setstate mg42_materials_1 default
+		setstate mg42_materials_clip_1 default
+		setstate mg42_flag_1 default
+	}
+
+	built final
+	{
+		setstate mg42_1 default
+
+		setstate mg42_materials_1 invisible
+		setstate mg42_materials_clip_1 invisible
+		setstate mg42_flag_1 invisible
+	}
+
+	decayed final
+	{
+		setstate mg42_1 invisible
+
+		setstate mg42_materials_1 default
+		setstate mg42_materials_clip_1 default
+		setstate mg42_flag_1 default
+	}
+
+	death
+	{
+		setstate mg42_1 invisible
+		repairmg42 mg42_1
+		setstate mg42_materials_1 default
+		setstate mg42_materials_clip_1 default
+		setstate mg42_flag_1 default
+	}
+}
+
+// Axis ONLY
+mg42_clip_2
+{
+	spawn
+	{
+		wait 50
+		constructible_class	2
+		trigger mg42_clip_2 setup
+	}
+
+	trigger setup
+	{
+		setstate mg42_2 invisible
+
+		setstate mg42_materials_2 default
+		setstate mg42_materials_clip_2 default
+		setstate mg42_flag_2 default
+	}
+
+	buildstart final
+	{
+		setstate mg42_2 underconstruction
+
+		setstate mg42_materials_2 default
+		setstate mg42_materials_clip_2 default
+		setstate mg42_flag_2 default
+	}
+
+	built final
+	{
+		setstate mg42_2 default
+
+		setstate mg42_materials_2 invisible
+		setstate mg42_materials_clip_2 invisible
+		setstate mg42_flag_2 invisible
+	}
+
+	decayed final
+	{
+		setstate mg42_2 invisible
+
+		setstate mg42_materials_2 default
+		setstate mg42_materials_clip_2 default
+		setstate mg42_flag_2 default
+	}
+
+	death
+	{
+		setstate mg42_2 invisible
+		repairmg42 mg42_2
+		setstate mg42_materials_2 default
+		setstate mg42_materials_clip_2 default
+		setstate mg42_flag_2 default
+	}
+}
+
+// Axis ONLY - in forward bunker pointing towards villa
+mg42_clip_3
+{
+	spawn
+	{
+		wait 50
+		constructible_class	2
+		trigger mg42_clip_3 setup
+	}
+
+	trigger setup
+	{
+		setstate mg42_3 invisible
+		setstate mg42_materials_3 default
+		setstate mg42_materials_clip_3 default
+		setstate mg42_flag_3 default
+		setstate mg42_clip_3_pillar invisible
+	}
+
+	buildstart final
+	{
+		setstate mg42_3 underconstruction
+		setstate mg42_materials_3 default
+		setstate mg42_materials_clip_3 default
+		setstate mg42_flag_3 default
+		setstate mg42_clip_3_pillar underconstruction
+	}
+
+	built final
+	{
+		setstate mg42_3 default
+		setstate mg42_materials_3 invisible
+		setstate mg42_materials_clip_3 invisible
+		setstate mg42_flag_3 invisible
+		setstate mg42_clip_3_pillar default
+	}
+
+	decayed final
+	{
+		setstate mg42_3 invisible
+		setstate mg42_materials_3 default
+		setstate mg42_materials_clip_3 default
+		setstate mg42_flag_3 default
+		setstate mg42_clip_3_pillar invisible
+	}
+
+	death
+	{
+		setstate mg42_3 invisible
+		repairmg42 mg42_3
+		setstate mg42_materials_3 default
+		setstate mg42_materials_clip_3 default
+		setstate mg42_flag_3 default
+		setstate mg42_clip_3_pillar invisible
+	}
+}
+
+// Allied version - in forward bunker pointing towards villa
+mg42_clip_3_allied
+{
+	spawn
+	{
+		wait 50
+		constructible_class	2
+		trigger mg42_clip_3_allied setup
+	}
+
+	trigger setup
+	{
+		setstate mg42_3 invisible
+		setstate mg42_materials_3 default
+		setstate mg42_materials_clip_3 default
+		setstate mg42_flag_3 default
+		setstate mg42_clip_3_pillar invisible
+	}
+
+	buildstart final
+	{
+		setstate mg42_3 underconstruction
+		setstate mg42_materials_3 default
+		setstate mg42_materials_clip_3 default
+		setstate mg42_flag_3 default
+		setstate mg42_clip_3_pillar underconstruction
+	}
+
+	built final
+	{
+		setstate mg42_3 default
+		setstate mg42_materials_3 invisible
+		setstate mg42_materials_clip_3 invisible
+		setstate mg42_flag_3 invisible
+		setstate mg42_clip_3_pillar default
+	}
+
+	decayed final
+	{
+		setstate mg42_3 invisible
+		setstate mg42_materials_3 default
+		setstate mg42_materials_clip_3 default
+		setstate mg42_flag_3 default
+		setstate mg42_clip_3_pillar invisible
+	}
+
+	death
+	{
+		setstate mg42_3 invisible
+		repairmg42 mg42_3
+		setstate mg42_materials_3 default
+		setstate mg42_materials_clip_3 default
+		setstate mg42_flag_3 default
+		setstate mg42_clip_3_pillar invisible
+	}
+}
+
+maindoor1
+{
+	spawn
+	{
+		wait 50
+		remove
+	}
+}
+
+sidedoor1
+{
+	spawn
+	{
+		wait 50
+		remove
+	}
+}
+
+maindoor1_trig
+{
+	spawn
+	{
+		wait 50
+		remove
+	}
+}
+
+sidedoor1_trig
+{
+	spawn
+	{
+		wait 50
+		remove
+	}
+}
+
+frontentrance
+{
+	spawn
+	{
+		wait 50
+		remove
+	}
+}
+
+radarbox1
+{
+	spawn
+	{
+		wait 50
+		remove
+	}
+}
+
+radarbox2
+{
+	spawn
+	{
+		wait 50
+		remove
+	}
+}
+
+circuitboard1_trigger
+{
+	spawn
+	{
+		wait 50
+		remove
+	}
+}
+
+circuitboard2_trigger
+{
+	spawn
+	{
+		wait 50
+		remove
+	}
+}
+
+truck_exitpoint
+{
+	spawn
+	{
+		wait 50
+		remove
+	}
+}
+
+truck_trig
+{
+	spawn
+	{
+		wait 50
+		remove
+	}
+}
+
+roadbunker_wobj
+{
+	spawn
+	{
+		setstate roadbunker_wobj invisible
+	}
+}
+
+alliedcpspawns
+{
+	spawn
+	{
+		setstate alliedcpspawns invisible
+	}
+}
+
+alliedcpspawns_obj
+{
+	spawn
+	{
+		setstate alliedcpspawns_obj invisible
+	}
+}
+
+roadbunker
+{
+	spawn
+	{
+		remove
+	}
+}
+
+roadbunkerspawns
+{
+	spawn
+	{
+		setstate roadbunkerspawns invisible
+	}
+}
+
+objhacab1
+{
+	spawn
+	{
+		wait 50
+		remove
+	}
+}
+
+objhacab2
+{
+	spawn
+	{
+		wait 50
+		remove
+	}
+}
+
+objhacab3
+{
+	spawn
+	{
+		wait 50
+		remove
+	}
+}
+
+objhacab4
+{
+	spawn
+	{
+		wait 50
+		remove
+	}
+}
+
+healthammocab_toi
+{
+	spawn
+	{
+		wait 50
+		remove
+	}
+}
+
+axis_hacabinet_health
+{
+	spawn
+	{
+		wait 50
+		remove
+	}
+}
+
+westside_wobj
+{
+	spawn
+	{
+		setstate westside_wobj invisible
+	}
+}
+
+axishutspawns
+{
+	spawn
+	{
+		setstate axishutspawns invisible
+	}
+}
+
+teamonlydoor1
+{
+	spawn
+	{
+		wait 50
+		remove
+	}
+}
+
+teamonlydoor2
+{
+	spawn
+	{
+		wait 50
+		remove
+	}
+}

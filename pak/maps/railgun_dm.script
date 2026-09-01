@@ -1,0 +1,783 @@
+game_manager
+{
+	spawn
+	{
+		//  22 DM spawns
+		
+		create
+		{
+			scriptName "dmspawn1"
+			classname "team_CTF_greenspawn"
+			targetname "dmspawn1"
+			origin "7314 4066 378"
+			spawnflags 2	
+			angle 83
+		}
+
+		create
+		{
+			scriptName "dmspawn2"
+			classname "team_CTF_greenspawn"
+			targetname "dmspawn2"
+			origin "7781 4633 177"
+			spawnflags 2	
+			angle 170
+		}
+
+		create
+		{
+			scriptName "dmspawn3"
+			classname "team_CTF2greenspawn"
+			targetname "dmspawn3"
+			origin "6039 5111 190"
+			spawnflags 2	
+			angle 167
+		}
+
+		create
+		{
+			scriptName "dmspawn4"
+			classname "team_CTF_greenspawn"
+			targetname "dmspawn4"
+			origin "4604 5599 172"
+			spawnflags 2	
+			angle -177
+		}
+
+		create
+		{
+			scriptName "dmspawn5"
+			classname "team_CTF_greenspawn"
+			targetname "dmspawn5"
+			origin "4290 5608 496"
+			spawnflags 2	
+			angle 179
+		}
+
+		create
+		{
+			scriptName "dmspawn6"
+			classname "team_CTF_greenspawn"
+			targetname "dmspawn6"
+			origin "4147 5600 323"
+			spawnflags 2	
+			angle 179
+		}
+
+		create
+		{
+			scriptName "dmspawn7"
+			classname "team_CTF_greenspawn"
+			targetname "dmspawn7"
+			origin "1997 5181 336"
+			spawnflags 2	
+			angle -90
+		}
+
+		create
+		{
+			scriptName "dmspawn8"
+			classname "team_CTF_greenspawn"
+			targetname "dmspawn8"
+			origin "2031 5176 624"
+			spawnflags 2	
+			angle -90
+		}
+
+		create
+		{
+			scriptName "dmspawn9"
+			classname "team_CTF_greenspawn"
+			targetname "dmspawn9"
+			origin "-51 5483 183"
+			spawnflags 2	
+			angle 0
+		}
+
+		create
+		{
+			scriptName "dmspawn10"
+			classname "team_CTF_greenspawn"
+			targetname "dmspawn10"
+			origin "-1133 5778 324"
+			spawnflags 2	
+			angle 0
+		}
+
+		create
+		{
+			scriptName "dmspawn11"
+			classname "team_CTF_greenspawn"
+			targetname "dmspawn11"
+			origin "-1147 4886 402"
+			spawnflags 2	
+			angle -179
+		}
+
+		create
+		{
+			scriptName "dmspawn12"
+			classname "team_CTF_greenspawn"
+			targetname "dmspawn12"
+			origin "6095 2990 328"
+			spawnflags 2	
+			angle 24
+		}
+
+		create
+		{
+			scriptName "dmspawn13"
+			classname "team_CTF_greenspawn"
+			targetname "dmspawn13"
+			origin "8313 2226 328"
+			spawnflags 2	
+			angle 164
+		}
+
+		create
+		{
+			scriptName "dmspawn14"
+			classname "team_CTF_greenspawn"
+			targetname "dmspawn14"
+			origin "2889 3876 113"
+			spawnflags 2	
+			angle 44
+		}
+
+		create
+		{
+			scriptName "dmspawn15"
+			classname "team_CTF_greenspawn"
+			targetname "dmspawn15"
+			origin "2517 2269 168"
+			spawnflags 2	
+			angle 0
+		}
+
+		create
+		{
+			scriptName "dmspawn16"
+			classname "team_CTF_greenspawn"
+			targetname "dmspawn16"
+			origin "3347 2114 374"
+			spawnflags 2	
+			angle -80
+		}
+
+		create
+		{
+			scriptName "dmspawn17"
+			classname "team_CTF_greenspawn"
+			targetname "dmspawn17"
+			origin "2530 621 656"
+			spawnflags 2	
+			angle 150
+		}
+
+		create
+		{
+			scriptName "dmspawn18"
+			classname "team_CTF_greenspawn"
+			targetname "dmspawn18"
+			origin "607 919 340"
+			spawnflags 2	
+			angle 90
+		}
+
+		create
+		{
+			scriptName "dmspawn19"
+			classname "team_CTF_greenspawn"
+			targetname "dmspawn19"
+			origin "653 2180 493"
+			spawnflags 2	
+			angle 0
+		}
+
+		create
+		{
+			scriptName "dmspawn20"
+			classname "team_CTF_greenspawn"
+			targetname "dmspawn20"
+			origin "1380 3469 740"
+			spawnflags 2	
+			angle 54
+		}
+
+		create
+		{
+			scriptName "dmspawn21"
+			classname "team_CTF_greenspawn"
+			targetname "dmspawn21"
+			origin "3369 2900 304"
+			spawnflags 2	
+			angle -63
+		}
+
+		create
+		{
+			scriptName "dmspawn22"
+			classname "team_CTF_greenspawn"
+			targetname "dmspawn22"
+			origin "4858 3451 560"
+			spawnflags 2	
+			angle 0
+		}
+		
+		//  22 DM spawns
+		
+		// Game rules
+		wm_axis_respawntime	5
+		wm_allied_respawntime	5
+		wm_number_of_objectives 1
+		wm_set_round_timelimit	5
+
+		disablespeaker allies_compost_sound	// command post speaker
+		disablespeaker axis_compost_sound	// command post speaker
+
+		wait 1000
+	}
+}
+
+alliedobjspawns
+{
+	spawn
+	{
+		wait 500
+
+		remove
+	}
+}
+
+axisobjspawns
+{
+	spawn
+	{
+		wait 500
+
+		remove
+	}
+}
+
+alliedcampmarker
+{
+	spawn
+	{
+		wait 500
+
+		remove
+	}
+}
+
+axisconstmarker
+{
+	spawn
+	{
+		wait 500
+
+		remove
+	}
+}
+
+axisdepotmarker
+{
+	spawn
+	{
+		wait 500
+
+		remove
+	}
+}
+
+train2_trigger
+{
+	spawn
+	{
+		wait 500
+
+		remove
+	}
+}
+
+train2_enabler_axis
+{
+	spawn
+	{
+		wait 500
+
+		remove
+	}
+}
+
+train2_enabler_allies
+{
+	spawn
+	{
+		wait 500
+
+		remove
+	}
+}
+
+train2_disabler
+{
+	spawn
+	{
+		wait 500
+
+		remove
+	}
+}
+
+train2_controller
+{
+	spawn
+	{
+		wait 500
+
+		remove
+	}
+}
+
+no_lms
+{
+	spawn
+	{
+		wait 500
+
+		remove
+	}
+}
+
+train1_trigger
+{
+	spawn
+	{
+		setstate train1_trigger invisible
+	}
+}
+
+train1_enabler_axis
+{
+	spawn
+	{
+		wait 500
+
+		remove
+	}
+}
+
+train1_enabler_allies
+{
+	spawn
+	{
+		wait 500
+
+		remove
+	}
+}
+
+train1_disabler
+{
+	spawn
+	{
+		wait 500
+
+		remove
+	}
+}
+
+depotflag
+{
+	spawn
+	{
+		wait 500
+
+		remove
+	}
+}
+
+capturespawn
+{
+	spawn
+	{
+		wait 500
+
+		remove
+	}
+}
+
+panel3
+{
+	spawn
+	{
+		wait 400
+		setstate panel3_materials_clip invisible
+		setstate panel3_flag invisible
+		setstate panel3_materials invisible
+		setstate panel3 default
+		disablemessage panel3 // Turn off func_constructible track message
+	}
+}
+
+panel3_toi
+{
+	spawn
+	{	
+		setstate panel3_toi invisible
+	}
+}
+
+panel_user3
+{
+	spawn
+	{
+		wait 500
+
+		remove
+	}
+}
+
+trigger_end
+{
+	spawn
+	{
+		wait 500
+
+		remove
+	}
+}
+
+end_explosion
+{
+	spawn
+	{
+		wait 500
+
+		remove
+	}
+}
+
+end_alliedsmoke
+{
+	spawn
+	{
+		wait 500
+
+		remove
+	}
+}
+
+fakeobj2
+{
+	spawn
+	{
+		wait 500
+
+		remove
+	}
+}
+
+allied_compost_built
+{
+	spawn
+	{
+		wait 400
+		trigger allied_compost_built setup
+
+		constructible_class 2
+	}
+
+	trigger setup
+	{
+		sethqstatus 1 0
+	}
+
+	buildstart final
+	{
+		setstate allied_compost_built_model underconstruction
+		setstate neutral_compost_closed_clip invisible
+		setstate neutral_compost_closed_model invisible
+	}
+
+	built final
+	{
+		setstate allied_compost_built_model default
+		setstate neutral_compost_closed_clip invisible
+		setstate neutral_compost_closed_model invisible
+
+		trigger allied_compost_built_model enable_allied_features
+
+		enablespeaker allies_compost_sound
+	}
+
+	decayed final
+	{
+		setstate allied_compost_built_model invisible
+		setstate neutral_compost_closed_clip default
+		setstate neutral_compost_closed_model default
+	}
+
+	death
+	{
+		setstate allied_compost_built_model invisible
+		setstate neutral_compost_closed_clip default
+		setstate neutral_compost_closed_model default
+
+		trigger allied_compost_built_model disable_allied_features
+
+		disablespeaker allies_compost_sound
+	}
+}
+
+allied_compost_built_model
+{
+	spawn
+	{
+		wait 400
+		setstate allied_compost_built_model invisible
+	}
+
+	trigger enable_allied_features
+	{
+		sethqstatus 1 1
+	}
+
+	trigger disable_allied_features
+	{
+		sethqstatus 1 0
+	}
+}
+
+axis_compost_built
+{
+	spawn
+	{
+		wait 400
+		trigger axis_compost_built setup
+
+		constructible_class 2
+	}
+
+	trigger setup
+	{
+		sethqstatus 0 0
+	}
+
+	buildstart final
+	{
+		setstate axis_compost_built_model underconstruction
+		setstate neutral_compost_closed_clip invisible
+		setstate neutral_compost_closed_model invisible
+	}
+
+	built final
+	{
+		setstate axis_compost_built_model default
+		setstate neutral_compost_closed_clip invisible
+		setstate neutral_compost_closed_model invisible
+
+		trigger axis_compost_built_model enable_axis_features
+
+		enablespeaker axis_compost_sound
+	}
+
+	decayed final
+	{
+		setstate axis_compost_built_model invisible
+		setstate neutral_compost_closed_clip default
+		setstate neutral_compost_closed_model default
+	}
+
+	death
+	{
+		setstate axis_compost_built_model invisible
+		setstate neutral_compost_closed_clip default
+		setstate neutral_compost_closed_model default
+
+		trigger axis_compost_built_model disable_axis_features
+
+		disablespeaker axis_compost_sound
+	}
+}
+
+axis_compost_built_model
+{
+	spawn
+	{
+		wait 400
+		setstate axis_compost_built_model invisible
+	}
+
+	trigger enable_axis_features
+	{
+		sethqstatus 0 1
+	}
+
+	trigger disable_axis_features
+	{
+		sethqstatus 0 0
+	}
+}
+
+
+// Depot Yard MG Nest
+browning_clip_1
+{
+	spawn
+	{
+		wait 200
+
+		constructible_class 2
+
+		trigger self setup
+	}
+
+	trigger setup
+	{
+		setstate browning_1 invisible
+		setstate browning_materials_1 default
+		setstate browning_materials_clip_1 default
+		setstate browning_flag_1 default
+	}
+
+	buildstart final
+	{
+		setstate browning_1 underconstruction
+		setstate browning_materials_1 default
+		setstate browning_materials_clip_1 default
+		setstate browning_flag_1 default
+	}
+
+	built final
+	{
+		setstate browning_1 default
+		setstate browning_materials_1 invisible
+		setstate browning_materials_clip_1 invisible
+		setstate browning_flag_1 invisible
+	}
+
+	decayed final
+	{
+		setstate browning_1 invisible
+		setstate browning_materials_1 default
+		setstate browning_materials_clip_1 default
+		setstate browning_flag_1 default
+	}
+
+	death
+	{
+		setstate browning_1 invisible
+		repairmg42 browning_1
+		setstate browning_materials_1 default
+		setstate browning_materials_clip_1 default
+		setstate browning_flag_1 default
+	}
+}
+
+mg42depot_clip_1
+{
+	spawn
+	{
+		wait 200
+
+		constructible_class 2
+
+		trigger self setup
+	}
+
+	trigger setup
+	{
+		setstate browning_1 invisible
+		setstate browning_materials_1 default
+		setstate browning_materials_clip_1 default
+		setstate browning_flag_1 default
+	}
+
+	buildstart final
+	{
+		setstate browning_1 underconstruction
+		setstate browning_materials_1 default
+		setstate browning_materials_clip_1 default
+		setstate browning_flag_1 default
+	}
+
+	built final
+	{
+		setstate browning_1 default
+		setstate browning_materials_1 invisible
+		setstate browning_materials_clip_1 invisible
+		setstate browning_flag_1 invisible
+	}
+
+	decayed final
+	{
+		setstate browning_1 invisible
+		setstate browning_materials_1 default
+		setstate browning_materials_clip_1 default
+		setstate browning_flag_1 default
+	}
+
+	death
+	{
+		setstate browning_1 invisible
+		repairmg42 browning_1
+		setstate browning_materials_1 default
+		setstate browning_materials_clip_1 default
+		setstate browning_flag_1 default
+	}
+}
+
+// Track Switch MG Nest
+browning_clip_2
+{
+	spawn
+	{
+		wait 200
+
+		constructible_class 2
+
+		trigger self setup
+	}
+
+	trigger setup
+	{
+		setstate browning_2 invisible
+		setstate browning_materials_2 default
+		setstate browning_materials_clip_2 default
+		setstate browning_flag_2 default
+	}
+
+	buildstart final
+	{
+		setstate browning_2 underconstruction
+		setstate browning_materials_2 default
+		setstate browning_materials_clip_2 default
+		setstate browning_flag_2 default
+	}
+
+	built final
+	{
+		setstate browning_2 default
+		setstate browning_materials_2 invisible
+		setstate browning_materials_clip_2 invisible
+		setstate browning_flag_2 invisible
+	}
+
+	decayed final
+	{
+		setstate browning_2 invisible
+		setstate browning_materials_2 default
+		setstate browning_materials_clip_2 default
+		setstate browning_flag_2 default
+	}
+
+	death
+	{
+		setstate browning_2 invisible
+		repairmg42 browning_2
+		setstate browning_materials_2 default
+		setstate browning_materials_clip_2 default
+		setstate browning_flag_2 default
+	}
+}
