@@ -6,7 +6,10 @@
 */
 
 #include "cg_local.h"
+#include "cg_nitmod_config.h"
 #include "../game/bg_classes.h"
+#include "../game/nitmod_skills.h"
+#include "../game/nitmod_protocol.h"
 
 #define	SWING_RIGHT	1
 #define SWING_LEFT	2
@@ -177,6 +180,7 @@ void CG_NewClientInfo( int clientNum ) {
 	// class
 	v = Info_ValueForKey( configstring, "c" );
 	newInfo.cls = atoi( v );
+	newInfo.latchedClass = NITMOD_ParseLatchedClass(configstring, newInfo.cls);
 
 	// rank
 	v = Info_ValueForKey( configstring, "r" );
@@ -203,18 +207,14 @@ void CG_NewClientInfo( int clientNum ) {
 	}
 
 	v = Info_ValueForKey( configstring, "s");
-	if( *v ) {
-		int i;
+	/* newInfo is zero-initialized: missing/invalid skills stay neutral.
+	 * Do not accept Nitmod level five before every reward/XP path supports it. */
+	NITMOD_ParseSkillDigits( v, NUM_SKILL_LEVELS - 1, newInfo.skill );
 
-		for( i = 0; i < SK_NUM_SKILLS; i++ ) {
-			char skill[2];
-
-			skill[0] = v[i];
-			skill[1] = '\0';
-
-			newInfo.skill[i] = atoi(skill);
-		}
-	}
+	/* Original rn token 0x89 stores a signed equipment status. Missing or
+	 * malformed values stay zero in this freshly initialized snapshot. */
+	v = Info_ValueForKey( configstring, "rn" );
+	NITMOD_ParseProtocolSigned( v, &newInfo.rifleGrenadeStatus );
 
 	// diguiseName
 	v = Info_ValueForKey( configstring, "dn" );
@@ -298,7 +298,9 @@ void CG_NewClientInfo( int clientNum ) {
 
 				CG_AddPMItemBig( PM_SKILL, va("Increased %s skill to level %i!", skillNames[i], newInfo.skill[i] ), cgs.media.skillPics[ i ] );
 
-				CG_PriorityCenterPrint( va( "You have been rewarded with %s", cg_skillRewards[ i ][ newInfo.skill[i]-1 ]), SCREEN_HEIGHT - (SCREEN_HEIGHT * 0.20), SMALLCHAR_WIDTH, 99999 );
+				if( newInfo.skill[i] > 0 && newInfo.skill[i] < NUM_SKILL_LEVELS ) {
+					CG_PriorityCenterPrint( va( "You have been rewarded with %s", cg_skillRewards[ i ][ newInfo.skill[i]-1 ]), SCREEN_HEIGHT - (SCREEN_HEIGHT * 0.20), SMALLCHAR_WIDTH, 99999 );
+				}
 			}
 		}
 

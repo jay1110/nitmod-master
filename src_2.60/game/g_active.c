@@ -1,5 +1,8 @@
 
 #include "g_local.h"
+#include "g_nitmod_air.h"
+#include "nitmod_air.h"
+#include "nitmod_weapon_reload.h"
 
 /*
 ===============
@@ -74,56 +77,25 @@ Check for lava / slime contents and drowning
 =============
 */
 void P_WorldEffects( gentity_t *ent ) {
-	int			waterlevel;
+	int waterlevel;
+	int drowningDamage;
 
-	if ( ent->client->noclip ) {
-		ent->client->airOutTime = level.time + HOLDBREATHTIME;	// don't need air
+	/* Six-level skill storage is not active: pass no unlock bits yet. */
+	drowningDamage = G_NITMOD_UpdateClientAir( ent, level.time, 0u );
+	if( ent->client->noclip ) {
 		return;
 	}
-
 	waterlevel = ent->waterlevel;
-
-	//
-	// check for drowning
-	//
-	if ( waterlevel == 3 ) {
-		// if out of air, start drowning
-		if ( ent->client->airOutTime < level.time) {
-
-			if(ent->client->ps.powerups[PW_BREATHER]) {	// take air from the breather now that we need it
-				ent->client->ps.powerups[PW_BREATHER] -= (level.time - ent->client->airOutTime);
-				ent->client->airOutTime = level.time + (level.time - ent->client->airOutTime);
-			}
-			else {
-
-
-				// drown!
-				ent->client->airOutTime += 1000;
-				if ( ent->health > 0 ) {
-					// take more damage the longer underwater
-					ent->damage += 2;
-					if (ent->damage > 15)
-						ent->damage = 15;
-
-					// play a gurp sound instead of a normal pain sound
-					if (ent->health <= ent->damage) {
-						G_Sound(ent, G_SoundIndex("*drown.wav"));
-					} else if (rand()&1) {
-						G_Sound(ent, G_SoundIndex("sound/player/gurp1.wav"));
-					} else {
-						G_Sound(ent, G_SoundIndex("sound/player/gurp2.wav"));
-					}
-
-					// don't play a normal pain sound
-					ent->pain_debounce_time = level.time + 200;
-
-					G_Damage (ent, NULL, NULL, NULL, NULL, ent->damage, 0, MOD_WATER);
-				}
-			}
+	if( drowningDamage ) {
+		if( ent->health <= drowningDamage ) {
+			G_Sound(ent, G_SoundIndex("*drown.wav"));
+		} else if( rand() & 1 ) {
+			G_Sound(ent, G_SoundIndex("sound/player/gurp1.wav"));
+		} else {
+			G_Sound(ent, G_SoundIndex("sound/player/gurp2.wav"));
 		}
-	} else {
-		ent->client->airOutTime = level.time + 12000;
-		ent->damage = 2;
+		ent->pain_debounce_time = level.time + 200;
+		G_Damage(ent, NULL, NULL, NULL, NULL, drowningDamage, 0, MOD_WATER);
 	}
 
 	//
@@ -483,6 +455,10 @@ void SpectatorThink( gentity_t *ent, usercmd_t *ucmd ) {
 		memset (&pm, 0, sizeof(pm));
 		pm.ps = &client->ps;
 		pm.pmext = &client->pmext;
+		pm.nitmodDoubleJump = g_doubleJump.integer;
+		pm.nitmodDoubleJumpHeight = g_DJHeight.value;
+		pm.nitmodReloadPreferenceFlags = NITMOD_EncodeReloadPreferences(0,
+			client->pers.bAutoReloadAux, client->pers.bAltReloadAux);
 		pm.character = client->pers.character;
 		pm.cmd = *ucmd;
 		pm.skill = client->sess.skill;
@@ -1045,6 +1021,10 @@ void ClientThink_real( gentity_t *ent ) {
 
 	pm.ps = &client->ps;
 	pm.pmext = &client->pmext;
+	pm.nitmodDoubleJump = g_doubleJump.integer;
+	pm.nitmodDoubleJumpHeight = g_DJHeight.value;
+	pm.nitmodReloadPreferenceFlags = NITMOD_EncodeReloadPreferences(0,
+		client->pers.bAutoReloadAux, client->pers.bAltReloadAux);
 	pm.character = client->pers.character;
 	pm.cmd = *ucmd;
 	pm.oldcmd = client->pers.oldcmd;
@@ -1084,7 +1064,7 @@ void ClientThink_real( gentity_t *ent ) {
 
 	pm.skill = client->sess.skill;
 
-	client->pmext.airleft = ent->client->airOutTime - level.time;
+	client->pmext.airleft = NITMOD_AirRemaining( ent->client->airOutTime, level.time );
 
 	pm.covertopsChargeTime = level.covertopsChargeTime[client->sess.sessionTeam-1];
 
@@ -1675,7 +1655,7 @@ void ClientEndFrame( gentity_t *ent ) {
 		if(level.match_pause != PAUSE_NONE) {
 			int time_delta = level.time - level.previousTime;
 
-			ent->client->airOutTime += time_delta;
+			ent->client->airOutTime = NITMOD_ShiftAirDeadline( ent->client->airOutTime, time_delta );
 			ent->client->inactivityTime += time_delta;
 			ent->client->lastBurnTime += time_delta;
 			ent->client->pers.connectTime += time_delta;

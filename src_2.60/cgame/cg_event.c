@@ -1,6 +1,7 @@
 // cg_event.c -- handle entity events at snapshot or playerstate transitions
 
 #include "cg_local.h"
+#include "cg_nitmod_config.h"
 
 extern void CG_StartShakeCamera( float param );
 extern void CG_Tracer( vec3_t source, vec3_t dest, int sparks );
@@ -1636,6 +1637,19 @@ static void CG_StartFootStepSound( bg_playerclass_t* classInfo, entityState_t *e
 	}
 }
 
+/* Network surface indices must never index past the media arrays. A missing
+ * character model is possible while client media is still being registered. */
+static sfxHandle_t CG_LandingSound(entityState_t *es, bg_character_t *character) {
+	int surface = es->eventParm;
+	if(surface == FOOTSTEP_TOTAL) return 0;
+	if(!surface) {
+		if(!character || !character->animModelInfo) return 0;
+		surface = character->animModelInfo->footsteps;
+	}
+	if(surface < 0 || surface >= FOOTSTEP_TOTAL) return 0;
+	return cgs.media.landSound[surface];
+}
+
 /*
 ==============
 CG_EntityEvent
@@ -1671,6 +1685,29 @@ void CG_EntityEvent( centity_t *cent, vec3_t position ) {
 
 	es = &cent->currentState;
 	event = es->event & ~EV_EVENT_BITS;
+	/* Original 0x60 uses the first flesh impact sound (cgs + 69264). */
+	if(event == 96 && NITMOD_UsesOriginalProtocol()) {
+		NITMOD_ShoveSound(es->number);
+		return;
+	}
+	if(event == 99 && NITMOD_UsesOriginalProtocol()) {
+		NITMOD_HitSoundEvent(es->eventParm);
+		return;
+	}
+	/* Original case 0x11: landing hurt sound, pain timestamp, -24 view dip.
+	 * Native 17 (EV_FALL_MEDIUM) has no handler in this baseline. */
+	if(event == 17 && NITMOD_UsesOriginalProtocol()) event = EV_FALL_DMG_50;
+	/* Original 0x62 targets the local client and honors cg_pmSounds. */
+	if( event == 98 && NITMOD_UsesOriginalProtocol() ) {
+		NITMOD_PrivateMessageSound(es->number);
+		return;
+	}
+	/* Original Nitmod CG_EntityEvent case 0x5d plays the team's medic
+	 * voice. Translate only the dispatch value, never the snapshot or
+	 * shared ET enum (native 93 is an unrelated event). */
+	if( event == 93 && NITMOD_UsesOriginalProtocol() ) {
+		event = EV_MEDIC_CALL;
+	}
 
 	if ( cg_debugEvents.integer ) {
 		CG_Printf( "time:%i ent:%3i  event:%3i ", cg.time, es->number, event );
@@ -1695,6 +1732,9 @@ void CG_EntityEvent( centity_t *cent, vec3_t position ) {
 	//
 	case EV_FOOTSTEP:
 		DEBUGNAME("EV_FOOTSTEP");
+		if(es->eventParm < 0 || es->eventParm > FOOTSTEP_TOTAL) break;
+		if(!es->eventParm && (!character || !character->animModelInfo ||
+			character->animModelInfo->footsteps < 0 || character->animModelInfo->footsteps >= FOOTSTEP_TOTAL)) break;
 		if( es->eventParm != FOOTSTEP_TOTAL ) {
 			if( es->eventParm ) {
 				CG_StartFootStepSound( classInfo, es, cgs.media.footsteps[ es->eventParm ][footstepcnt] );
@@ -1718,12 +1758,9 @@ void CG_EntityEvent( centity_t *cent, vec3_t position ) {
 
 	case EV_FALL_SHORT:
 		DEBUGNAME("EV_FALL_SHORT");
-		if( es->eventParm != FOOTSTEP_TOTAL ) {
-			if( es->eventParm ) {
-				trap_S_StartSound( NULL, es->number, CHAN_AUTO, cgs.media.landSound[ es->eventParm ] );
-			} else {
-				trap_S_StartSound( NULL, es->number, CHAN_AUTO, cgs.media.landSound[ character->animModelInfo->footsteps ] );
-			}
+		{
+			sfxHandle_t landing = CG_LandingSound(es, character);
+			if(landing > 0) trap_S_StartSound(NULL, es->number, CHAN_AUTO, landing);
 		}
 		if ( clientNum == cg.predictedPlayerState.clientNum ) {
 			// smooth landing z changes
@@ -1734,12 +1771,9 @@ void CG_EntityEvent( centity_t *cent, vec3_t position ) {
 
 	case EV_FALL_DMG_10:
 		DEBUGNAME("EV_FALL_DMG_10");
-		if( es->eventParm != FOOTSTEP_TOTAL ) {
-			if( es->eventParm ) {
-				trap_S_StartSound( NULL, es->number, CHAN_AUTO, cgs.media.landSound[ es->eventParm ] );
-			} else {
-				trap_S_StartSound( NULL, es->number, CHAN_AUTO, cgs.media.landSound[ character->animModelInfo->footsteps ] );
-			}
+		{
+			sfxHandle_t landing = CG_LandingSound(es, character);
+			if(landing > 0) trap_S_StartSound(NULL, es->number, CHAN_AUTO, landing);
 		}
 		trap_S_StartSound (NULL, es->number, CHAN_AUTO, cgs.media.landHurt );
 		cent->pe.painTime = cg.time;	// don't play a pain sound right after this
@@ -1751,12 +1785,9 @@ void CG_EntityEvent( centity_t *cent, vec3_t position ) {
 		break;
 	case EV_FALL_DMG_15:
 		DEBUGNAME("EV_FALL_DMG_15");
-		if( es->eventParm != FOOTSTEP_TOTAL ) {
-			if( es->eventParm ) {
-				trap_S_StartSound( NULL, es->number, CHAN_AUTO, cgs.media.landSound[ es->eventParm ] );
-			} else {
-				trap_S_StartSound( NULL, es->number, CHAN_AUTO, cgs.media.landSound[ character->animModelInfo->footsteps ] );
-			}
+		{
+			sfxHandle_t landing = CG_LandingSound(es, character);
+			if(landing > 0) trap_S_StartSound(NULL, es->number, CHAN_AUTO, landing);
 		}
 		trap_S_StartSound (NULL, es->number, CHAN_AUTO, cgs.media.landHurt );
 		cent->pe.painTime = cg.time;	// don't play a pain sound right after this
@@ -1768,12 +1799,9 @@ void CG_EntityEvent( centity_t *cent, vec3_t position ) {
 		break;
 	case EV_FALL_DMG_25:
 		DEBUGNAME("EV_FALL_DMG_25");
-		if( es->eventParm != FOOTSTEP_TOTAL ) {
-			if( es->eventParm ) {
-				trap_S_StartSound( NULL, es->number, CHAN_AUTO, cgs.media.landSound[ es->eventParm ] );
-			} else {
-				trap_S_StartSound( NULL, es->number, CHAN_AUTO, cgs.media.landSound[ character->animModelInfo->footsteps ] );
-			}
+		{
+			sfxHandle_t landing = CG_LandingSound(es, character);
+			if(landing > 0) trap_S_StartSound(NULL, es->number, CHAN_AUTO, landing);
 		}
 		trap_S_StartSound (NULL, es->number, CHAN_AUTO, cgs.media.landHurt );
 		cent->pe.painTime = cg.time;	// don't play a pain sound right after this
@@ -1785,12 +1813,9 @@ void CG_EntityEvent( centity_t *cent, vec3_t position ) {
 		break;
 	case EV_FALL_DMG_50:
 		DEBUGNAME("EV_FALL_DMG_50");
-		if( es->eventParm != FOOTSTEP_TOTAL ) {
-			if( es->eventParm ) {
-				trap_S_StartSound( NULL, es->number, CHAN_AUTO, cgs.media.landSound[ es->eventParm ] );
-			} else {
-				trap_S_StartSound( NULL, es->number, CHAN_AUTO, cgs.media.landSound[ character->animModelInfo->footsteps ] );
-			}
+		{
+			sfxHandle_t landing = CG_LandingSound(es, character);
+			if(landing > 0) trap_S_StartSound(NULL, es->number, CHAN_AUTO, landing);
 		}
 		trap_S_StartSound (NULL, es->number, CHAN_AUTO, cgs.media.landHurt );
 		cent->pe.painTime = cg.time;	// don't play a pain sound right after this
@@ -1802,12 +1827,9 @@ void CG_EntityEvent( centity_t *cent, vec3_t position ) {
 		break;
 	case EV_FALL_NDIE:
 		DEBUGNAME("EV_FALL_NDIE");
-		if( es->eventParm != FOOTSTEP_TOTAL ) {
-			if( es->eventParm ) {
-				trap_S_StartSound( NULL, es->number, CHAN_AUTO, cgs.media.landSound[ es->eventParm ] );
-			} else {
-				trap_S_StartSound( NULL, es->number, CHAN_AUTO, cgs.media.landSound[ character->animModelInfo->footsteps ] );
-			}
+		{
+			sfxHandle_t landing = CG_LandingSound(es, character);
+			if(landing > 0) trap_S_StartSound(NULL, es->number, CHAN_AUTO, landing);
 		}
 		trap_S_StartSound (NULL, es->number, CHAN_AUTO, cgs.media.landHurt );
 		cent->pe.painTime = cg.time;	// don't play a pain sound right after this
@@ -2264,7 +2286,7 @@ void CG_EntityEvent( centity_t *cent, vec3_t position ) {
 	case EV_GENERAL_SOUND:
 		DEBUGNAME("EV_GENERAL_SOUND");
 		// Ridah, check for a sound script
-		s = CG_ConfigString( CS_SOUNDS + es->eventParm );
+		s = NITMOD_AssetConfigString( CS_SOUNDS + es->eventParm );
 		if( !strstr( s, ".wav" ) ) {
 			if( CG_SoundPlaySoundScript( s, NULL, es->number, qfalse ) ) {
 				break;
@@ -2280,7 +2302,7 @@ void CG_EntityEvent( centity_t *cent, vec3_t position ) {
 			// xkan, 10/31/2002 - crank up the volume 
 			trap_S_StartSoundVControl( NULL, es->number, CHAN_VOICE, cgs.gameSounds[ es->eventParm ], 255 );
 		} else {
-			s = CG_ConfigString( CS_SOUNDS + es->eventParm );
+			s = NITMOD_AssetConfigString( CS_SOUNDS + es->eventParm );
 			// xkan, 10/31/2002 - crank up the volume 
 			trap_S_StartSoundVControl( NULL, es->number, CHAN_VOICE, CG_CustomSound( es->number, s ), 255 );
 		}
@@ -2310,7 +2332,7 @@ void CG_EntityEvent( centity_t *cent, vec3_t position ) {
 
 			DEBUGNAME("EV_GENERAL_SOUND_VOLUME");
 			// Ridah, check for a sound script
-			s = CG_ConfigString( CS_SOUNDS + sound );
+			s = NITMOD_AssetConfigString( CS_SOUNDS + sound );
 			if( !strstr( s, ".wav" ) ) {
 				if( CG_SoundPlaySoundScript( s, NULL, es->number, qfalse ) ) {
 					break;
@@ -2324,7 +2346,7 @@ void CG_EntityEvent( centity_t *cent, vec3_t position ) {
 			if ( cgs.gameSounds[ sound ] ) {
 				trap_S_StartSoundVControl( NULL, es->number, CHAN_VOICE, cgs.gameSounds[ sound ], volume );
 			} else {
-				s = CG_ConfigString( CS_SOUNDS + sound );
+				s = NITMOD_AssetConfigString( CS_SOUNDS + sound );
 				trap_S_StartSoundVControl( NULL, es->number, CHAN_VOICE, CG_CustomSound( es->number, s ), volume );
 			}
 		}
@@ -2339,7 +2361,7 @@ void CG_EntityEvent( centity_t *cent, vec3_t position ) {
 	case EV_GLOBAL_SOUND:	// play from the player's head so it never diminishes
 		DEBUGNAME("EV_GLOBAL_SOUND");
 		// Ridah, check for a sound script
-		s = CG_ConfigString( CS_SOUNDS + es->eventParm );
+		s = NITMOD_AssetConfigString( CS_SOUNDS + es->eventParm );
 		if( !strstr( s, ".wav" ) ) {
 			if( CG_SoundPlaySoundScript( s, NULL, -1, qtrue ) ) {
 				break;
@@ -2354,7 +2376,7 @@ void CG_EntityEvent( centity_t *cent, vec3_t position ) {
 		if ( cgs.gameSounds[ es->eventParm ] ) {
 			trap_S_StartSound( NULL, cg.snap->ps.clientNum, CHAN_AUTO, cgs.gameSounds[ es->eventParm ] );
 		} else {
-			s = CG_ConfigString( CS_SOUNDS + es->eventParm );
+			s = NITMOD_AssetConfigString( CS_SOUNDS + es->eventParm );
 			trap_S_StartSound( NULL, cg.snap->ps.clientNum, CHAN_AUTO, CG_CustomSound( es->number, s ) );
 		}
 		break;
@@ -2364,7 +2386,7 @@ void CG_EntityEvent( centity_t *cent, vec3_t position ) {
 		DEBUGNAME("EV_GLOBAL_CLIENT_SOUND");
 
 		if ( cg.snap->ps.clientNum == es->teamNum ) {
-			s = CG_ConfigString( CS_SOUNDS + es->eventParm );
+			s = NITMOD_AssetConfigString( CS_SOUNDS + es->eventParm );
 			if ( !strstr( s, ".wav" ) ) {
 				if( CG_SoundPlaySoundScript( s, NULL, -1, (es->effect1Time ? qfalse : qtrue) ) ) {
 					break;
@@ -2378,7 +2400,7 @@ void CG_EntityEvent( centity_t *cent, vec3_t position ) {
 			if ( cgs.gameSounds[ es->eventParm ] ) {
 				trap_S_StartSound (NULL, cg.snap->ps.clientNum, CHAN_AUTO, cgs.gameSounds[ es->eventParm ] );
 			} else {
-				s = CG_ConfigString( CS_SOUNDS + es->eventParm );
+				s = NITMOD_AssetConfigString( CS_SOUNDS + es->eventParm );
 				trap_S_StartSound (NULL, cg.snap->ps.clientNum, CHAN_AUTO, CG_CustomSound( es->number, s ) );
 			}
 		}
@@ -2748,6 +2770,10 @@ void CG_EntityEvent( centity_t *cent, vec3_t position ) {
 		break;
 
 	case EV_MEDIC_CALL:
+		if( cent->currentState.number < 0 || cent->currentState.number >= MAX_CLIENTS ) {
+			CG_Printf( "Ignoring medic call with invalid client %i\n", cent->currentState.number );
+			break;
+		}
 		switch( cgs.clientinfo[ cent->currentState.number ].team ) {
 			case TEAM_AXIS:
 				trap_S_StartSound( NULL, cent->currentState.number, CHAN_AUTO, cgs.media.sndMedicCall[0] );

@@ -766,7 +766,7 @@ int BotMP_FindGoal_BuildGoalList( bot_state_t* bs, botgoalFind_t* pGoals, int ma
 		}
 
 		// PLANT LAND MINES
-		if(G_CountTeamLandmines(bs->sess.sessionTeam) < MAX_TEAM_LANDMINES) {
+		if(G_CountTeamLandmines(bs->sess.sessionTeam) < team_maxLandmines.integer) {
 			// look for a land mine area that isn't full
 			trav = NULL;
 			while ((trav = BotFindNextStaticEntity( trav, BOTSTATICENTITY_BOT_LANDMINE_AREA ))) {
@@ -1984,7 +1984,7 @@ qboolean BotMP_FindGoal( bot_state_t *bs ) {
 	}
 
 	// PLANT LAND MINES
-	if (bs->sess.playerType == PC_ENGINEER && (G_CountTeamLandmines(bs->sess.sessionTeam) < MAX_TEAM_LANDMINES)) {
+	if (bs->sess.playerType == PC_ENGINEER && (G_CountTeamLandmines(bs->sess.sessionTeam) < team_maxLandmines.integer)) {
 		// look for a land mine area that isn't full
 		closestTime = 0;
 		trav = NULL;

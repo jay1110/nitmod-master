@@ -1,0 +1,345 @@
+{
+  "schema_version": 2,
+  "original_sha256": "84a7e7958952f804d65fbe6db6b4758ea0cf6b596b26a514a68de0ba3bd9ef49",
+  "engine_vtable": [
+    {
+      "slot": 0,
+      "symbol": "_ZN11ETInterface6AddBotERK13MessageHelper",
+      "elf_address": 2239616,
+      "code_sha256": "954a8b4ba6b931379cb1e223103d7c63946564e933f9faeea8b53efb11107f2f"
+    },
+    {
+      "slot": 1,
+      "symbol": "_ZN11ETInterface9RemoveBotERK13MessageHelper",
+      "elf_address": 2242368,
+      "code_sha256": "7a3e237689ea2f2498801ca48d709e3516d312d09a0e3b0ad06d646b9e3c51d0"
+    },
+    {
+      "slot": 2,
+      "symbol": "_ZN11ETInterface10ChangeTeamEiiPK13MessageHelper",
+      "elf_address": 2251376,
+      "code_sha256": "dd524ad7306ca7933505b57a3bbfa6d27658c7261de8649c250a2c8bac77d955"
+    },
+    {
+      "slot": 3,
+      "symbol": "_ZN11ETInterface11ChangeClassEiiPK13MessageHelper",
+      "elf_address": 2266832,
+      "code_sha256": "f79c82c7941637ea6ecae0497fa2f2656040756f059133b99b47d6f0808cb820"
+    },
+    {
+      "slot": 4,
+      "symbol": "_ZN11ETInterface14UpdateBotInputEiRK11ClientInput",
+      "elf_address": 2238064,
+      "code_sha256": "35ea14f0310f976ec4f34adc2a1ef5d74a9c1fbbc80a0092aa1fcc9738fe38ef"
+    },
+    {
+      "slot": 5,
+      "symbol": "_ZN11ETInterface10BotCommandEiPKc",
+      "elf_address": 2237968,
+      "code_sha256": "fcbbd0dd65249a883d82e25f6bd5900ef5fb63c1126178382fb55c4a3069efcd"
+    },
+    {
+      "slot": 6,
+      "symbol": "_ZN11ETInterface7IsInPVSEPKfS1_",
+      "elf_address": 2238016,
+      "code_sha256": "2db2c795c53f845bf1c3d5d1f264a2b13d4f47667336904cd0e17f3be271f080"
+    },
+    {
+      "slot": 7,
+      "symbol": "_ZN11ETInterface9TraceLineER13obTraceResultPKfS3_PK6AABB_tii7eobBool",
+      "elf_address": 2262928,
+      "code_sha256": "c50578048fc71dabd9557738fd3f25c53cdeda4bfa520eebd5610b4e783d7d3f"
+    },
+    {
+      "slot": 8,
+      "symbol": "_ZN11ETInterface16GetPointContentsEPKf",
+      "elf_address": 2262848,
+      "code_sha256": "8f7f4300ca3a938d93d3947cb793df2145f5289b9fafe4c4101403e1c5d7ed67"
+    },
+    {
+      "slot": 9,
+      "symbol": "_ZN11ETInterface18GetLocalGameEntityEv",
+      "elf_address": 2250960,
+      "code_sha256": "8772bbb286f9c342462cc7da0465c7ad8aaf261af7cab85210a4da5369b01ed2"
+    },
+    {
+      "slot": 10,
+      "symbol": "_ZN11ETInterface18FindEntityInSphereEPKff10GameEntityi",
+      "elf_address": 2248928,
+      "code_sha256": "78e056c2dbfbb2bddf7c422a2fb903da020364ffaf8c53b85e2069fb8a801c19"
+    },
+    {
+      "slot": 11,
+      "symbol": "_ZN11ETInterface14GetEntityClassE10GameEntity",
+      "elf_address": 2252464,
+      "code_sha256": "abadea9b7efb1fb5c761af5a169cc88be3a2b3b405aab1d27d65f98dce97ecc7"
+    },
+    {
+      "slot": 12,
+      "symbol": "_ZN11ETInterface17GetEntityCategoryE10GameEntityR9BitFlag32",
+      "elf_address": 2244992,
+      "code_sha256": "c1f59d0cd73243bcac62abaae2717526e2611c21e7e28d970b2baf83a445c373"
+    },
+    {
+      "slot": 13,
+      "symbol": "_ZN11ETInterface14GetEntityFlagsE10GameEntityR9BitFlag64",
+      "elf_address": 2261632,
+      "code_sha256": "d56faa3ef9d3db94bcbf77bed85c2dbb70a22ce510370a421cef1e98c9a236c8"
+    },
+    {
+      "slot": 14,
+      "symbol": "_ZN11ETInterface17GetEntityPowerupsE10GameEntityR9BitFlag64",
+      "elf_address": 2236608,
+      "code_sha256": "251447ee91a9067dcd6ab96703133f617565974cd6c4819021760c4688c91abf"
+    },
+    {
+      "slot": 15,
+      "symbol": "_ZN11ETInterface20GetEntityEyePositionE10GameEntityPf",
+      "elf_address": 2246480,
+      "code_sha256": "96c77ddafd72820060c9ade8e303f0228864666be6ba664914959bf4c3c9b1c1"
+    },
+    {
+      "slot": 16,
+      "symbol": "_ZN11ETInterface21GetEntityBonePositionE10GameEntityiPf",
+      "elf_address": 2246096,
+      "code_sha256": "f48a70ae5c0d459a42decbe8544ac932ad5303ea227bbf99eebead6377dfe921"
+    },
+    {
+      "slot": 17,
+      "symbol": "_ZN11ETInterface20GetEntityOrientationE10GameEntityPfS1_S1_",
+      "elf_address": 2244832,
+      "code_sha256": "a45332db8268c22b80b5972b55bc64db353c3a6d22afc33ee3eedd55c98e05fd"
+    },
+    {
+      "slot": 18,
+      "symbol": "_ZN11ETInterface17GetEntityVelocityE10GameEntityPf",
+      "elf_address": 2244624,
+      "code_sha256": "12fdeec3c82c000b65d0140a50d7bafd6ad4af1773cc95f47e5ce35d39faab32"
+    },
+    {
+      "slot": 19,
+      "symbol": "_ZN11ETInterface17GetEntityPositionE10GameEntityPf",
+      "elf_address": 2244288,
+      "code_sha256": "02c8bb4570423106090072e66057ab84ac38a42340a2266f063de96a7787a2e9"
+    },
+    {
+      "slot": 20,
+      "symbol": "_ZN11ETInterface18GetEntityLocalAABBE10GameEntityR6AABB_t",
+      "elf_address": 2243744,
+      "code_sha256": "2fa2e74de4d27325230dca178ea2fa98c01b3993fc4a7ec10f9e40e111039c61"
+    },
+    {
+      "slot": 21,
+      "symbol": "_ZN11ETInterface18GetEntityWorldAABBE10GameEntityR6AABB_t",
+      "elf_address": 2246896,
+      "code_sha256": "f07a926ee38db1bebb3b964cfd1d90f4de1015fafe83e59efa5e12bbdd24251b"
+    },
+    {
+      "slot": 22,
+      "symbol": "_ZN11ETInterface17GetEntityWorldOBBE10GameEntityPfS1_S1_S1_S1_",
+      "elf_address": 2243360,
+      "code_sha256": "ccd122ca1344be0f17e57f4300f4fc7b0005c351ac1d1de27def26a795dd65e7"
+    },
+    {
+      "slot": 23,
+      "symbol": "_ZN11ETInterface21GetEntityGroundEntityE10GameEntityRS0_",
+      "elf_address": 2248784,
+      "code_sha256": "a5520a43c634a9294a1ccd74525ecb7a36a0961db671f795a1c528fc6ba3ab16"
+    },
+    {
+      "slot": 24,
+      "symbol": "_ZN11ETInterface14GetEntityOwnerE10GameEntity",
+      "elf_address": 2248304,
+      "code_sha256": "eabd53e6ecf4f34303795803a5054af0629c90d226832b5d4b6344c085667292"
+    },
+    {
+      "slot": 25,
+      "symbol": "_ZN11ETInterface13GetEntityTeamE10GameEntity",
+      "elf_address": 2251136,
+      "code_sha256": "32d09aa8f80139a7c9ccb47d863041b146121a61c6412a57ffdbabf09b9e27cd"
+    },
+    {
+      "slot": 26,
+      "symbol": "_ZN11ETInterface13GetEntityNameE10GameEntity",
+      "elf_address": 2266768,
+      "code_sha256": "fc507dfc6f1cf61ddf31f0b96c3ad534e6373e0a9b03dc85e7ec487f9d660d32"
+    },
+    {
+      "slot": 27,
+      "symbol": "_ZN11ETInterface20GetCurrentWeaponClipE10GameEntity9eFireModeRiS2_",
+      "elf_address": 2243152,
+      "code_sha256": "ef6803aea16f481a505267edeed9f385dc9a45b7f73b142544879883c7dcdb34"
+    },
+    {
+      "slot": 28,
+      "symbol": "_ZN11ETInterface14GetCurrentAmmoE10GameEntityi9eFireModeRiS2_",
+      "elf_address": 2242896,
+      "code_sha256": "c2ee9856ca0a05102887a5bedca95216690f60e70c7faa9614060d5f5821215f"
+    },
+    {
+      "slot": 29,
+      "symbol": "_ZN11ETInterface11GetGameTimeEv",
+      "elf_address": 2236624,
+      "code_sha256": "828f275934d8317c76c2b8a04c57a896eb90b7e00bb89ea2e6224f3b5a59afd0"
+    },
+    {
+      "slot": 30,
+      "symbol": "_ZN11ETInterface8GetGoalsEv",
+      "elf_address": 2263680,
+      "code_sha256": "3d7536b4c76a9a07f5ca093e792435ae51a2da6eb211bbf6f98f9f355b5f0a1a"
+    },
+    {
+      "slot": 31,
+      "symbol": "_ZN11ETInterface13GetPlayerInfoER12obPlayerInfo",
+      "elf_address": 2252096,
+      "code_sha256": "4dd3c0966d78bbbfd0f4ee942526ba96406ad18caf3d4419ca455d6d55c95aef"
+    },
+    {
+      "slot": 32,
+      "symbol": "_ZN11ETInterface20InterfaceSendMessageERK13MessageHelper10GameEntity",
+      "elf_address": 2253568,
+      "code_sha256": "e3c80bf458802066539a75a89f639dec7019d27e76c83dc44cc95b02b3e54969"
+    },
+    {
+      "slot": 33,
+      "symbol": "_ZN11ETInterface9DebugLineEPKfS1_RK7obColorf",
+      "elf_address": 2236544,
+      "code_sha256": "a8448ee8d874891b2ab1988ea8a7d1d19d75a64964724b8eb37e9106327725a8"
+    },
+    {
+      "slot": 34,
+      "symbol": "_ZN16IEngineInterface8DebugBoxEPKfS1_RK7obColorf",
+      "elf_address": 2236416,
+      "code_sha256": "251447ee91a9067dcd6ab96703133f617565974cd6c4819021760c4688c91abf"
+    },
+    {
+      "slot": 35,
+      "symbol": "_ZN16IEngineInterface10DebugArrowEPKfS1_RK7obColorf",
+      "elf_address": 2236432,
+      "code_sha256": "46bcfb06d6e49153b31373e0c2bb069fa4f2db0de3c7cfd267e71b47daf93fb1"
+    },
+    {
+      "slot": 36,
+      "symbol": "_ZN11ETInterface11DebugRadiusEPKffRK7obColorf",
+      "elf_address": 2236576,
+      "code_sha256": "ed80e525f0cf2b142234d1956e18819153d582d765709548bdc4075f45ff6d65"
+    },
+    {
+      "slot": 37,
+      "symbol": "_ZN16IEngineInterface12DebugPolygonEPK6obVec3iRK7obColorfi",
+      "elf_address": 2236512,
+      "code_sha256": "251447ee91a9067dcd6ab96703133f617565974cd6c4819021760c4688c91abf"
+    },
+    {
+      "slot": 38,
+      "symbol": "_ZN16IEngineInterface15PrintScreenTextEPKffRK7obColorPKc",
+      "elf_address": 2236528,
+      "code_sha256": "251447ee91a9067dcd6ab96703133f617565974cd6c4819021760c4688c91abf"
+    },
+    {
+      "slot": 39,
+      "symbol": "_ZN11ETInterface10PrintErrorEPKc",
+      "elf_address": 2236976,
+      "code_sha256": "e4cc767cbabe73b72450dbfac95c8c23b2c452f15f8446d7261155a2c89f868a"
+    },
+    {
+      "slot": 40,
+      "symbol": "_ZN11ETInterface12PrintMessageEPKc",
+      "elf_address": 2236800,
+      "code_sha256": "1c964a90380972450baae9099c187402dff621461622ce3d62ce42afa6609407"
+    },
+    {
+      "slot": 41,
+      "symbol": "_ZN11ETInterface10GetMapNameEv",
+      "elf_address": 2236656,
+      "code_sha256": "f1fa5d62f2c3088292f38b5ec7a122958f4ce6dbb48bac0d163525d71b940097"
+    },
+    {
+      "slot": 42,
+      "symbol": "_ZN11ETInterface13GetMapExtentsER6AABB_t",
+      "elf_address": 2239296,
+      "code_sha256": "1ab18de3493e4ebec82e6346911ee53f61a6c5093c680646d2705a331f87c1b0"
+    },
+    {
+      "slot": 43,
+      "symbol": "_ZN11ETInterface12EntityFromIDEi",
+      "elf_address": 2248192,
+      "code_sha256": "c07bc915c78ae42231987d41dc4d9f4c9aebd8638c8cc412068890893d0e4dd8"
+    },
+    {
+      "slot": 44,
+      "symbol": "_ZN11ETInterface12EntityByNameEPKc",
+      "elf_address": 2248080,
+      "code_sha256": "624ece8215ce0fb2b2796a1900a2e313079d5cf988129eee3c5291aaad9a383e"
+    },
+    {
+      "slot": 45,
+      "symbol": "_ZN11ETInterface12IDFromEntityE10GameEntity",
+      "elf_address": 2242816,
+      "code_sha256": "4cd86d780d3dcda15c5965d6e93b5714d0e60122f903dae748012569d132eb95"
+    },
+    {
+      "slot": 46,
+      "symbol": "_ZN11ETInterface20DoesEntityStillExistERK10GameEntity",
+      "elf_address": 2242752,
+      "code_sha256": "ab07ddc485c73e8de0e33439ad99ae2489370e13c8391759ca25800d5023bc21"
+    },
+    {
+      "slot": 47,
+      "symbol": "_ZN11ETInterface18GetAutoNavFeaturesEP16AutoNavFeature_ti",
+      "elf_address": 2237184,
+      "code_sha256": "e321c3fdbb6788f8e9a0f70d13e190ad7cc43ea9791c12573e53c86ba67008db"
+    },
+    {
+      "slot": 48,
+      "symbol": "_ZN11ETInterface11GetGameNameEv",
+      "elf_address": 2236688,
+      "code_sha256": "4e29a590b42c5ef2d65825a0c8de6152078bd5366dd80402d4c20c18d8305daa"
+    },
+    {
+      "slot": 49,
+      "symbol": "_ZN11ETInterface10GetModNameEv",
+      "elf_address": 2236720,
+      "code_sha256": "5c51b8b7a1d930d5b14f2b54977108717d0f7a3b8c09fb8697575f2edde921d8"
+    },
+    {
+      "slot": 50,
+      "symbol": "_ZN11ETInterface10GetModVersEv",
+      "elf_address": 2236752,
+      "code_sha256": "4d514eaf6f7eb2c76d0d6657fd751629bededc73b111381b83ab0434340d575e"
+    },
+    {
+      "slot": 51,
+      "symbol": "_ZN11ETInterface10GetBotPathEv",
+      "elf_address": 2237152,
+      "code_sha256": "c2a74b9615b90ea57fd2178cb42483d5c4ece194f1561d71cbc9872a5775243e"
+    },
+    {
+      "slot": 52,
+      "symbol": "_ZN11ETInterface10GetLogPathEv",
+      "elf_address": 2237072,
+      "code_sha256": "48513ec1d8d8827242ef5e9137f5cb943e3f9797864a72824687547fd1660365"
+    },
+    {
+      "slot": 53,
+      "symbol": "_ZN11ETInterfaceD1Ev",
+      "elf_address": 2236784,
+      "code_sha256": "ae3f4619b0413d70d3004b9131c3752153074e45725be13b9a148978895e359e"
+    },
+    {
+      "slot": 54,
+      "symbol": "_ZN11ETInterfaceD0Ev",
+      "elf_address": 2237040,
+      "code_sha256": "a7cc9adbb39513c041c40b22219029504ebf5776dcbcac2867c816141bde4fda"
+    }
+  ],
+  "version": 17,
+  "table_bytes_i386": 44,
+  "library_basename": "omnibot_et",
+  "export_symbol": "ExportBotFunctionsFromDLL",
+  "path_format": "%s/%s.so",
+  "bare_format": "./%s.so",
+  "home_format": "%s/omni-bot/%s.so",
+  "init_success_code": 0,
+  "runtime_compatible": false
+}

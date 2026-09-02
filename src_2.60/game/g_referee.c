@@ -4,7 +4,7 @@
 // rhea@OrangeSmoothie.org
 //
 #include "g_local.h"
-#include "../../etmain/ui/menudef.h"
+#include "../../pak/ui/menudef.h"
 
 
 //

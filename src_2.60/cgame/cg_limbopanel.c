@@ -1,4 +1,5 @@
 #include "cg_local.h"
+#include "cg_nitmod_config.h"
 
 #define SOUNDEVENT( sound ) trap_S_StartLocalSound( sound, CHAN_LOCAL_SOUND )
 
@@ -1193,6 +1194,7 @@ void CG_LimboPanel_RenderTeamButton( panel_button_t* button ) {
 }
 
 qboolean CG_LimboPanel_ClassButton_KeyDown( panel_button_t* button, int key ) {
+	if(NITMOD_ClassIsDisabled(CG_LimboPanel_GetTeam(), button->data[1])) return qfalse;
 	if( CG_LimboPanel_GetTeam() == TEAM_SPECTATOR ) {
 		return qfalse;
 	}
@@ -1330,6 +1332,9 @@ void CG_LimboPanel_RenderClassButton( panel_button_t* button ) {
 		trap_R_SetColor( clr2 );
 		CG_DrawPic( button->rect.x, button->rect.y, button->rect.w, button->rect.h, cgs.media.limboClassButtons2[button->data[1]] );
 		trap_R_SetColor( NULL );
+	}
+	if(NITMOD_ClassIsDisabled(CG_LimboPanel_GetTeam(), button->data[1])) {
+		CG_DrawPic(button->rect.x, button->rect.y, button->rect.w, button->rect.h, cgs.media.friendShader);
 	}
 }
 

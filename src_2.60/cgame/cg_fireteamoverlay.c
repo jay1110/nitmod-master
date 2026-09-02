@@ -3,6 +3,7 @@
 ****/
 
 #include "cg_local.h"
+#include "cg_nitmod_config.h"
 
 /******************************************************************************
 ***** Defines, constants, etc 
@@ -95,7 +96,8 @@ void CG_ParseFireteams() {
 
 	for(i = 0; i < MAX_FIRETEAMS; i++) {
 		char hexbuffer[11] = "0x00000000";
-		p = CG_ConfigString(CS_FIRETEAMS + i);
+		p = NITMOD_AssetConfigString(CS_FIRETEAMS + i);
+		if(!*p) { cg.fireTeams[i].inuse = qfalse; continue; }
 		
 /*		s = Info_ValueForKey(p, "n");
 		if(!s || !*s) {
@@ -108,7 +110,7 @@ void CG_ParseFireteams() {
 //		Q_strncpyz(cg.fireTeams[i].name, s, 32);
 //		CG_Printf("Fireteam: %s\n", cg.fireTeams[i].name);
 
-		j = atoi(Info_ValueForKey(p, "id"));
+		j = atoi(Info_ValueForKey(p, NITMOD_UsesOriginalProtocol() ? "n" : "id"));
 		if(j == -1) {
 			cg.fireTeams[i].inuse = qfalse;
 			continue;
@@ -121,6 +123,8 @@ void CG_ParseFireteams() {
 		cg.fireTeams[i].leader = atoi(s);
 
 		s = Info_ValueForKey(p, "c");
+		if(strlen(s) != 16) { cg.fireTeams[i].inuse = qfalse; continue; }
+		clnts[0] = clnts[1] = 0;
 		Q_strncpyz(hexbuffer+2, s, 9);
 		sscanf(hexbuffer, "%x", &clnts[1]);
 		Q_strncpyz(hexbuffer+2, s+8, 9);

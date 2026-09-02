@@ -1,6 +1,7 @@
 // cg_view.c -- setup all the parameters (position, angle, etc)
 // for a 3D rendering
 #include "cg_local.h"
+#include "cg_nitmod_config.h"
 
 //========================
 extern 	pmove_t		cg_pmove;
@@ -1401,8 +1402,9 @@ CG_ParseTagConnects
 
 void CG_ParseTagConnects( void ) {
 	int i;
+	int start = NITMOD_TagConnectBase();
 
-	for( i = CS_TAGCONNECTS; i < CS_TAGCONNECTS + MAX_TAGCONNECTS; i++ ) {
+	for( i = start; i < start + MAX_TAGCONNECTS; i++ ) {
 		CG_ParseTagConnect( i );
 	}
 }
@@ -1726,6 +1728,7 @@ void CG_DrawActiveFrame( int serverTime, stereoFrame_t stereoView, qboolean demo
 
 	// update cvars
 	CG_UpdateCvars();
+	NITMOD_ApplyForcedCvars();
 
 	DEBUGTIME
 
@@ -1947,4 +1950,3 @@ void CG_DrawActiveFrame( int serverTime, stereoFrame_t stereoView, qboolean demo
 	// let the client system know what our weapon, holdable item and zoom settings are
 	trap_SetUserCmdValue( cg.weaponSelect, cg.showGameView ? 0x01 : 0x00, cg.zoomSensitivity, cg.identifyClientRequest );
 }
-

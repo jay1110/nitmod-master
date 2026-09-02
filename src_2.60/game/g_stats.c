@@ -105,14 +105,6 @@ void G_PrintAccuracyLog( gentity_t *ent ) {
 	trap_SendServerCommand( ent-g_entities, buffer );
 }
 
-void G_SetPlayerScore( gclient_t *client ) {
-	int i;
-
-	for( client->ps.persistant[PERS_SCORE] = 0, i = 0; i < SK_NUM_SKILLS; i++ ) {
-		client->ps.persistant[PERS_SCORE] += client->sess.skillpoints[i];
-	}
-}
-
 void G_SetPlayerSkill( gclient_t *client, skillType_t skill ) {
 	int i;
 

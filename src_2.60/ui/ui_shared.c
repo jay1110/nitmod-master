@@ -1579,6 +1579,16 @@ void Script_CopyCvar(itemDef_t *item, qboolean *bAbort, char **args) {
 	}
 }
 
+void Script_ToggleCvarBit(itemDef_t *item, qboolean *bAbort, char **args) {
+	const char *cvar, *mask;
+	char value[256];
+	(void)item; (void)bAbort;
+	if (String_Parse(args, &cvar) && String_Parse(args, &mask)) {
+		DC->getCVarString(cvar, value, sizeof(value));
+		DC->setCVar(cvar, va("%i", atoi(value) ^ atoi(mask)));
+	}
+}
+
 void Script_Exec(itemDef_t *item, qboolean *bAbort, char **args) {
 	const char *val=NULL;
 	if (String_Parse(args, &val)) {
@@ -1810,6 +1820,7 @@ commandDef_t commandList[] =
 	{"setcvar", &Script_SetCvar},				// group/name
 	{"clearcvar", &Script_ClearCvar},
 	{"copycvar", &Script_CopyCvar},
+	{"togglecvarbit", &Script_ToggleCvarBit},
 	{"exec", &Script_Exec},						// group/name
 	{"execnow", &Script_ExecNOW},				// group/name
 	{"play", &Script_Play},						// group/name
@@ -2596,7 +2607,7 @@ qboolean Item_CheckBox_HandleKey( itemDef_t *item, int key ) {
 					if( curvalue > 2 )
 						curvalue = 0;
 					DC->setCVar( item->cvar, va( "%i", curvalue ) );
-				} else {
+				} else if (!item->bitflag) {
 					DC->setCVar( item->cvar, va( "%i", !DC->getCVarValue( item->cvar ) ) );
 				}
 			}
@@ -3998,6 +4009,7 @@ void Item_CheckBox_Paint( itemDef_t *item ) {
 	multiDef_t *multiPtr = (multiDef_t*)item->typeData;
 
 	value = (item->cvar) ? DC->getCVarValue(item->cvar) : 0;
+	if (item->bitflag) value = (int)value & item->bitflag;
 
 	if (item->window.flags & WINDOW_HASFOCUS && item->window.flags & WINDOW_FOCUSPULSE) {
 		lowLight[0] = 0.8 * parent->focusColor[0]; 
@@ -6477,6 +6489,10 @@ qboolean ItemParse_voteFlag( itemDef_t *item, int handle )
 	return(PC_Int_Parse(handle, &item->voteFlag));
 }
 
+qboolean ItemParse_bitflag( itemDef_t *item, int handle ) {
+	return PC_Int_Parse(handle, &item->bitflag);
+}
+
 keywordHash_t itemParseKeywords[] =
 {
 	{ "accept",				ItemParse_accept,			NULL },	// NERVE - SMF
@@ -6560,6 +6576,7 @@ keywordHash_t itemParseKeywords[] =
 	{ "type",				ItemParse_type,				NULL },
 	{ "visible",			ItemParse_visible,			NULL },
 	{ "voteFlag",			ItemParse_voteFlag,			NULL }, // OSP - vote check
+	{ "bitflag",             ItemParse_bitflag,          NULL },
 	{ "wrapped",			ItemParse_wrapped,			NULL },
 
 	{ NULL,					NULL,						NULL }

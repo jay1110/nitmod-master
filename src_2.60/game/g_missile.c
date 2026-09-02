@@ -1,4 +1,6 @@
 #include "g_local.h"
+#include "g_nitmod_config.h"
+#include "g_nitmod_entities.h"
 
 #define	MISSILE_PRESTEP_TIME	50
 
@@ -314,6 +316,8 @@ void G_ExplodeMissile( gentity_t *ent ) {
 	}
 
 	etype = ent->s.eType;
+	G_NITMOD_UnregisterSatchel( ent );
+	G_NITMOD_UnregisterLandmine( ent );
 	ent->s.eType = ET_GENERAL;
 
 	// splash damage
@@ -420,6 +424,14 @@ void G_ExplodeMissile( gentity_t *ent ) {
 				if ( ((hit->spawnflags & AXIS_OBJECTIVE) && (ent->s.teamNum == TEAM_ALLIES)) || ((hit->spawnflags & ALLIED_OBJECTIVE) && (ent->s.teamNum == TEAM_AXIS)) ) {
 					if( ent->parent->client && G_GetWeaponClassForMOD( MOD_DYNAMITE ) >= hit->target_ent->constructibleStats.weaponclass ) {
 						G_AddKillSkillPointsForDestruction( ent->parent, MOD_DYNAMITE, &hit->target_ent->constructibleStats );
+					}
+
+					/* Objective targets flagged as persistent are damaged; all
+					 * other targets are destroyed, matching the original ob event. */
+					if( ent->parent && ent->parent->client ) {
+						nitmod_ObjectiveEvent( 4, ( hit->spawnflags & 8 ) ? 4 : 3,
+							hit->s.teamNum, ent->parent->s.number,
+							ent->splashMethodOfDeath );
 					}
 
 					G_UseTargets( hit, ent );
@@ -1230,6 +1242,15 @@ void G_FadeItems(gentity_t* ent, int modType) {
 	gentity_t* e;
 	int i;
 
+	if( modType == MOD_SATCHEL ) {
+		G_NITMOD_FadeSatchels( ent, G_FreeEntity );
+		return;
+	}
+	if( modType == MOD_LANDMINE ) {
+		G_NITMOD_FadeLandmines( ent, NITMOD_FreeFadedLandmine );
+		return;
+	}
+
 	e = &g_entities[MAX_CLIENTS];
 	for ( i = MAX_CLIENTS ; i<level.num_entities ; i++, e++) {
 		if ( !e->inuse ) {
@@ -1256,92 +1277,11 @@ void G_FadeItems(gentity_t* ent, int modType) {
 }
 
 int G_CountTeamLandmines ( team_t team ) {
-	gentity_t* e;
-	int i;
-	int cnt = 0;
-
-	e = &g_entities[MAX_CLIENTS];
-	for( i = MAX_CLIENTS ; i<level.num_entities ; i++, e++ ) {
-		if ( !e->inuse ) {
-			continue;
-		}
-
-		if ( e->s.eType != ET_MISSILE) {
-			continue;
-		}
-
-		if ( e->methodOfDeath != MOD_LANDMINE) {
-			continue;
-		}
-
-		if ( e->s.teamNum % 4 == team && e->s.teamNum < 4) {
-			cnt++;
-		}
-	}
-
-	return cnt;
-}
-
-qboolean G_SweepForLandmines( vec3_t origin, float radius, int team ) {
-	gentity_t* e;
-	int i;
-	vec3_t dist;
-
-	radius *= radius;
-
-	e = &g_entities[MAX_CLIENTS];
-	for( i = MAX_CLIENTS; i < level.num_entities; i++, e++) {
-		if( !e->inuse ) {
-			continue;
-		}
-
-		if( e->s.eType != ET_MISSILE) {
-			continue;
-		}
-
-		if( e->methodOfDeath != MOD_LANDMINE) {
-			continue;
-		}
-
-		if( e->s.teamNum % 4 != team && e->s.teamNum < 4) {
-			VectorSubtract( origin, e->r.currentOrigin, dist );
-			if( VectorLengthSquared( dist ) > radius ) {
-				continue;
-			}
-
-			return( qtrue ); // found one
-		}
-	}
-
-	return( qfalse );
+	return G_NITMOD_CountTeamLandmines( team, team_maxLandmines.integer );
 }
 
 gentity_t *G_FindSatchel(gentity_t* ent) {
-	gentity_t* e;
-	int i;
-
-	e = &g_entities[MAX_CLIENTS];
-	for ( i = MAX_CLIENTS ; i<level.num_entities ; i++, e++) {
-		if ( !e->inuse ) {
-			continue;
-		}
-
-		if ( e->s.eType != ET_MISSILE) {
-			continue;
-		}
-
-		if ( e->methodOfDeath != MOD_SATCHEL) {
-			continue;
-		}
-
-		if ( e->parent != ent ) {
-			continue;
-		}
-
-		return e;
-	}
-
-	return NULL;
+	return G_NITMOD_FindSatchel( ent );
 }
 
 /*
@@ -1394,66 +1334,7 @@ G_ExplodeSatchels
 ==========
 */
 qboolean G_ExplodeSatchels(gentity_t* ent) {
-	gentity_t* e;
-	vec3_t dist;
-	int i;
-	qboolean blown = qfalse;
-
-	e = &g_entities[MAX_CLIENTS];
-	for( i = MAX_CLIENTS ; i < level.num_entities; i++, e++ ) {
-		if( !e->inuse ) {
-			continue;
-		}
-
-		if( e->s.eType != ET_MISSILE) {
-			continue;
-		}
-
-		if( e->methodOfDeath != MOD_SATCHEL) {
-			continue;
-		}
-
-		VectorSubtract(e->r.currentOrigin, ent->r.currentOrigin, dist);
-		if( VectorLengthSquared(dist) > SQR(2000)) {
-			continue;
-		}
-
-		if ( e->parent != ent ) {
-			continue;
-		}
-
-		G_ExplodeMissile(e);
-		blown = qtrue;
-	}
-
-	return blown;
-}
-
-void G_FreeSatchel( gentity_t* ent ) {
-	gentity_t* other;
-
-	ent->free = NULL;
-
-	if( ent->s.eType != ET_MISSILE ) {
-		return;
-	}
-		
-	other = &g_entities[ent->s.clientNum];
-
-	if( !other->client || other->client->pers.connected != CON_CONNECTED ) {
-		return;
-	}
-
-	if( other->client->sess.playerType != PC_COVERTOPS ) {
-		return;
-	}
-
-	other->client->ps.ammo[WP_SATCHEL_DET] = 0;
-	other->client->ps.ammoclip[WP_SATCHEL_DET] = 0;
-	other->client->ps.ammoclip[WP_SATCHEL] = 1;
-	if( other->client->ps.weapon == WP_SATCHEL_DET ) {
-		G_AddEvent( other, EV_NOAMMO, 0 );
-	}
+	return G_NITMOD_ExplodeSatchels( ent, G_ExplodeMissile ) ? qtrue : qfalse;
 }
 
 /*
@@ -1464,13 +1345,17 @@ LandMineTrigger
 void LandminePostThink( gentity_t *self );
 
 void LandMineTrigger(gentity_t* self) {
-	self->r.contents = CONTENTS_CORPSE;
+	/* Original ELF 0x8de73/0x8de93 retains body collision on triggering. */
+	self->r.contents = CONTENTS_BODY;
 	trap_LinkEntity( self );
 	self->nextthink = level.time + FRAMETIME;
 	self->think = LandminePostThink;
 	self->s.teamNum += 8;
 	// rain - communicate trigger time to client
 	self->s.time = level.time;
+	/* Original LandMineTrigger: latched trigger state for mine contact checks.
+	 * This shared field is overloaded by entity type, not a fire timestamp here. */
+	self->s.onFireStart = 1;
 }
 
 void LandMinePostTrigger(gentity_t* self) {
@@ -1538,23 +1423,7 @@ G_LandmineThink
 //		Function to check if an entity will set off a landmine
 #define LANDMINE_TRIGGER_DIST 64.0f
 
-qboolean sEntWillTriggerMine(gentity_t *ent, gentity_t *mine)
-{
-	// player types are the only things that set off mines (human and bot)
-	if (ent->s.eType == ET_PLAYER && ent->client)
-	{
-		vec3_t dist;
-		VectorSubtract(mine->r.currentOrigin, ent->r.currentOrigin, dist);
-		// have to be within the trigger distance AND on the ground -- if we jump over a mine, we don't set it off
-		//		(or if we fly by after setting one off)
-		if ( (VectorLengthSquared(dist) <= SQR(LANDMINE_TRIGGER_DIST)) && (fabs(dist[2]) < 45.f) )
-		{
-			return qtrue;
-		}
-	}
-
-	return qfalse;
-}
+/* Typed contact policy is implemented in g_nitmod_mine_contact.c. */
 
 // Gordon: Landmine waits for 2 seconds then primes, which sets think to checking for "enemies"
 void G_LandmineThink( gentity_t *self ) {
@@ -1583,9 +1452,14 @@ void G_LandmineThink( gentity_t *self ) {
 			continue;
 		}
 
-		//%	if( !g_friendlyFire.integer && G_LandmineTeam( self ) == ent->client->sess.sessionTeam ) {
-		//%		continue;
-		//%	}
+		if( !G_NITMOD_MineTeamContact( ent, self->parent,
+		        G_LandmineTeam( self ), g_friendlyFire.integer ) ) {
+			continue;
+		}
+		if( !G_NITMOD_MineBotContact( ent, G_LandmineTeam( self ),
+		        G_LandmineSpotted( self ), g_OmniBotFlags.integer ) ) {
+			continue;
+		}
 
 		// TAT 11/20/2002 use the unified trigger check to see if we are close enough to prime the mine
 		if( sEntWillTriggerMine( ent, self ) ) {
@@ -1769,8 +1643,10 @@ gentity_t *fire_grenade (gentity_t *self, vec3_t start, vec3_t dir, int grenadeW
 			bolt->s.eFlags				= EF_BOUNCE_HALF | EF_BOUNCE;
 			// rain - this is supposed to be MOD_SMOKEBOMB, not SMOKEGRENADE
 			bolt->methodOfDeath			= MOD_SMOKEBOMB;
+			G_NITMOD_ConfigureSmokeDamage( bolt, g_damageweapons.integer );
 			break;
 		case WP_GRENADE_LAUNCHER:
+			G_NITMOD_ConfigureGrenadeDamage( bolt, g_damageweapons.integer );
 			bolt->classname				= "grenade";
 			bolt->splashRadius			= 300;
 			bolt->methodOfDeath			= MOD_GRENADE_LAUNCHER;
@@ -1778,6 +1654,7 @@ gentity_t *fire_grenade (gentity_t *self, vec3_t start, vec3_t dir, int grenadeW
 			bolt->s.eFlags				= EF_BOUNCE_HALF | EF_BOUNCE;
 			break;
 		case WP_GRENADE_PINEAPPLE:
+			G_NITMOD_ConfigureGrenadeDamage( bolt, g_damageweapons.integer );
 			bolt->classname				= "grenade";
 			bolt->splashRadius			= 300;
 			bolt->methodOfDeath			= MOD_GRENADE_LAUNCHER;
@@ -1786,6 +1663,7 @@ gentity_t *fire_grenade (gentity_t *self, vec3_t start, vec3_t dir, int grenadeW
 			break;
 // JPW NERVE
 		case WP_SMOKE_MARKER:
+			G_NITMOD_ConfigureAirstrikeMarkerDamage( bolt, g_damageweapons.integer );
 			bolt->classname				= "grenade";
 			bolt->s.eFlags				= EF_BOUNCE_HALF | EF_BOUNCE;
 			// rain - properly set MOD
@@ -1802,6 +1680,7 @@ gentity_t *fire_grenade (gentity_t *self, vec3_t start, vec3_t dir, int grenadeW
       break;
 		case WP_LANDMINE:
 			bolt->accuracy				= 0;
+			G_NITMOD_RegisterLandmine( bolt );
 			bolt->s.teamNum				= self->client->sess.sessionTeam + 4;
 			bolt->classname				= "landmine";
 			bolt->damage				= 0;
@@ -1811,7 +1690,8 @@ gentity_t *fire_grenade (gentity_t *self, vec3_t start, vec3_t dir, int grenadeW
 			bolt->s.eFlags				= (EF_BOUNCE | EF_BOUNCE_HALF);
 			bolt->health				= 5;
 			bolt->takedamage			= qtrue;
-			bolt->r.contents			= CONTENTS_CORPSE;	// (player can walk through)
+			/* Original landmine spawn: ELF 0x8f12d/0x8f132. */
+			bolt->r.contents			= CONTENTS_BODY;
 
 			bolt->r.snapshotCallback	= qtrue;
 
@@ -1822,6 +1702,7 @@ gentity_t *fire_grenade (gentity_t *self, vec3_t start, vec3_t dir, int grenadeW
 			break;
 		case WP_SATCHEL:
 			bolt->accuracy				= 0;
+			G_NITMOD_RegisterSatchel( bolt );
 			bolt->classname				= "satchel_charge";
 			bolt->damage				= 0;
 			bolt->splashRadius			= 300;
@@ -1830,7 +1711,10 @@ gentity_t *fire_grenade (gentity_t *self, vec3_t start, vec3_t dir, int grenadeW
 			bolt->s.eFlags				= (EF_BOUNCE | EF_BOUNCE_HALF);
 			bolt->health				= 5;
 			bolt->takedamage			= qfalse;
-			bolt->r.contents			= CONTENTS_CORPSE;	// (player can walk through)
+			G_NITMOD_ConfigureSatchelDamage( bolt, g_damageweapons.integer );
+			/* Original satchel spawn: ELF 0x8ee09/0x8ee0e, regardless
+			 * of the damage option. Death changes this to corpse contents. */
+			bolt->r.contents			= CONTENTS_BODY;
 
 			VectorSet(bolt->r.mins, -12, -12, 0);
 			VectorCopy(bolt->r.mins, bolt->r.absmin);
@@ -1855,7 +1739,9 @@ gentity_t *fire_grenade (gentity_t *self, vec3_t start, vec3_t dir, int grenadeW
 			bolt->health				= 5;
 			bolt->takedamage			= qfalse;
 			
-			bolt->r.contents			= CONTENTS_CORPSE;	// (player can walk through)
+			/* Original fire_grenade ELF 0x8f246..0x8f256: body collision,
+			 * independent of g_damageweapons; this does not enable damage. */
+			bolt->r.contents			= CONTENTS_BODY;
 
 			// nope - this causes the dynamite to impact on the players bb when he throws it.  
 			// will try setting it when it settles

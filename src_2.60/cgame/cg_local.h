@@ -533,6 +533,8 @@ typedef struct clientInfo_s {
 	int				weapon;
 	int				secondaryweapon;
 	int				latchedweapon;
+	/* Optional original rn configstring field; not a weapon/ammo inference. */
+	int				rifleGrenadeStatus;
 
 	int				refStatus;
 
@@ -562,6 +564,7 @@ typedef struct clientInfo_s {
 	int				weapHeat;
 	int				weaponState;
 	int				weaponState_last;
+	int latchedClass;
 } clientInfo_t;
 
 typedef enum {
@@ -2243,6 +2246,8 @@ void CG_StartMusic( void );
 void CG_QueueMusic( void );
 
 void CG_UpdateCvars( void );
+void CG_setClientFlags( void );
+unsigned int CG_NITMOD_ReloadPreferenceFlags( void );
 
 int CG_CrosshairPlayer( void );
 int CG_LastAttacker( void );

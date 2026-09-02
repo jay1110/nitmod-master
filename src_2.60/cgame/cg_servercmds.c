@@ -3,6 +3,8 @@
 // be a valid snapshot this frame
 
 #include "cg_local.h"
+#include "cg_nitmod_config.h"
+#include "cg_nitmod.h"
 
 #define SCOREPARSE_COUNT	9
 
@@ -17,46 +19,32 @@ CG_ParseScores
 */
 // Gordon: NOTE: team doesnt actually signify team, think i was on drugs that day.....
 static void CG_ParseScore( team_t team ) {
-	int		i, j, powerups;
-	int		numScores;
-	int		offset;
-
-	if( team == TEAM_AXIS ) {
-		cg.numScores = 0;
-		
-		cg.teamScores[0] = atoi( CG_Argv( 1 ) );
-		cg.teamScores[1] = atoi( CG_Argv( 2 ) );
-		
-		offset = 4;
-	} else {
-		offset = 2;
+	int i, j, count, values[MAX_CLIENTS][7];
+	int first = team == TEAM_AXIS;
+	int offset = first && !NITMOD_UsesOriginalProtocol() ? 4 : 2;
+	int start = first ? 0 : cg.numScores;
+	int teamScores[2];
+	if(start < 0 || start > MAX_CLIENTS ||
+		!NITMOD_ParseProtocolInteger(CG_Argv(offset - 1), &count) ||
+		count < 0 || count > MAX_CLIENTS - start || trap_Argc() != offset + 7 * count) return;
+	if(offset == 4 && (!NITMOD_ParseProtocolSigned(CG_Argv(1), &teamScores[0]) ||
+		!NITMOD_ParseProtocolSigned(CG_Argv(2), &teamScores[1]))) return;
+	for(i = 0; i < count; ++i) {
+		for(j = 0; j < 7; ++j)
+			if(!NITMOD_ParseProtocolSigned(CG_Argv(offset + 7 * i + j), &values[i][j])) return;
+		if(values[i][0] < 0 || values[i][0] >= MAX_CLIENTS) return;
 	}
-
-
-	numScores = atoi( CG_Argv( offset - 1 ) );
-
-	for(j = 0; j < numScores; j++) {
-		i = cg.numScores;
-
-		cg.scores[i].client = atoi(			CG_Argv( offset + 0 + (j*7)));
-		cg.scores[i].score = atoi(			CG_Argv( offset + 1 + (j*7)));
-		cg.scores[i].ping = atoi(			CG_Argv( offset + 2 + (j*7)));
-		cg.scores[i].time = atoi(			CG_Argv( offset + 3 + (j*7)));
-		powerups = atoi(					CG_Argv( offset + 4 + (j*7)));
-		cg.scores[i].playerClass = atoi(	CG_Argv( offset + 5 + (j*7)));
-		cg.scores[i].respawnsLeft = atoi(	CG_Argv( offset + 6 + (j*7)));
-
-		if ( cg.scores[i].client < 0 || cg.scores[i].client >= MAX_CLIENTS ) {
-			cg.scores[i].client = 0;
-		}
-
-		cgs.clientinfo[ cg.scores[i].client ].score = cg.scores[i].score;
-		cgs.clientinfo[ cg.scores[i].client ].powerups = powerups;
-
-		cg.scores[i].team = cgs.clientinfo[cg.scores[i].client].team;
-
-		cg.numScores++;
+	if(offset == 4) { cg.teamScores[0] = teamScores[0]; cg.teamScores[1] = teamScores[1]; }
+	for(i = 0; i < count; ++i) {
+		score_t *score = &cg.scores[start + i];
+		clientInfo_t *client = &cgs.clientinfo[values[i][0]];
+		score->client = values[i][0]; score->score = values[i][1];
+		score->ping = values[i][2]; score->time = values[i][3];
+		score->powerUps = values[i][4]; score->playerClass = values[i][5];
+		score->respawnsLeft = values[i][6]; score->team = client->team;
+		client->score = score->score; client->powerups = score->powerUps;
 	}
+	cg.numScores = start + count;
 }
 
 /*
@@ -181,7 +169,7 @@ void CG_ParseOIDInfo( int num ) {
 	const char* cs;
 	int index = num - CS_OID_DATA;
 
-	info = CG_ConfigString( num );
+	info = NITMOD_AssetConfigString( num );
 
 	memset( &cgs.oidInfo[ index ], 0, sizeof( cgs.oidInfo[ 0 ] ) );
 
@@ -194,14 +182,16 @@ void CG_ParseOIDInfo( int num ) {
 		cgs.oidInfo[ index ].spawnflags = atoi( cs );
 	}
 
-	cs = Info_ValueForKey( info, "cia" );
+	cs = Info_ValueForKey( info, NITMOD_UsesOriginalProtocol() ? "b" : "cia" );
 	if( cs && *cs ) {
-		cgs.oidInfo[ index ].customimageallies = cgs.gameShaders[atoi( cs )];
+		int shader = atoi(cs);
+		if(shader >= 0 && shader < MAX_CS_SHADERS) cgs.oidInfo[ index ].customimageallies = cgs.gameShaders[shader];
 	}
 
-	cs = Info_ValueForKey( info, "cix" );
+	cs = Info_ValueForKey( info, NITMOD_UsesOriginalProtocol() ? "r" : "cix" );
 	if( cs && *cs ) {
-		cgs.oidInfo[ index ].customimageaxis = cgs.gameShaders[atoi( cs )];
+		int shader = atoi(cs);
+		if(shader >= 0 && shader < MAX_CS_SHADERS) cgs.oidInfo[ index ].customimageaxis = cgs.gameShaders[shader];
 	}
 
 	cs = Info_ValueForKey( info, "o" );
@@ -290,7 +280,7 @@ void CG_ParseSpawns( void ) {
 	int newteam;
 
 	info = CG_ConfigString( CS_MULTI_INFO );
-	s = Info_ValueForKey( info, "numspawntargets" );
+	s = Info_ValueForKey( info, NITMOD_UsesOriginalProtocol() ? "n" : "numspawntargets" );
 
 	if ( !s || !strlen( s ) )
 		return;
@@ -298,12 +288,13 @@ void CG_ParseSpawns( void ) {
 	// first index is for autopicking
 	Q_strncpyz( cg.spawnPoints[0], CG_TranslateString( "Auto Pick" ), MAX_SPAWNDESC );
 
-	cg.spawnCount = atoi( s ) + 1;
+	if(!NITMOD_ParseProtocolInteger(s, &i) || i > MAX_MULTI_SPAWNTARGETS) return;
+	cg.spawnCount = i + 1;
 
 	for ( i = 1; i < cg.spawnCount; i++ ) {
-		info = CG_ConfigString( CS_MULTI_SPAWNTARGETS + i - 1 );
+		info = NITMOD_AssetConfigString( CS_MULTI_SPAWNTARGETS + i - 1 );
 
-		s = Info_ValueForKey( info, "spawn_targ" );
+		s = Info_ValueForKey( info, NITMOD_UsesOriginalProtocol() ? "s" : "spawn_targ" );
 
 		if ( !s || !strlen( s ) )
 			return;
@@ -507,7 +498,7 @@ void CG_ShaderStateChanged(void) {
 	const char *o;
 	char *n,*t;
 
-	o = CG_ConfigString( CS_SHADERSTATE );
+	o = NITMOD_AssetConfigString( CS_SHADERSTATE );
 	while (o && *o) {
 		n = strstr(o, "=");
 		if (n && *n) {
@@ -577,6 +568,13 @@ static void CG_ConfigStringModified( void ) {
 
 	// look up the individual string that was modified
 	str = CG_ConfigString( num );
+	/* Handle original TAGCONNECT slots before native ranges can interpret
+	 * these same indices as objective/dlight data. */
+	if (NITMOD_TagConnectBase() != CS_TAGCONNECTS &&
+		num >= NITMOD_TagConnectBase() && num < NITMOD_TagConnectBase() + MAX_TAGCONNECTS) {
+		CG_ParseTagConnect(num);
+		return;
+	}
 
 	// do something with it if necessary
 	if ( num == CS_MUSIC ) {
@@ -664,7 +662,8 @@ static void CG_ConfigStringModified( void ) {
 		CG_ParseFireteams();
 	} else if( num == CS_SKYBOXORG) {
 		CG_ParseSkyBox();
-	} else if( num >= CS_TAGCONNECTS && num < CS_TAGCONNECTS + MAX_TAGCONNECTS ) {
+	} else if( NITMOD_TagConnectBase() == CS_TAGCONNECTS &&
+		num >= CS_TAGCONNECTS && num < CS_TAGCONNECTS + MAX_TAGCONNECTS ) {
 		CG_ParseTagConnect( num );
 	} else if( num == CS_ALLIED_MAPS_XP || num == CS_AXIS_MAPS_XP ) {
 		CG_ParseTeamXPs( num - CS_AXIS_MAPS_XP );
@@ -681,7 +680,7 @@ CG_AddToTeamChat
 
 =======================
 */
-static void CG_AddToTeamChat( const char *str, int clientnum ) {
+void CG_AddToTeamChat( const char *str, int clientnum ) {
 	int len;
 	char *p, *ls;
 	int lastcolor;
@@ -1397,9 +1396,11 @@ void CG_VoiceChat( int mode ) {
 	cmd = CG_Argv(4);
 
 	if (cg_noTaunt.integer != 0) {
-		if (!strcmp(cmd, VOICECHAT_KILLINSULT)  || !strcmp(cmd, VOICECHAT_TAUNT) || \
-			!strcmp(cmd, VOICECHAT_DEATHINSULT) || !strcmp(cmd, VOICECHAT_KILLGAUNTLET) || \
-			!strcmp(cmd, VOICECHAT_PRAISE)) {
+		/* Native ET voice IDs are code-side protocol strings, not definitions
+		 * to add to the original Nitmod asset header. */
+		if (!strcmp(cmd, "kill_insult") || !strcmp(cmd, "taunt") ||
+			!strcmp(cmd, "death_insult") || !strcmp(cmd, "kill_gauntlet") ||
+			!strcmp(cmd, "praise")) {
 			return;
 		}
 	}
@@ -1652,7 +1653,7 @@ void CG_parseWeaponStatsGS_cmd(void)
 				continue;
 			}
 
-			if(ci->skill[i] < NUM_SKILL_LEVELS - 1) {
+			if(ci->skill[i] >= 0 && ci->skill[i] < NUM_SKILL_LEVELS - 1) {
 				str = va("%4d/%-4d", ci->skillpoints[i], skillLevels[ci->skill[i]+1]);
 			} else {
 				str = va("%d", ci->skillpoints[i]);
@@ -1779,7 +1780,7 @@ void CG_parseWeaponStats_cmd(void (txt_dump)(char *))
 				continue;
 			}
 
-			if(ci->skill[i] < NUM_SKILL_LEVELS - 1) {
+			if(ci->skill[i] >= 0 && ci->skill[i] < NUM_SKILL_LEVELS - 1) {
 				str = va("%d (%d/%d)", ci->skill[i], ci->skillpoints[i], skillLevels[ci->skill[i]+1]);
 			} else {
 				str = va("%d (%d)", ci->skill[i], ci->skillpoints[i]);
@@ -2062,6 +2063,64 @@ static void CG_ServerCommand( void ) {
 
 	if ( !Q_stricmp( cmd, "cs" ) ) {
 		CG_ConfigStringModified();
+		return;
+	}
+
+	if ( NITMOD_DisplayCommand( cmd ) ) return;
+	if ( NITMOD_ProtocolCommand( cmd ) ) {
+		return;
+	}
+	/* Original Nitmod sends scs without our reconstruction handshake. */
+	if ( !Q_stricmp( cmd, "scs" ) ) {
+		NITMOD_SimpleConfigCommand();
+		return;
+	}
+	if ( !strcmp( cmd, "#" ) ) {
+		NITMOD_GameStateCommand();
+		return;
+	}
+	if ( !Q_stricmp( cmd, "mes" ) && NITMOD_ServerSupports( NITMOD_FEATURE_MAP_END_STATS ) ) {
+		NITMOD_MapEndStatsCommand();
+		return;
+	}
+	/* Original-server receive path: two validated signed team scores. */
+	if ( !Q_stricmp( cmd, "tsc" ) ) {
+		NITMOD_TeamScoresCommand();
+		return;
+	}
+	if ( !Q_stricmp( cmd, "ob" ) && NITMOD_ServerSupports( NITMOD_FEATURE_OBJECTIVES ) ) {
+		NITMOD_ObjectiveEventCommand();
+		return;
+	}
+	if ( !Q_stricmp( cmd, "nsp" ) && NITMOD_ServerSupports( NITMOD_FEATURE_SPREE_EVENTS ) ) {
+		NITMOD_SpreeEventCommand();
+		return;
+	}
+	if ( !Q_stricmp( cmd, "nhs" ) && NITMOD_ServerSupports( NITMOD_FEATURE_HIT_SOUNDS ) ) {
+		NITMOD_HitSoundCommand();
+		return;
+	}
+	if ( !Q_stricmp( cmd, "ncp" ) ) {
+		int reason;
+		const char *text;
+		if( trap_Argc() == 2 && NITMOD_ParseProtocolInteger(CG_Argv(1), &reason) ) {
+			text = NITMOD_ServerMessageText(reason);
+			if(reason == 7 && NITMOD_SimpleConfig()->dynamiteTimer != 30000)
+				text = va("Dynamite is now armed with a %i second timer!", NITMOD_SimpleConfig()->dynamiteTimer / 1000);
+			if( text ) CG_CenterPrint(text, 384, 8);
+		}
+		return;
+	}
+
+	if ( !Q_stricmp( cmd, NITMOD_CONFIGSTRING_COMMAND ) ) {
+		nitrox_ConfigStringModified();
+		return;
+	}
+
+	/* Original Nitmod servers send this fixed ten-integer tuple without our
+	 * reconstruction-only capability handshake. Reception grants no features. */
+	if ( !Q_stricmp( cmd, "ct" ) ) {
+		nitrox_ParseChargeTimes();
 		return;
 	}
 
@@ -2427,4 +2486,3 @@ void CG_ExecuteNewServerCommands( int latestSequence ) {
 		}
 	}
 }
-

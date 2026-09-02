@@ -7,6 +7,7 @@
 
 
 #include "g_local.h"
+#include "g_nitmod_config.h"
 
 vec3_t	forward, right, up;
 vec3_t	muzzleEffect;
@@ -182,6 +183,62 @@ void MagicSink( gentity_t *self ) {
 ======================
 */
 // JPW NERVE
+int NITMOD_PackSinkDelay(int configured) {
+	return configured >= 5000 && configured <= 60000 ? configured : 30000;
+}
+
+int NITMOD_LimboPackCount(int configured, int war, int gameState, int playerClass, int requiredClass) {
+	if(configured <= 0 || (war >= 1 && war <= 4) || gameState != GS_PLAYING || playerClass != requiredClass) return 0;
+	return configured > 10 ? 10 : configured;
+}
+
+void NITMOD_DropLimboPacks(gentity_t *ent) {
+	int war, count, i, team, charge, delay;
+	qboolean healthPack, skilled;
+	gitem_t *item;
+	if(!ent || !ent->client) return;
+	team = ent->client->sess.sessionTeam;
+	if(team != TEAM_AXIS && team != TEAM_ALLIES) return;
+	healthPack = ent->client->sess.playerType == PC_MEDIC;
+	/* Avoid a syscall when neither class has a configured drop. */
+	if((healthPack ? g_dropHealth.integer : g_dropAmmo.integer) <= 0) return;
+	war = trap_Cvar_VariableIntegerValue("g_war");
+	count = NITMOD_LimboPackCount(healthPack ? g_dropHealth.integer : g_dropAmmo.integer,
+		war, g_gamestate.integer, ent->client->sess.playerType, healthPack ? PC_MEDIC : PC_FIELDOPS);
+	if(!count) return;
+	skilled = healthPack ? ent->client->sess.skill[SK_FIRST_AID] >= 2 : ent->client->sess.skill[SK_SIGNALS] >= 1;
+	item = healthPack ? BG_FindItemForClassName("item_health") : BG_FindItem(skilled ? "Mega Ammo Pack" : "Ammo Pack");
+	charge = healthPack ? level.medicChargeTime[team-1] : level.lieutenantChargeTime[team-1];
+	delay = NITMOD_PackSinkDelay(healthPack ? n_medPackSinkDelay.integer : n_ammoPackSinkDelay.integer);
+	for(i = 0; i < count; ++i) {
+		vec3_t velocity, origin, start, direction, mins = {-18, -18, 0}, maxs = {18, 18, 36};
+		trace_t trace;
+		gentity_t *pack;
+		velocity[0] = (((rand() & 0x7fff) / 32767.0f - 0.5f) * 2.0f) * 100.0f;
+		velocity[1] = (((rand() & 0x7fff) / 32767.0f - 0.5f) * 2.0f) * 100.0f;
+		velocity[2] = 25;
+		VectorCopy(ent->r.currentOrigin, origin); VectorCopy(origin, start);
+		trap_EngineerTrace(&trace, start, mins, maxs, origin, ent->s.number, MASK_MISSILESHOT);
+		if(trace.startsolid) {
+			/* Explicit local direction instead of the original stale global forward. */
+			AngleVectors(ent->client->ps.viewangles, direction, NULL, NULL);
+			VectorMA(ent->r.currentOrigin, -24.0f, direction, start);
+			trap_EngineerTrace(&trace, start, mins, maxs, origin, ent->s.number, MASK_MISSILESHOT);
+			VectorCopy(trace.endpos, origin);
+		} else if(trace.fraction < 1.0f) {
+			VectorCopy(trace.endpos, origin); SnapVectorTowards(origin, start);
+		}
+		/* ET skill-based charge backend; original extended charge tables remain separate. */
+		if(level.time - ent->client->ps.classWeaponTime > charge)
+			ent->client->ps.classWeaponTime = level.time - charge;
+		ent->client->ps.classWeaponTime += charge * (skilled ? 0.15f : 0.25f);
+		pack = LaunchItem(item, origin, velocity, ent->s.number);
+		pack->parent = ent; pack->s.teamNum = team;
+		pack->think = MagicSink; pack->nextthink = level.time + delay;
+		if(!healthPack) pack->count = pack->s.density = skilled ? 2 : 1;
+	}
+}
+
 void Weapon_Medic( gentity_t *ent ) {
 	gitem_t *item;
 	gentity_t *ent2;
@@ -240,7 +297,7 @@ void Weapon_Medic( gentity_t *ent ) {
 
     ent2 = LaunchItem( item, tosspos, velocity, ent->s.number );
     ent2->think = MagicSink;
-    ent2->nextthink = level.time + 30000;
+    ent2->nextthink = level.time + NITMOD_PackSinkDelay(n_medPackSinkDelay.integer);
 //	ent2->timestamp = level.time + 31200;
 
 	ent2->parent = ent; // JPW NERVE so we can score properly later
@@ -399,7 +456,7 @@ void Weapon_MagicAmmo( gentity_t *ent )  {
 
     ent2 = LaunchItem( item, tosspos, velocity, ent->s.number );
     ent2->think = MagicSink;
-    ent2->nextthink = level.time + 30000;
+    ent2->nextthink = level.time + NITMOD_PackSinkDelay(n_ammoPackSinkDelay.integer);
 //	ent2->timestamp = level.time + 31200;
 
 	ent2->parent = ent;
@@ -544,9 +601,15 @@ void Weapon_Syringe(gentity_t *ent) {
 				// Mad Doc - TDF moved all the revive stuff into its own function
 				usedSyringe = ReviveEntity( ent, traceEnt );
 
-				// OSP - syringe "hit"
-				if(g_gamestate.integer == GS_PLAYING) ent->client->sess.aWeaponStats[WS_SYRINGE].hits++;
-				if(ent && ent->client) G_LogPrintf("Medic_Revive: %d %d\n", ent - g_entities, traceEnt - g_entities);	// OSP
+				/* A syringe statistic is a completed revive.  ReviveEntity can
+				 * reject a target after the trace, so recording before its result
+				 * made Nitmod's map-end revive count diverge from gameplay. */
+				if( usedSyringe && g_gamestate.integer == GS_PLAYING ) {
+					ent->client->sess.aWeaponStats[WS_SYRINGE].hits++;
+				}
+				if( usedSyringe && ent && ent->client ) {
+					G_LogPrintf("Medic_Revive: %d %d\n", ent - g_entities, traceEnt - g_entities);
+				}
 
 				if( !traceEnt->isProp ) { // Gordon: flag for if they were teamkilled or not
 					AddScore(ent, WOLF_MEDIC_BONUS); // JPW NERVE props to the medic for the swift and dexterous bit o healitude
@@ -1060,6 +1123,13 @@ static qboolean TryConstructing( gentity_t *ent ) {
 			constructible->s.angles2[1] = 1;
 		}
 
+		/* The reference emits a construction event only for a single-stage
+		 * constructible, using the objective trigger the player touched. */
+		if( !constructible->count2 && ent->client->touchingTOI ) {
+			nitmod_ObjectiveEvent( 4, 2, ent->client->touchingTOI->s.teamNum,
+				ent->s.number, MOD_UNKNOWN );
+		}
+
 		// Gordon: removing messages for now
 /*		if( ent->client->touchingTOI->spawnflags & 4 ) { // MESSAGE_OVERRIDE
 			gentity_t* pm = G_PopupMessage( PM_CONSTRUCTION );
@@ -1570,7 +1640,7 @@ void Weapon_Engineer( gentity_t *ent ) {
 //bani
 // rain - #384 - check landmine team so that enemy mines can be disarmed
 // even if you're using all of yours :x
-			} else if ( G_CountTeamLandmines(ent->client->sess.sessionTeam) >= MAX_TEAM_LANDMINES && G_LandmineTeam(traceEnt) == ent->client->sess.sessionTeam) {
+			} else if ( G_CountTeamLandmines(ent->client->sess.sessionTeam) >= team_maxLandmines.integer && G_LandmineTeam(traceEnt) == ent->client->sess.sessionTeam) {
 
 				if(G_LandmineUnarmed(traceEnt)) {
 // rain - should be impossible now
@@ -1917,6 +1987,8 @@ evilbanigoto:
 							pm->s.teamNum = ent->client->sess.sessionTeam;
 
 							G_Script_ScriptEvent( hit, "dynamited", "" );
+							nitmod_ObjectiveEvent( 0, 0, hit->s.teamNum,
+								ent->s.number, MOD_DYNAMITE );
 
 							if ( !(hit->spawnflags & OBJECTIVE_DESTROYED) ) {
 								AddScore(traceEnt->parent, WOLF_DYNAMITE_PLANT); // give drop score to guy who dropped it
@@ -1984,6 +2056,8 @@ evilbanigoto:
 							pm->s.teamNum = ent->client->sess.sessionTeam;
 
 							G_Script_ScriptEvent( hit, "dynamited", "" );
+							nitmod_ObjectiveEvent( 0, 0, hit->parent->s.teamNum,
+								ent->s.number, MOD_DYNAMITE );
 	
 							if( (!(hit->parent->spawnflags & OBJECTIVE_DESTROYED)) && 
 								hit->s.teamNum && (hit->s.teamNum == ent->client->sess.sessionTeam) ) {	// ==, as it's inverse
@@ -2069,6 +2143,8 @@ evilbanigoto:
 								if(hit->target_ent) {
 									G_Script_ScriptEvent( hit->target_ent, "defused", "" );
 								}
+								nitmod_ObjectiveEvent( 0, 1, hit->s.teamNum,
+									ent->s.number, MOD_UNKNOWN );
 
 								{
 									gentity_t* pm = G_PopupMessage( PM_DYNAMITE );
@@ -2091,6 +2167,8 @@ evilbanigoto:
 								if(hit->target_ent) {
 									G_Script_ScriptEvent( hit->target_ent, "defused", "" );
 								}
+								nitmod_ObjectiveEvent( 0, 1, hit->s.teamNum,
+									ent->s.number, MOD_UNKNOWN );
 
 								{
 									gentity_t* pm = G_PopupMessage( PM_DYNAMITE );
@@ -4196,5 +4274,3 @@ qboolean IsSilencedWeapon
 //
 // IsSilencedWeapon
 //
-
-

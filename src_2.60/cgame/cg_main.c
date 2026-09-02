@@ -7,6 +7,8 @@
 
 
 #include "cg_local.h"
+#include "cg_nitmod_config.h"
+#include "../game/nitmod_weapon_reload.h"
 
 displayContextDef_t cgDC;
 
@@ -29,7 +31,7 @@ This must be the very first function compiled into the .q3vm file
 #pragma export on
 #endif
 #endif
-int vmMain( int command, int arg0, int arg1, int arg2, int arg3, int arg4, int arg5, int arg6, int arg7, int arg8, int arg9, int arg10, int arg11  ) {
+NITMOD_MODULE_EXPORT int vmMain( int command, int arg0, int arg1, int arg2, int arg3, int arg4, int arg5, int arg6, int arg7, int arg8, int arg9, int arg10, int arg11  ) {
 #if defined(__MACOS__)
 #ifndef __GNUC__
 #pragma export off
@@ -226,6 +228,7 @@ vmCvar_t	cf_wtopshots;				// Font scale for +wtopshots window
 //vmCvar_t	cg_announcer;
 vmCvar_t	cg_autoAction;
 vmCvar_t	cg_autoReload;
+static vmCvar_t cg_weapAltReloads;
 vmCvar_t	cg_bloodDamageBlend;
 vmCvar_t	cg_bloodFlash;
 vmCvar_t	cg_complaintPopUp;
@@ -299,6 +302,11 @@ typedef struct {
 } cvarTable_t;
 
 cvarTable_t		cvarTable[] = {
+	{ &cg_pmSounds, "cg_pmSounds", "1", CVAR_ARCHIVE },
+	{ &cg_shoveSounds, "cg_shoveSounds", "1", CVAR_ARCHIVE },
+	{ &cg_noGreetingSounds, "cg_noGreetingSounds", "0", CVAR_ARCHIVE },
+	{ &cg_drawBanners, "cg_drawBanners", "1", CVAR_ARCHIVE },
+	{ &nitmodHitSounds, "cg_hitSounds", "1", CVAR_ARCHIVE },
 	{ &cg_ignore, "cg_ignore", "0", 0 },	// used for debugging
 	{ &cg_autoswitch, "cg_autoswitch", "2", CVAR_ARCHIVE },
 	{ &cg_drawGun, "cg_drawGun", "1", CVAR_ARCHIVE },
@@ -446,6 +454,7 @@ cvarTable_t		cvarTable[] = {
 	//{ &cg_announcer, "cg_announcer", "1", CVAR_ARCHIVE },
 	{ &cg_autoAction, "cg_autoAction", "0", CVAR_ARCHIVE },
 	{ &cg_autoReload, "cg_autoReload", "1", CVAR_ARCHIVE },
+	{ &cg_weapAltReloads, "cg_weapAltReloads", "0", CVAR_ARCHIVE },
 	{ &cg_bloodDamageBlend, "cg_bloodDamageBlend", "1.0", CVAR_ARCHIVE },
 	{ &cg_bloodFlash, "cg_bloodFlash", "1.0", CVAR_ARCHIVE },
 	{ &cg_complaintPopUp, "cg_complaintPopUp", "1", CVAR_ARCHIVE },
@@ -574,7 +583,7 @@ void CG_UpdateCvars( void ) {
 				cv->modificationCount = cv->vmCvar->modificationCount;
 
 				// Check if we need to update any client flags to be sent to the server
-				if(cv->vmCvar == &cg_autoAction || cv->vmCvar == &cg_autoReload ||
+				if(cv->vmCvar == &cg_autoAction || cv->vmCvar == &cg_autoReload || cv->vmCvar == &cg_weapAltReloads ||
 				   cv->vmCvar == &int_cl_timenudge || cv->vmCvar == &int_cl_maxpackets ||
 				   cv->vmCvar == &cg_autoactivate || cv->vmCvar == &cg_predictItems)
 				{
@@ -625,24 +634,29 @@ void CG_UpdateCvars( void ) {
 
 void CG_setClientFlags(void)
 {
+	unsigned int flags;
 	if(cg.demoPlayback) return;
 
 	cg.pmext.bAutoReload = (cg_autoReload.integer > 0);
+	flags = ((cg_autoAction.integer & AA_STATSDUMP) ? CGF_STATSDUMP : 0) |
+		((cg_autoactivate.integer > 0) ? CGF_AUTOACTIVATE : 0) |
+		((cg_predictItems.integer > 0) ? CGF_PREDICTITEMS : 0);
+	flags = NITMOD_EncodeReloadPreferences(flags, cg_autoReload.integer,
+		NITMOD_ServerSupports(NITMOD_FEATURE_RELOAD_PREFS) ? cg_weapAltReloads.integer : 0);
 	trap_Cvar_Set("cg_uinfo", va("%d %d %d",
 											 // Client Flags
-											(
-												((cg_autoReload.integer > 0) ? CGF_AUTORELOAD : 0) |
-												((cg_autoAction.integer & AA_STATSDUMP) ? CGF_STATSDUMP : 0) |
-												((cg_autoactivate.integer > 0) ? CGF_AUTOACTIVATE : 0) |
-												((cg_predictItems.integer > 0) ? CGF_PREDICTITEMS : 0)
-												// Add more in here, as needed
-											),
+											(int)flags,
 											
 											// Timenudge
 											int_cl_timenudge.integer,
 											// MaxPackets
 											int_cl_maxpackets.integer
 									   ));
+}
+
+unsigned int CG_NITMOD_ReloadPreferenceFlags( void ) {
+	return NITMOD_EncodeReloadPreferences(0, cg_autoReload.integer,
+		NITMOD_ServerSupports(NITMOD_FEATURE_RELOAD_PREFS) ? cg_weapAltReloads.integer : 0);
 }
 
 int CG_CrosshairPlayer( void ) {
@@ -1125,7 +1139,7 @@ static void CG_RegisterSounds( void ) {
 	}
 
 	for ( i = 1 ; i < MAX_SOUNDS ; i++ ) {
-		soundName = CG_ConfigString( CS_SOUNDS+i );
+		soundName = NITMOD_AssetConfigString( CS_SOUNDS+i );
 		if ( !soundName[0] ) {
 			break;
 		}
@@ -1790,7 +1804,7 @@ static void CG_RegisterGraphics( void ) {
 	for (i=1 ; i<MAX_MODELS ; i++) {
 		const char		*modelName;
 
-		modelName = CG_ConfigString( CS_MODELS+i );
+		modelName = NITMOD_AssetConfigString( CS_MODELS+i );
 		if ( !modelName[0] ) {
 			break;
 		}
@@ -1800,7 +1814,7 @@ static void CG_RegisterGraphics( void ) {
 	for (i=1 ; i<MAX_MODELS ; i++) {
 		const char		*skinName;
 
-		skinName = CG_ConfigString( CS_SKINS+i );
+		skinName = NITMOD_AssetConfigString( CS_SKINS+i );
 		if ( !skinName[0] ) {
 			break;
 		}
@@ -1810,7 +1824,7 @@ static void CG_RegisterGraphics( void ) {
 	for (i=1 ; i<MAX_CS_SHADERS ; i++) {
 		const char		*shaderName;
 
-		shaderName = CG_ConfigString( CS_SHADERS+i );
+		shaderName = NITMOD_AssetConfigString( CS_SHADERS+i );
 		if ( !shaderName[0] ) {
 			break;
 		}
@@ -2631,6 +2645,7 @@ void CG_Init( int serverMessageNum, int serverCommandSequence, int clientNum, qb
 	memset( cg_entities, 0, sizeof(cg_entities) );
 	memset( cg_weapons, 0, sizeof(cg_weapons) );
 	memset( cg_items, 0, sizeof(cg_items) );
+	NITMOD_ClearConfigStrings();
 
 	cgs.initing = qtrue;
 
@@ -2809,6 +2824,9 @@ void CG_Init( int serverMessageNum, int serverCommandSequence, int clientNum, qb
 	CG_ParseSpawns();
 
 	CG_ParseTagConnects();
+
+	/* A Nitmod server sends extensions only after this explicit handshake. */
+	NITMOD_AdvertiseCapabilities();
 
 #ifdef _DEBUG
 	DEBUG_INITPROFILE_EXEC ( "misc" )

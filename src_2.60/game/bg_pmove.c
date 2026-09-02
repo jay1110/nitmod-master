@@ -12,6 +12,7 @@
 #endif // CGAMEDLL
 
 #include "bg_local.h"
+#include "nitmod_weapon_reload.h"
 
 #ifdef CGAMEDLL
 #define PM_GameType cg_gameType.integer
@@ -154,18 +155,9 @@ int PM_LastAttackAnimForWeapon ( int weapon ) {
 }
 
 int PM_ReloadAnimForWeapon ( int weapon ) {
-	switch( weapon ) {
-		case WP_GPG40:
-		case WP_M7:
-			return WEAP_RELOAD2;
-		case WP_MOBILE_MG42_SET:
-			return WEAP_RELOAD3;
-		default:
-			if( pm->skill[SK_LIGHT_WEAPONS] >= 2 && BG_isLightWeaponSupportingFastReload( weapon )  )
-				return WEAP_RELOAD2;	// faster reload
-			else
-				return WEAP_RELOAD1;
-	}
+	// Native skill eligibility remains local; no recovered ability is inferred.
+	return NITMOD_ReloadAnimation(weapon,
+		BG_isLightWeaponSupportingFastReload(weapon) && pm->skill[SK_LIGHT_WEAPONS] >= 2);
 }
 
 int PM_RaiseAnimForWeapon ( int weapon ) {
@@ -1224,6 +1216,30 @@ PM_AirMove
 
 ===================
 */
+qboolean BG_NITMOD_CheckAirJump(pmove_t *move) {
+	playerState_t *ps = move->ps;
+	if(!move->nitmodDoubleJump || (ps->eFlags & EF_PRONE) ||
+		(ps->pm_flags & (PMF_RESPAWNED | PMF_NITMOD_DOUBLEJUMPED)) ||
+		(move->nitmodDoubleJump == 2 && !(ps->velocity[2] > 0)) || move->cmd.upmove < 10)
+		return qfalse;
+	/* Invalid/nonpositive heights must not inject NaN/Inf into prediction. */
+	if(!(move->nitmodDoubleJumpHeight > 0 && move->nitmodDoubleJumpHeight <= 1.0e30f)) return qfalse;
+	if(ps->pm_flags & PMF_JUMP_HELD) {
+		move->cmd.upmove = 0;
+		return qfalse;
+	}
+	ps->pm_flags |= PMF_JUMP_HELD | PMF_NITMOD_DOUBLEJUMPED;
+	ps->groundEntityNum = ENTITYNUM_NONE;
+	ps->velocity[2] = JUMP_VELOCITY * move->nitmodDoubleJumpHeight;
+	if(move->cmd.serverTime - move->pmext->jumpTime >= 850) {
+		move->pmext->sprintTime -= 2500;
+		if(move->pmext->sprintTime < 0) move->pmext->sprintTime = 0;
+		move->pmext->jumpTime = move->cmd.serverTime;
+	}
+	ps->jumpTime = move->cmd.serverTime;
+	return qtrue;
+}
+
 static void PM_AirMove( void ) {
 	int			i;
 	vec3_t		wishvel;
@@ -1233,6 +1249,12 @@ static void PM_AirMove( void ) {
 	float		scale;
 	usercmd_t	cmd;
 
+	if(BG_NITMOD_CheckAirJump(pm)) {
+		pml.groundPlane = pml.walking = qfalse;
+		BG_AnimScriptEvent(pm->ps, pm->character->animModelInfo,
+			pm->cmd.forwardmove < 0 ? ANIM_ET_JUMPBK : ANIM_ET_JUMP, qfalse, qtrue);
+		if(pm->waterlevel > 1) PM_WaterMove();
+	}
 	PM_Friction();
 
 	fmove = pm->cmd.forwardmove;
@@ -1670,6 +1692,7 @@ static void PM_CrashLand( void ) {
 		else if (delta > 67)
 		{
 			PM_AddEventExt( EV_FALL_DMG_50, PM_FootstepForSurface() );
+			BG_AddPredictableDamage( 50, 255, 255, pm->ps );
 		}
 		//else if (delta > 48)
 		//{
@@ -1681,6 +1704,7 @@ static void PM_CrashLand( void ) {
 			if ( pm->ps->stats[STAT_HEALTH] > 0 ) 
 			{
 				PM_AddEventExt( EV_FALL_DMG_25, PM_FootstepForSurface() );
+				BG_AddPredictableDamage( 25, 255, 255, pm->ps );
 			}
 		}
 		else if (delta > 48)
@@ -1689,6 +1713,7 @@ static void PM_CrashLand( void ) {
 			if ( pm->ps->stats[STAT_HEALTH] > 0 ) 
 			{
 				PM_AddEventExt( EV_FALL_DMG_15, PM_FootstepForSurface() );
+				BG_AddPredictableDamage( 15, 255, 255, pm->ps );
 			}
 		}
 		else if (delta > 38.75)
@@ -1697,6 +1722,7 @@ static void PM_CrashLand( void ) {
 			if ( pm->ps->stats[STAT_HEALTH] > 0 ) 
 			{
 				PM_AddEventExt( EV_FALL_DMG_10, PM_FootstepForSurface() );
+				BG_AddPredictableDamage( 10, 255, 255, pm->ps );
 			}
 		}
 		else if ( delta > 7 ) 
@@ -1883,6 +1909,7 @@ static void PM_GroundTrace( void ) {
 
 	pml.groundPlane = qtrue;
 	pml.walking = qtrue;
+	pm->ps->pm_flags &= ~PMF_NITMOD_DOUBLEJUMPED;
 
 	// hitting solid ground will end a waterjump
 	if (pm->ps->pm_flags & PMF_TIME_WATERJUMP)
@@ -2308,8 +2335,10 @@ static void PM_BeginWeaponReload( int weapon ) {
 	gitem_t* item;
 	int reloadTime;
 
-	// only allow reload if the weapon isn't already occupied (firing is okay)
-	if(pm->ps->weaponstate != WEAPON_READY && pm->ps->weaponstate != WEAPON_FIRING )
+	// Original Nitmod accepts normal and alternate firing, as well as ready.
+	if( !NITMOD_ReloadStateAllowed(pm->ps->weaponstate) )
+		return;
+	if( NITMOD_ResetReloadWithoutReserve(pm->ps, BG_FindAmmoForWeapon(pm->ps->weapon)) )
 		return;
 
 	if(((weapon == WP_CARBINE) && pm->ps->ammoclip[WP_CARBINE] != 0) || ((weapon == WP_MOBILE_MG42 || weapon == WP_MOBILE_MG42_SET) && pm->ps->ammoclip[WP_MOBILE_MG42] != 0) || ((weapon == WP_GARAND || weapon == WP_GARAND_SCOPE) && pm->ps->ammoclip[WP_GARAND] != 0)) {
@@ -2323,8 +2352,10 @@ static void PM_BeginWeaponReload( int weapon ) {
 	if(!item) {
 		return;
 	}
-	// Gordon: fixing reloading with a full clip
-	if(pm->ps->ammoclip[item->giAmmoIndex] >= GetAmmoTableData(weapon)->maxclip) {
+	// Nitmod begin has no full-magazine veto. Reviewed light/akimbo weapons
+	// use the outer request check; retain native policy for other identities.
+	if(!NITMOD_ReloadUsesOuterClipGate(weapon) &&
+		pm->ps->ammoclip[item->giAmmoIndex] >= GetAmmoTableData(weapon)->maxclip) {
 		return;
 	}
 
@@ -2332,28 +2363,17 @@ static void PM_BeginWeaponReload( int weapon ) {
 /*	if(pm->ps->eFlags & EF_MELEE_ACTIVE)
 		return;*/
 
-	// no reload when leaning (this includes manual and auto reloads)
-	if(pm->ps->leanf)
+	// Original Nitmod has no lean veto. Enable this only for mapped reload
+	// identities; retain the native fallback for unreconstructed weapons.
+	if(pm->ps->leanf && !NITMOD_ReloadWeaponEligible(weapon))
 		return;
 
-	// (SA) easier check now that the animation system handles the specifics
-	switch(weapon) {
-		case WP_DYNAMITE:
-		case WP_GRENADE_LAUNCHER:
-		case WP_GRENADE_PINEAPPLE:
-//		case WP_LANDMINE:
-//		case WP_TRIPMINE:
-		case WP_SMOKE_BOMB:
-			break;
-
-		default:
-			// DHM - Nerve :: override current animation (so reloading after firing will work)
-			if( pm->ps->eFlags & EF_PRONE ) {
-				BG_AnimScriptEvent( pm->ps, pm->character->animModelInfo, ANIM_ET_RELOADPRONE, qfalse, qtrue );
-			} else {
-				BG_AnimScriptEvent( pm->ps, pm->character->animModelInfo, ANIM_ET_RELOAD, qfalse, qtrue );
-			}
-			break;
+	if( NITMOD_ReloadBodyEventRequired(weapon) ) {
+		if( pm->ps->eFlags & EF_PRONE ) {
+			BG_AnimScriptEvent( pm->ps, pm->character->animModelInfo, ANIM_ET_RELOADPRONE, qfalse, qtrue );
+		} else {
+			BG_AnimScriptEvent( pm->ps, pm->character->animModelInfo, ANIM_ET_RELOAD, qfalse, qtrue );
+		}
 	}
 
     if( weapon != WP_MORTAR && weapon != WP_MORTAR_SET )
@@ -2364,18 +2384,37 @@ static void PM_BeginWeaponReload( int weapon ) {
 	// current weaponTime (the reload time is partially absorbed into the overheat time)
 	reloadTime = GetAmmoTableData(weapon)->reloadTime;
 	if( pm->skill[SK_LIGHT_WEAPONS] >= 2 && BG_isLightWeaponSupportingFastReload( weapon ) ) {
-		reloadTime *= .65f;
+		reloadTime = NITMOD_ScaleFastReloadDuration(reloadTime);
 	}
 	if( pm->ps->weaponstate == WEAPON_READY )
-		pm->ps->weaponTime += reloadTime;
+		pm->ps->weaponTime = NITMOD_AddWeaponTime32(pm->ps->weaponTime, reloadTime);
 	else if( pm->ps->weaponTime < reloadTime)
-		pm->ps->weaponTime += (reloadTime - pm->ps->weaponTime);
+		// Original compare/store: avoid overflowing the intermediate difference.
+		pm->ps->weaponTime = reloadTime;
 
 	pm->ps->weaponstate = WEAPON_RELOADING;
 	PM_AddEvent( EV_FILL_CLIP );	// play reload sound
 }
 
 static void PM_ReloadClip( int weapon );
+
+/* Completes the raising phase only after both weapon timers expire.
+ * Reload intent resets READY before entering the existing native reload
+ * checks; normal raising returns to idle without a reload event. */
+static int PM_FinishWeaponRaise( void ) {
+	if( pm->ps->weaponTime > 0 || pm->ps->weaponDelay > 0 ) return 0;
+	if( pm->ps->weaponstate == WEAPON_RAISING ) {
+		pm->ps->weaponstate = WEAPON_READY;
+		PM_StartWeaponAnim(PM_IdleAnimForWeapon(pm->ps->weapon));
+		return 1;
+	}
+	if( pm->ps->weaponstate == WEAPON_RAISING_TORELOAD ) {
+		pm->ps->weaponstate = WEAPON_READY;
+		PM_BeginWeaponReload( pm->ps->weapon );
+		return 1;
+	}
+	return 0;
+}
 
 /*
 ===============
@@ -2384,7 +2423,10 @@ PM_BeginWeaponChange
 */
 void PM_BeginWeaponChange( int oldweapon, int newweapon, qboolean reload ) {	//----(SA)	modified to play 1st person alt-mode transition animations.
 	int switchtime;
+	int grenadeReloadWeapon;
 	qboolean altSwitchAnim = qfalse;
+	nitmodPistolSwitch_t pistolSwitch;
+	nitmodDeploySwitch_t deploySwitch;
 
 	if( pm->ps->pm_flags & PMF_RESPAWNED ) {
 		return;		// don't allow weapon switch until all buttons are up
@@ -2398,7 +2440,7 @@ void PM_BeginWeaponChange( int oldweapon, int newweapon, qboolean reload ) {	//-
 		return;
 	}
 	
-	if( pm->ps->weaponstate == WEAPON_DROPPING || pm->ps->weaponstate == WEAPON_DROPPING_TORELOAD ) {
+	if( !NITMOD_WeaponChangeStateAllowed(pm->ps->weaponstate) ) {
 		return;
 	}
 
@@ -2453,93 +2495,24 @@ void PM_BeginWeaponChange( int oldweapon, int newweapon, qboolean reload ) {	//-
 	}
 
 	switchtime = 250;	// dropping/raising usually takes 1/4 sec.
-	// sometimes different switch times for alt weapons
-	switch(oldweapon) {
-		case WP_CARBINE:
-			if(newweapon == weapAlts[oldweapon]) {
-				switchtime = 0;
-				if(	!pm->ps->ammoclip[newweapon] && pm->ps->ammo[newweapon] ) {
-					PM_ReloadClip( newweapon );
-				}
-			}
-			break;
-		case WP_M7:
-			if(newweapon == weapAlts[oldweapon])
-				switchtime = 0;
-			break;
-		case WP_KAR98:
-			if(newweapon == weapAlts[oldweapon]) {
-				switchtime = 0;
-				if(	!pm->ps->ammoclip[newweapon] && pm->ps->ammo[newweapon] ) {
-					PM_ReloadClip( newweapon );
-				}
-			}
-			break;
-		case WP_GPG40:
-			if(newweapon == weapAlts[oldweapon])
-				switchtime = 0;
-			break;
-		case WP_LUGER:
-			if(newweapon == weapAlts[oldweapon])
-				switchtime = 0;
-			break;
-		case WP_SILENCER:
-			if(newweapon == weapAlts[oldweapon]) {
-				switchtime = 1000;
-				//switchtime = 0;
-				altSwitchAnim = qtrue;
-			}
-			break;
-		case WP_COLT:
-			if(newweapon == weapAlts[oldweapon])
-				switchtime = 0;
-			break;
-		case WP_SILENCED_COLT:
-			if(newweapon == weapAlts[oldweapon]) {
-				switchtime = 1000;
-				//switchtime = 1300;
-				//switchtime = 0;
-				altSwitchAnim = qtrue;
-			}
-			break;
-		case WP_FG42:
-		case WP_FG42SCOPE:
-			if(newweapon == weapAlts[oldweapon])
-				switchtime = 50;	// fast
-			break;
-		case WP_MOBILE_MG42:
-			if( newweapon == weapAlts[oldweapon] ) {
-				vec3_t axis[3];
-
-				switchtime = 0;
-
-				VectorCopy( pml.forward, axis[0] );
-				VectorCopy( pml.right, axis[2] );
-				CrossProduct( axis[0], axis[2], axis[1] );
-				AxisToAngles( axis, pm->pmext->mountedWeaponAngles );
-			}
-		case WP_MOBILE_MG42_SET:
-			if( newweapon == weapAlts[oldweapon] ) {
-				switchtime = 0;
-			}
-			break;
-		case WP_MORTAR:
-			if( newweapon == weapAlts[oldweapon] ) {
-				vec3_t axis[3];
-
-				switchtime = 0;
-
-				VectorCopy( pml.forward, axis[0] );
-				VectorCopy( pml.right, axis[2] );
-				CrossProduct( axis[0], axis[2], axis[1] );
-				AxisToAngles( axis, pm->pmext->mountedWeaponAngles );
-			}
-			break;
-		case WP_MORTAR_SET:
-			if( newweapon == weapAlts[oldweapon] ) {
-				switchtime = 0;
-			}
-			break;
+	NITMOD_ScopeSwitchDuration( oldweapon, newweapon, &switchtime );
+	if( NITMOD_PistolSwitch(oldweapon, newweapon, &pistolSwitch) ) {
+		switchtime = pistolSwitch.dropTime;
+		altSwitchAnim = pistolSwitch.dropAltAnimation;
+	}
+	if( NITMOD_RifleGrenadeDrop(pm->ps, oldweapon, newweapon, &grenadeReloadWeapon) ) {
+		switchtime = 0;
+		if( grenadeReloadWeapon != WP_NONE ) PM_ReloadClip( grenadeReloadWeapon );
+	}
+	if( NITMOD_DeploySwitch(oldweapon, newweapon, &deploySwitch) ) {
+		switchtime = 0;
+		if( deploySwitch.captureDirection ) {
+			vec3_t axis[3];
+			VectorCopy( pml.forward, axis[0] );
+			VectorCopy( pml.right, axis[2] );
+			CrossProduct( axis[0], axis[2], axis[1] );
+			AxisToAngles( axis, pm->pmext->mountedWeaponAngles );
+		}
 	}
 
 	// play an animation
@@ -2559,7 +2532,7 @@ void PM_BeginWeaponChange( int oldweapon, int newweapon, qboolean reload ) {	//-
 		pm->ps->weaponstate = WEAPON_DROPPING;
 	}
 
-	pm->ps->weaponTime += switchtime;
+	pm->ps->weaponTime = NITMOD_AddWeaponTime32(pm->ps->weaponTime, switchtime);
 }
 
 
@@ -2572,26 +2545,14 @@ static void PM_FinishWeaponChange( void ) {
 	int oldweapon, newweapon, switchtime;
 	qboolean altSwitchAnim = qfalse;
 	qboolean doSwitchAnim = qtrue;
-
-	newweapon = pm->ps->nextWeapon;
-//	pm->ps->nextWeapon = newweapon;
-	if ( newweapon < WP_NONE || newweapon >= WP_NUM_WEAPONS ) {
-		newweapon = WP_NONE;
-	}
-
-	if ( !( COM_BitCheck( pm->ps->weapons, newweapon ) ) ) {
-		newweapon = WP_NONE;
-	}
+	nitmodPistolSwitch_t pistolSwitch;
+	nitmodRifleGrenadeRaise_t rifleRaise;
+	nitmodDeploySwitch_t deploySwitch;
 
 	oldweapon = pm->ps->weapon;
-
-	pm->ps->weapon = newweapon;
-
-	if( pm->ps->weaponstate == WEAPON_DROPPING_TORELOAD ) {
-		pm->ps->weaponstate = WEAPON_RAISING_TORELOAD;
-	} else {
-		pm->ps->weaponstate = WEAPON_RAISING;
-	}
+	newweapon = NITMOD_CommitWeaponChange( pm->ps );
+	pm->pmext->silencedSideArm = NITMOD_PistolModeFlags(newweapon, pm->pmext->silencedSideArm);
+	pm->pmext->silencedSideArm = NITMOD_RifleGrenadeModeFlags(newweapon, pm->pmext->silencedSideArm);
 
 	switch(newweapon)
 	{
@@ -2603,30 +2564,6 @@ static void PM_FinishWeaponChange( void ) {
 			pm->ps->aimSpreadScale = 255;			// initially at lowest accuracy
 			pm->ps->aimSpreadScaleFloat = 255.0f;	// initially at lowest accuracy
 			break;
-		case WP_SILENCER:
-			pm->pmext->silencedSideArm |= 1;
-			break;
-		case WP_LUGER:
-			pm->pmext->silencedSideArm &= ~1;
-			break;
-		case WP_SILENCED_COLT:
-			pm->pmext->silencedSideArm |= 1;
-			break;
-		case WP_COLT:
-			pm->pmext->silencedSideArm &= ~1;
-			break;
-		case WP_CARBINE:
-			pm->pmext->silencedSideArm &= ~2;
-			break;
-		case WP_M7:
-			pm->pmext->silencedSideArm |= 2;
-			break;
-		case WP_KAR98:
-			pm->pmext->silencedSideArm &= ~2;
-			break;
-		case WP_GPG40:
-			pm->pmext->silencedSideArm |= 2;
-			break;
 //		case WP_MEDIC_SYRINGE:
 //			pm->pmext->silencedSideArm &= ~4;
 //			break;
@@ -2637,109 +2574,29 @@ static void PM_FinishWeaponChange( void ) {
 			break;
 	}
 
-	// doesn't happen too often (player switched weapons away then back very quickly)
-	if(oldweapon == newweapon)
+	// Nitmod replays the raise phase for reselected knife/smoke bomb as well.
+	if( !NITMOD_WeaponChangeNeedsRaise(oldweapon, newweapon) )
 		return;
 
 	// dropping/raising usually takes 1/4 sec.
 	switchtime = 250;
-
-	// sometimes different switch times for alt weapons
-	switch(newweapon) {
-		case WP_LUGER:
-			if(newweapon == weapAlts[oldweapon]) {
-				switchtime = 0;
-				//switchtime = 50;
-				//switchtime = 1050;
-				altSwitchAnim = qtrue ;
-			}
-			break;
-		case WP_SILENCER:
-			if(newweapon == weapAlts[oldweapon]) {
-				switchtime = 1190;
-				altSwitchAnim = qtrue ;
-			}
-			break;
-		case WP_COLT:
-			if(newweapon == weapAlts[oldweapon]) {
-				switchtime = 0;
-				//switchtime = 1050;
-				altSwitchAnim = qtrue ;
-			}
-			break;
-		case WP_SILENCED_COLT:
-			if(newweapon == weapAlts[oldweapon]) {
-				//switchtime = 1300;
-				switchtime = 1190;
-				altSwitchAnim = qtrue ;
-			}
-			break;
-		case WP_CARBINE:
-			if(newweapon == weapAlts[oldweapon]) {
-				//switchtime = 2000;
-				if( pm->ps->ammoclip[ BG_FindAmmoForWeapon(oldweapon) ] ) {
-					switchtime = 1347;
-				} else {
-					switchtime = 0;
-					doSwitchAnim = qfalse;
-				}
-				altSwitchAnim = qtrue ;
-			}
-			break;
-		case WP_M7:
-			if(newweapon == weapAlts[oldweapon]) {
-				switchtime = 2350;
-				altSwitchAnim = qtrue ;
-			}
-			break;
-		case WP_KAR98:
-			if(newweapon == weapAlts[oldweapon]) {
-				//switchtime = 2000;
-				if( pm->ps->ammoclip[ BG_FindAmmoForWeapon(oldweapon) ] ) {
-					switchtime = 1347;
-				} else {
-					switchtime = 0;
-					doSwitchAnim = qfalse;
-				}
-				altSwitchAnim = qtrue ;
-			}
-			break;
-		case WP_GPG40:
-			if(newweapon == weapAlts[oldweapon]) {
-				switchtime = 2350;
-				altSwitchAnim = qtrue ;
-			}
-			break;
-		case WP_FG42:
-		case WP_FG42SCOPE:
-			if(newweapon == weapAlts[oldweapon])
-				switchtime = 50;	// fast
-			break;
-		case WP_MOBILE_MG42:
-			if(newweapon == weapAlts[oldweapon]) {
-				switchtime = 1722;
-			}
-			break;
-		case WP_MOBILE_MG42_SET:
-			if(newweapon == weapAlts[oldweapon]) {
-				switchtime = 1250;
-			}
-			break;
-		case WP_MORTAR:
-			if( newweapon == weapAlts[oldweapon] ) {
-				switchtime = 1000;
-				altSwitchAnim = qtrue;
-			}
-			break;
-		case WP_MORTAR_SET:
-			if( newweapon == weapAlts[oldweapon] ) {
-				switchtime = 1667;
-				altSwitchAnim = qtrue;
-			}
-			break;
+	NITMOD_ScopeSwitchDuration( oldweapon, newweapon, &switchtime );
+	if( NITMOD_PistolSwitch(oldweapon, newweapon, &pistolSwitch) ) {
+		switchtime = pistolSwitch.raiseTime;
+		altSwitchAnim = pistolSwitch.raiseAltAnimation;
+	}
+	if( NITMOD_RifleGrenadeRaise(pm->ps, oldweapon, newweapon, &rifleRaise) ) {
+		switchtime = rifleRaise.duration;
+		doSwitchAnim = rifleRaise.animate;
+		altSwitchAnim = qtrue;
 	}
 
-	pm->ps->weaponTime += switchtime;
+	if( NITMOD_DeploySwitch(oldweapon, newweapon, &deploySwitch) ) {
+		switchtime = deploySwitch.raiseTime;
+		altSwitchAnim = deploySwitch.raiseAltAnimation;
+	}
+
+	pm->ps->weaponTime = NITMOD_AddWeaponTime32(pm->ps->weaponTime, switchtime);
 
 	BG_UpdateConditionValue( pm->ps->clientNum, ANIM_COND_WEAPON, newweapon, qtrue );
 
@@ -2826,8 +2683,8 @@ void PM_CheckForReload( int weapon ) {
 	if( weapon == WP_GPG40 || weapon == WP_M7 )
 		return;
 
-	// user is forcing a reload (manual reload)
-	reloadRequested = (qboolean)(pm->cmd.wbuttons & WBUTTON_RELOAD);
+	// Shared key semantics; both Pmove callers refresh the preference input.
+	reloadRequested = (qboolean)NITMOD_ManualReloadRequested(&pm->cmd, pm->nitmodReloadPreferenceFlags);
 
 	switch(pm->ps->weaponstate) {
 		case WEAPON_RAISING:
@@ -2894,6 +2751,22 @@ void PM_CheckForReload( int weapon ) {
 
 }
 
+/* Ordered transition stage of PM_Weapon, after its weapon-change request.
+ * Return 1 to stop this weapon frame, 0 to continue into firing checks.
+ * Timer advancement and delayed-fire handling remain owned by PM_Weapon. */
+static int PM_ProcessWeaponTransitions( void ) {
+	if( pm->ps->weaponDelay > 0 ) return 1;
+	PM_CheckForReload( pm->ps->weapon );
+	if( pm->ps->weaponTime > 0 || pm->ps->weaponDelay > 0 ) return 1;
+	if( pm->ps->weaponstate == WEAPON_RELOADING ) PM_FinishWeaponReload();
+	if( pm->ps->weaponstate == WEAPON_DROPPING || pm->ps->weaponstate == WEAPON_DROPPING_TORELOAD ) {
+		PM_FinishWeaponChange();
+		return 1;
+	}
+	if( PM_FinishWeaponRaise() ) return 1;
+	return 0;
+}
+
 /*
 ==============
 PM_SwitchIfEmpty
@@ -2939,21 +2812,22 @@ PM_WeaponUseAmmo
 	accounts for clips being used/not used
 ==============
 */
-void PM_WeaponUseAmmo( int wp, int amount ) {
-	int takeweapon;
+/* Both availability and consumption must select the same akimbo hand.
+ * Keep native aliases and the existing sidearm-slot convention unchanged. */
+static int PM_WeaponFiringClip( int wp ) {
+	int clip = BG_FindClipForWeapon(wp);
+	if( BG_IsAkimboWeapon(wp) &&
+		!BG_AkimboFireSequence(wp, pm->ps->ammoclip[clip],
+			pm->ps->ammoclip[BG_FindClipForWeapon(BG_AkimboSidearm(wp))]) )
+		return BG_AkimboSidearm(wp);
+	return clip;
+}
 
+void PM_WeaponUseAmmo( int wp, int amount ) {
 	if(pm->noWeapClips)
 		pm->ps->ammo[ BG_FindAmmoForWeapon(wp)] -= amount;
-	else {
-		takeweapon = BG_FindClipForWeapon(wp);
-
-		if( BG_IsAkimboWeapon( wp ) ) {
-			if( !BG_AkimboFireSequence( wp, pm->ps->ammoclip[BG_FindClipForWeapon(wp)], pm->ps->ammoclip[BG_FindClipForWeapon(BG_AkimboSidearm(wp))] ) )
-				takeweapon = BG_AkimboSidearm(wp);
-		}
-
-		pm->ps->ammoclip[takeweapon] -= amount;
-	}
+	else
+		pm->ps->ammoclip[PM_WeaponFiringClip(wp)] -= amount;
 }
 
 
@@ -2964,21 +2838,9 @@ PM_WeaponAmmoAvailable
 ==============
 */
 int PM_WeaponAmmoAvailable( int wp ) {
-	int takeweapon;
-
 	if(pm->noWeapClips)
 		return pm->ps->ammo[ BG_FindAmmoForWeapon(wp)];
-	else {
-		//return pm->ps->ammoclip[BG_FindClipForWeapon( wp )];
-		takeweapon = BG_FindClipForWeapon( wp );
-		
-		if( BG_IsAkimboWeapon( wp ) ) {
-			if( !BG_AkimboFireSequence( wp, pm->ps->ammoclip[BG_FindClipForWeapon(wp)], pm->ps->ammoclip[BG_FindClipForWeapon(BG_AkimboSidearm(wp))] ) )
-				takeweapon = BG_AkimboSidearm(wp);
-		}
-
-		return pm->ps->ammoclip[takeweapon];
-	}
+	return pm->ps->ammoclip[PM_WeaponFiringClip(wp)];
 }
 
 /*
@@ -3556,42 +3418,7 @@ static void PM_Weapon( void ) {
 		}
 	}
 
-	if( pm->ps->weaponDelay > 0 ) {
-		return;
-	}
-
-	// check for clip change
-	PM_CheckForReload( pm->ps->weapon );
-
-	if( pm->ps->weaponTime > 0 || pm->ps->weaponDelay > 0 ) {
-		return;
-	}
-
-	if( pm->ps->weaponstate == WEAPON_RELOADING ) {
-		PM_FinishWeaponReload();
-	}
-
-	// change weapon if time
-	if( pm->ps->weaponstate == WEAPON_DROPPING || pm->ps->weaponstate == WEAPON_DROPPING_TORELOAD ) {
-		PM_FinishWeaponChange();
-		return;
-	}
-
-	if( pm->ps->weaponstate == WEAPON_RAISING ) {
-		pm->ps->weaponstate = WEAPON_READY;
-
-//		if( pm->ps->eFlags & EF_PRONE && pm->ps->weapon == WP_MOBILE_MG42 )
-//			pm->pmext->proneMG42Zoomed = qtrue;
-
-		PM_StartWeaponAnim(PM_IdleAnimForWeapon(pm->ps->weapon));
-		return;
-	} else if( pm->ps->weaponstate == WEAPON_RAISING_TORELOAD ) {
-		pm->ps->weaponstate = WEAPON_READY;
-
-		PM_BeginWeaponReload( pm->ps->weapon );
-
-		return;
-	}
+	if( PM_ProcessWeaponTransitions() ) return;
 
 
 	if(pm->ps->weapon == WP_NONE)	// this is possible since the player starts with nothing

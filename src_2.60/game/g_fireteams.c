@@ -1,4 +1,5 @@
 #include "g_local.h"
+#include "g_nitmod_config.h"
 
 // Gordon
 // What we need....
@@ -104,6 +105,7 @@ void G_UpdateFireteamConfigString( fireteamData_t* ft ) {
 	}
 
 	trap_SetConfigstring(CS_FIRETEAMS + (ft-level.fireTeams), buffer);
+	G_NITMOD_MirrorEngineConfigString(CS_FIRETEAMS + (ft-level.fireTeams), buffer);
 }
 
 qboolean G_IsOnFireteam(int entityNum, fireteamData_t** teamNum) {

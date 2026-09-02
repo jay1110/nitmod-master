@@ -6,6 +6,9 @@
 */
 
 #include "g_local.h"
+#include "g_nitmod_config.h"
+#include "g_nitmod_entities.h"
+#include "nitmod_config_index.h"
 
 typedef struct {
   char oldShader[MAX_QPATH];
@@ -69,52 +72,57 @@ G_FindConfigstringIndex
 
 ================
 */
+typedef struct {
+	int start;
+	char value[MAX_STRING_CHARS];
+} nitmodEngineIndexContext_t;
+
+static const char *G_ReadConfigIndex( void *context, int index ) {
+	nitmodEngineIndexContext_t *engine = (nitmodEngineIndexContext_t *)context;
+	trap_GetConfigstring( engine->start + index, engine->value, sizeof( engine->value ) );
+	return engine->value;
+}
+
 int G_FindConfigstringIndex( const char *name, int start, int max, qboolean create ) {
-	int		i;
-	char	s[MAX_STRING_CHARS];
+	int index;
+	int needsWrite;
+	nitmodEngineIndexContext_t context;
 
-	if ( !name || !name[0] ) {
+	if( !name || !name[0] ) {
 		return 0;
 	}
-
-	for ( i=1 ; i<max ; i++ ) {
-		trap_GetConfigstring( start + i, s, sizeof( s ) );
-		if ( !s[0] ) {
-			break;
-		}
-		if ( !strcmp( s, name ) ) {
-			return i;
-		}
-	}
-
-	if ( !create ) {
+	if( start < 0 || start >= MAX_CONFIGSTRINGS || max < 1 || max > MAX_CONFIGSTRINGS - start ) {
+		G_Error( "G_FindConfigstringIndex: invalid range %i %i", start, max );
 		return 0;
 	}
-
-	if ( i == max ) {
-		G_Error( "G_FindConfigstringIndex: overflow" );
+	context.start = start;
+	index = NITMOD_FindConfigIndex( name, max, create, G_ReadConfigIndex, &context, &needsWrite );
+	if( index < 0 ) {
+		G_Error( "G_FindConfigstringIndex: overflow or invalid index search" );
+		return 0;
 	}
-
-	trap_SetConfigstring( start + i, name );
-
-	return i;
+	if( needsWrite ) {
+		trap_SetConfigstring( start + index, name );
+		G_NITMOD_MirrorEngineConfigString( start + index, name );
+	}
+	return index;
 }
 
 
 int G_ModelIndex( char *name ) {
-	return G_FindConfigstringIndex (name, CS_MODELS, MAX_MODELS, qtrue);
+	return nitrox_CSIndex( name, NITMOD_NCS_MODELS, NITMOD_NCS_MODEL_COUNT, qtrue );
 }
 
 int G_SoundIndex( const char *name ) {
-	return G_FindConfigstringIndex (name, CS_SOUNDS, MAX_SOUNDS, qtrue);
+	return nitrox_CSIndex( name, NITMOD_NCS_SOUNDS, NITMOD_NCS_SOUND_COUNT, qtrue );
 }
 
 int G_SkinIndex( const char *name ) {
-	return G_FindConfigstringIndex (name, CS_SKINS, MAX_CS_SKINS, qtrue);
+	return nitrox_CSIndex( name, NITMOD_NCS_SKINS, NITMOD_NCS_SKIN_COUNT, qtrue );
 }
 
 int G_ShaderIndex( char *name ) {
-	return G_FindConfigstringIndex (name, CS_SHADERS, MAX_CS_SHADERS, qtrue);
+	return nitrox_CSIndex( name, NITMOD_NCS_SHADERS, NITMOD_NCS_SHADER_COUNT, qtrue );
 }
 
 int G_CharacterIndex( const char *name ) {
@@ -573,6 +581,13 @@ Marks the entity as free
 */
 void G_FreeEntity( gentity_t *ed ) {
 	int spawnCount;
+	/* Original deletion notification/serial update precedes callbacks and
+	 * neverFree. Only its serial-table mutation is currently reconstructed. */
+	G_NITMOD_BotEntityDeleted( ed );
+
+	/* Remove before callbacks and before the engine can reuse this slot. */
+	G_NITMOD_UnregisterSatchel( ed );
+	G_NITMOD_UnregisterLandmine( ed );
 
 	if(ed->free) {
 		ed->free( ed );

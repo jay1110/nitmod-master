@@ -2,7 +2,7 @@
 // -------------------------------
 //
 #include "g_local.h"
-#include "../../etmain/ui/menudef.h"	// For vote options
+#include "../../pak/ui/menudef.h"	// For vote options
 
 
 

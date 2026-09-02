@@ -6,6 +6,7 @@
 // It also handles local physics interaction, like fragments bouncing off walls
 
 #include "cg_local.h"
+#include "cg_nitmod_config.h"
 
 /*static*/	pmove_t		cg_pmove;
 
@@ -807,6 +808,9 @@ void CG_PredictPlayerState( void ) {
 		) {
 		cg_pmove.ps = &cg.predictedPlayerState;
 		cg_pmove.pmext = &cg.pmext;
+		cg_pmove.nitmodReloadPreferenceFlags = CG_NITMOD_ReloadPreferenceFlags();
+		cg_pmove.nitmodDoubleJump = NITMOD_SimpleConfig()->doubleJump;
+		cg_pmove.nitmodDoubleJumpHeight = NITMOD_GameState()->doubleJumpHeight;
 
 		cg.pmext.airleft = (cg.waterundertime - cg.time);
 
@@ -836,6 +840,9 @@ void CG_PredictPlayerState( void ) {
 	// prepare for pmove
 	cg_pmove.ps = &cg.predictedPlayerState;
 	cg_pmove.pmext = &pmext; //&cg.pmext;
+	cg_pmove.nitmodReloadPreferenceFlags = CG_NITMOD_ReloadPreferenceFlags();
+	cg_pmove.nitmodDoubleJump = NITMOD_SimpleConfig()->doubleJump;
+	cg_pmove.nitmodDoubleJumpHeight = NITMOD_GameState()->doubleJumpHeight;
 	cg_pmove.character = CG_CharacterForClientinfo( &cgs.clientinfo[cg.snap->ps.clientNum], &cg_entities[cg.snap->ps.clientNum] );
 	cg.pmext.airleft = (cg.waterundertime - cg.time);
 

@@ -3,15 +3,18 @@
 // this file is only included when building a dll
 // syscalls.asm is included instead when building a qvm
 
-static int (QDECL *syscall)( int arg, ... ) = (int (QDECL *)( int, ...))-1;
+#include "../game/nitmod_syscall_abi.h"
+static nitmod_syscall_t nitmodSyscall = (nitmod_syscall_t)-1;
+#define syscall NITMOD_SYSCALL
 
 #if defined(__MACOS__)
 #ifndef __GNUC__
 #pragma export on
 #endif
 #endif
-void dllEntry( int (QDECL *syscallptr)( int arg,... ) ) {
-	syscall = syscallptr;
+NITMOD_WASM_ABI_EXPORT
+NITMOD_MODULE_EXPORT void dllEntry( nitmod_syscall_t syscallptr ) {
+	nitmodSyscall = syscallptr;
 }
 #if defined(__MACOS__)
 #ifndef __GNUC__

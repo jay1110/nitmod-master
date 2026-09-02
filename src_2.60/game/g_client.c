@@ -1,5 +1,20 @@
 #include "g_local.h"
-#include "../../etmain/ui/menudef.h"
+#include <limits.h>
+
+void NITMOD_SetSpawnProtection(gclient_t *client, qboolean revived) {
+	double expiry;
+	if(!client || client->sess.sessionTeam == TEAM_SPECTATOR) return;
+	expiry = (double)level.time + (revived ? (g_fastres.integer == 1 ? 1000.0 : 3000.0)
+		: (double)g_spawnInvul.integer * 1000.0);
+	/* Preserve ordinary signed settings; avoid undefined overflow at extremes. */
+	client->ps.powerups[PW_INVULNERABLE] = expiry > INT_MAX ? INT_MAX :
+		expiry < INT_MIN ? INT_MIN : (int)expiry;
+}
+#include "g_nitmod_teamcount.h"
+#include "nitmod_air.h"
+#include "g_nitmod_config.h"
+#include "nitmod_weapon_reload.h"
+#include "../../pak/ui/menudef.h"
 
 // g_client.c -- client functions that don't happen every frame
 
@@ -513,6 +528,7 @@ void limbo( gentity_t *ent, qboolean makeCorpse )
 
 		
 		if( makeCorpse ) {
+			NITMOD_DropLimboPacks(ent);
 			CopyToBodyQue (ent); // make a nice looking corpse
 		} else {
 			trap_UnlinkEntity (ent);
@@ -799,6 +815,8 @@ void SetWolfSpawnWeapons( gclient_t *client )
 	qboolean	isBot = (g_entities[client->ps.clientNum].r.svFlags & SVF_BOT) ? qtrue : qfalse;
 	qboolean	isPOW = (g_entities[client->ps.clientNum].r.svFlags & SVF_POW) ? qtrue : qfalse;
 
+	client->sess.rifleGrenadeStatus = 0;
+
 	if ( client->sess.sessionTeam == TEAM_SPECTATOR )
 		return;
 
@@ -848,7 +866,7 @@ void SetWolfSpawnWeapons( gclient_t *client )
 				switch( client->sess.playerWeapon ) {
 				case WP_KAR98:
 					if( AddWeaponToPlayer( client, WP_KAR98, GetAmmoTableData(WP_KAR98)->defaultStartingAmmo, GetAmmoTableData(WP_KAR98)->defaultStartingClip, qtrue ) ) {
-						AddWeaponToPlayer( client, WP_GPG40, GetAmmoTableData(WP_GPG40)->defaultStartingAmmo, GetAmmoTableData(WP_GPG40)->defaultStartingClip, qfalse );
+						client->sess.rifleGrenadeStatus = AddWeaponToPlayer( client, WP_GPG40, GetAmmoTableData(WP_GPG40)->defaultStartingAmmo, GetAmmoTableData(WP_GPG40)->defaultStartingClip, qfalse ) ? 1 : 0;
 					}
 					break;
 				default:
@@ -862,7 +880,7 @@ void SetWolfSpawnWeapons( gclient_t *client )
 				switch( client->sess.playerWeapon ) {
 				case WP_CARBINE:
 					if( AddWeaponToPlayer( client, WP_CARBINE, GetAmmoTableData(WP_CARBINE)->defaultStartingAmmo, GetAmmoTableData(WP_CARBINE)->defaultStartingClip, qtrue ) ) {
-						AddWeaponToPlayer( client, WP_M7, GetAmmoTableData(WP_M7)->defaultStartingAmmo, GetAmmoTableData(WP_M7)->defaultStartingClip, qfalse );
+						client->sess.rifleGrenadeStatus = AddWeaponToPlayer( client, WP_M7, GetAmmoTableData(WP_M7)->defaultStartingAmmo, GetAmmoTableData(WP_M7)->defaultStartingClip, qfalse ) ? 1 : 0;
 					}
 					break;
 				default:
@@ -1295,6 +1313,7 @@ void ClientUserinfoChanged( int clientNum ) {
 
 	// check for local client
 	s = Info_ValueForKey( userinfo, "ip" );
+	G_NITMOD_CacheClientAddress( ent, s );
 	if ( s && !strcmp( s, "localhost" ) ) {
 		client->pers.localClient = qtrue;
 		level.fLocalHost = qtrue;
@@ -1306,6 +1325,7 @@ void ClientUserinfoChanged( int clientNum ) {
 	if(ent->r.svFlags & SVF_BOT) {
 		client->pers.autoActivate = PICKUP_TOUCH;
 		client->pers.bAutoReloadAux = qtrue;
+		client->pers.bAltReloadAux = qfalse;
 		client->pmext.bAutoReload = qtrue;
 		client->pers.predictItemPickup = qfalse;
 	} else {
@@ -1317,6 +1337,8 @@ void ClientUserinfoChanged( int clientNum ) {
 
 		client->pers.autoActivate = (client->pers.clientFlags & CGF_AUTOACTIVATE) ? PICKUP_TOUCH : PICKUP_ACTIVATE;
 		client->pers.predictItemPickup = ((client->pers.clientFlags & CGF_PREDICTITEMS) != 0);
+		client->pers.bAltReloadAux =
+			(client->pers.clientFlags & NITMOD_CGF_ALT_RELOAD) != 0;
 
 		if(client->pers.clientFlags & CGF_AUTORELOAD) {
 			client->pers.bAutoReloadAux = qtrue;
@@ -1410,6 +1432,9 @@ void ClientUserinfoChanged( int clientNum ) {
 	}
 
 	trap_GetConfigstring( CS_PLAYERS + clientNum, oldname, sizeof( oldname ) );
+
+	/* Optional original equipment field; stock clients ignore unknown keys. */
+	s = va( "%s\\rn\\%i\\lc\\%i", s, client->sess.rifleGrenadeStatus, client->sess.latchPlayerType );
 
 	trap_SetConfigstring( CS_PLAYERS + clientNum, s );
 
@@ -1618,6 +1643,7 @@ char *ClientConnect( int clientNum, qboolean firstTime, qboolean isBot ) {
 
 	// count current clients and rank for scoreboard
 	CalculateRanks();
+	G_NITMOD_RefreshTeamPopulation();
 
 	return NULL;
 }
@@ -1658,6 +1684,7 @@ void ClientBegin( int clientNum )
 	ent = g_entities + clientNum;
 
 	client = level.clients + clientNum;
+	G_NITMOD_ResetClient( clientNum );
 
 	if ( ent->r.linked ) {
 		trap_UnlinkEntity( ent );
@@ -1781,6 +1808,7 @@ void ClientBegin( int clientNum )
 
 	// count current clients and rank for scoreboard
 	CalculateRanks();
+	G_NITMOD_RefreshTeamPopulation();
 
 	// No surface determined yet.
 	ent->surfaceFlags = 0;
@@ -1974,7 +2002,8 @@ void ClientSpawn( gentity_t *ent, qboolean revived )
 	client->ps.persistant[PERS_TEAM] = client->sess.sessionTeam;
 	client->ps.persistant[PERS_HWEAPON_USE] = 0;
 
-	client->airOutTime = level.time + 12000;
+	/* Skill unlock storage remains inactive, matching the world-effects adapter. */
+	client->airOutTime = NITMOD_AirDeadline( level.time, 0u );
 
 	// clear entity values
 	client->ps.stats[STAT_MAX_HEALTH] = client->pers.maxHealth;
@@ -2040,6 +2069,13 @@ void ClientSpawn( gentity_t *ent, qboolean revived )
 	// DHM - Nerve :: Add appropriate weapons
 	if ( !revived ) {
 		qboolean update = qfalse;
+		int selected = NITMOD_SelectAvailableClass(ent, client->sess.latchPlayerType);
+		if(selected < 0) {
+			SetTeam(ent, "spectator", qtrue, -1, -1, qfalse);
+			return;
+		}
+		if(selected != client->sess.latchPlayerType) update = qtrue;
+		client->sess.latchPlayerType = selected;
 
 		if( client->sess.playerType != client->sess.latchPlayerType )
 			update = qtrue;
@@ -2074,19 +2110,13 @@ void ClientSpawn( gentity_t *ent, qboolean revived )
 		}
 	}
 
-	// TTimo keep it isolated from spectator to be safe still
-	if( client->sess.sessionTeam != TEAM_SPECTATOR ) {
-		// Xian - Moved the invul. stuff out of SetWolfSpawnWeapons and put it here for clarity
-		if ( g_fastres.integer == 1 && revived )
-			client->ps.powerups[PW_INVULNERABLE] = level.time + 1000; 
-		else
-			client->ps.powerups[PW_INVULNERABLE] = level.time + 3000; 
-	}
-	// End Xian
+	NITMOD_SetSpawnProtection(client, revived);
 
 	G_UpdateCharacter( client );
 
 	SetWolfSpawnWeapons( client ); 
+	/* Publish the status after weapon assignment, including failed/no grant. */
+	ClientUserinfoChanged( index );
 	
 	// START	Mad Doctor I changes, 8/17/2002
 
@@ -2225,6 +2255,7 @@ void ClientDisconnect( int clientNum ) {
 	vec3_t		launchvel;
 	int			i;
 
+	G_NITMOD_ResetClient( clientNum );
 	ent = g_entities + clientNum;
 	if ( !ent->client ) {
 		return;
@@ -2351,6 +2382,7 @@ void ClientDisconnect( int clientNum ) {
 
 
 	CalculateRanks();
+	G_NITMOD_RefreshTeamPopulation();
 
 	if ( ent->r.svFlags & SVF_BOT ) {
 		BotAIShutdownClient( clientNum );

@@ -681,6 +681,7 @@ qboolean G_CallSpawn( gentity_t *ent ) {
 	for ( item=bg_itemlist+1 ; item->classname ; item++ ) {
 		if ( !strcmp(item->classname, ent->classname) ) {
 			// found it
+			G_NITMOD_SetTeamItemClassnameHash( ent, item );
 			if(g_gametype.integer != GT_WOLF_LMS) { // Gordon: lets not have items in last man standing for the moment
 				G_SpawnItem( ent, item );
 
@@ -850,6 +851,7 @@ void G_SpawnGEntityFromSpawnVars( void ) {
 	} else {
 		ent->targetnamehash = -1;
 	}
+	G_NITMOD_InitSpawnNameHashes( ent );
 
 	// move editor origin to pos
 	VectorCopy( ent->s.origin, ent->s.pos.trBase );
@@ -859,6 +861,8 @@ void G_SpawnGEntityFromSpawnVars( void ) {
 	if ( !G_CallSpawn( ent ) ) {
 		G_FreeEntity( ent );
 	}
+	/* Original refresh occurs after G_CallSpawn and its failure/free path. */
+	G_NITMOD_RefreshClassnameHash( ent );
 
 	// RF, try and move it into the bot entities if possible
 //	BotCheckBotGameEntity( ent );
@@ -1040,4 +1044,3 @@ void G_SpawnEntitiesFromString( void ) {
 	G_Printf( "Disable spawning!\n" );
 	level.spawning = qfalse;			// any future calls to G_Spawn*() will be errors
 }
-

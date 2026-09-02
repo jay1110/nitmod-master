@@ -2,6 +2,44 @@
 #include <limits.h>
 
 #include "g_local.h"
+#include "g_nitmod_config.h"
+
+qboolean G_IsClassDisabled(gentity_t *ent, int playerClass, qboolean quiet) {
+	vmCvar_t *limits[] = { &team_maxSoldiers, &team_maxMedics, &team_maxEngineers,
+		&team_maxFieldops, &team_maxCovertops };
+	int i, count = 0, maximum, war;
+	if(!ent || !ent->client || ent->client->sess.sessionTeam == TEAM_SPECTATOR ||
+		playerClass < PC_SOLDIER || playerClass > PC_COVERTOPS) return qfalse;
+	maximum = limits[playerClass]->integer;
+	if(maximum == -1) return qfalse;
+	war = trap_Cvar_VariableIntegerValue("g_war");
+	if((war == 1 && playerClass == PC_SOLDIER) || (war == 3 && playerClass == PC_ENGINEER) ||
+		(war == 2 && playerClass == PC_COVERTOPS)) return qfalse;
+	for(i = 0; i < level.numNonSpectatorClients && i < MAX_CLIENTS; ++i) {
+		int index = level.sortedClients[i];
+		gclient_t *other;
+		if(index < 0 || index >= MAX_CLIENTS) continue;
+		other = &level.clients[index];
+		if(other == ent->client || other->sess.sessionTeam != ent->client->sess.sessionTeam) continue;
+		if(other->sess.playerType == playerClass || other->sess.latchPlayerType == playerClass) ++count;
+	}
+	if(count < maximum) return qfalse;
+	if(!quiet) {
+		/* Standard cp works for stock clients as well as reconstructed clients. */
+		const char *message = NITMOD_ServerMessageText(14 + playerClass);
+		if(message) trap_SendServerCommand(ent->s.number, va("cp \"%s\"", message));
+	}
+	return qtrue;
+}
+
+int NITMOD_SelectAvailableClass(gentity_t *ent, int requested) {
+	int candidate;
+	if(requested < PC_SOLDIER || requested > PC_COVERTOPS) requested = PC_SOLDIER;
+	if(!G_IsClassDisabled(ent, requested, qtrue)) return requested;
+	for(candidate = PC_SOLDIER; candidate <= PC_COVERTOPS; ++candidate)
+		if(!G_IsClassDisabled(ent, candidate, qtrue)) return candidate;
+	return -1;
+}
 
 typedef struct teamgame_s
 {
@@ -1075,6 +1113,9 @@ void team_wolf_objective_use( gentity_t *self, gentity_t *other, gentity_t *acti
 	Info_SetValueForKey( cs, "y", va( "%i", (int)self->s.origin[1] ) );
 	Info_SetValueForKey( cs, "t", va( "%i", self->count2 ) );
 	trap_SetConfigstring( self->count, cs );
+	/* Preserve the engine update for stock clients and publish the matching
+	 * runtime spawn-target change to clients that negotiated Nitmod NCS. */
+	G_NITMOD_MirrorEngineConfigString( self->count, cs );
 }
 
 void objective_Register(gentity_t *self) {
@@ -1097,6 +1138,7 @@ void objective_Register(gentity_t *self) {
 		self->use = team_wolf_objective_use;
 		self->count = cs_obj;
 		trap_SetConfigstring( cs_obj, cs );
+		G_NITMOD_MirrorEngineConfigString( cs_obj, cs );
 		VectorCopy(self->s.origin, level.spawntargets[numobjectives]);
 	}
 
@@ -1323,6 +1365,10 @@ void checkpoint_touch (gentity_t *self, gentity_t *other, trace_t *trace) {
 		G_Script_ScriptEvent( self, "trigger", "allied_capture" );
 	}
 
+	/* Matches Nitmod's checkpoint event: type 9 is Axis, type 10 Allies. */
+	nitmod_ObjectiveEvent( self->count == TEAM_AXIS ? 9 : 10, 0,
+		self->s.teamNum, other->s.number, MOD_UNKNOWN );
+
 	// Play a sound
 	G_AddEvent( self, EV_GENERAL_SOUND, self->soundPos1 );
 
@@ -1405,6 +1451,10 @@ void checkpoint_spawntouch (gentity_t *self, gentity_t *other, trace_t *trace) {
 		G_Script_ScriptEvent( self, "trigger", "axis_capture" );
 	else
 		G_Script_ScriptEvent( self, "trigger", "allied_capture" );
+
+	/* Spawnpoint checkpoints use the same original client notification. */
+	nitmod_ObjectiveEvent( self->count == TEAM_AXIS ? 9 : 10, 0,
+		self->s.teamNum, other->s.number, MOD_UNKNOWN );
 
 	// Don't allow touch again until animation is finished
 	self->touch = NULL;

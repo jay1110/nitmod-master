@@ -7,6 +7,7 @@
 
 
 #include "g_local.h"
+#include "g_nitmod_entities.h"
 
 extern void AimAtTarget ( gentity_t * self );
 extern float AngleDifference(float ang1, float ang2);
@@ -2546,6 +2547,7 @@ void landmine_setup( gentity_t *ent ) {
 	else
 		ent->s.otherEntityNum2 = 0;
 
+	G_NITMOD_RegisterLandmine( ent );
 	trap_LinkEntity( ent );
 }
 

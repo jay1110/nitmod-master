@@ -2,6 +2,7 @@
 // active (after loading) gameplay
 
 #include "cg_local.h"
+#include "cg_nitmod_config.h"
 
 #define STATUSBARHEIGHT 452
 char* BindingFromName(const char *cvar);
@@ -4308,6 +4309,7 @@ static void CG_Draw2D( void ) {
 		}
 
 		CG_DrawCenterString();
+		NITMOD_DrawBanner();
 		CG_DrawPMItems();
 		CG_DrawPMItemsBig();
 

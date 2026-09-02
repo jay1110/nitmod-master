@@ -1434,6 +1434,22 @@ static qboolean CG_RW_ParseClient( int handle, weaponInfo_t *weaponInfo )
 	return qtrue;
 }
 
+/* Original Nitmod's cgame skips shared gameplay definitions. They are not
+ * weaponInfo_t media fields. Keep malformed blocks bounded and release the
+ * parser source through the same error path as the client block. */
+static qboolean CG_RW_SkipSharedDefinition( int handle ) {
+	pc_token_t token;
+	int depth = 1;
+	if( !trap_PC_ReadToken( handle, &token ) || strcmp( token.string, "{" ) ) {
+		return CG_RW_ParseError( handle, "expected '{'" );
+	}
+	while( trap_PC_ReadToken( handle, &token ) ) {
+		if( !strcmp( token.string, "{" ) ) ++depth;
+		else if( !strcmp( token.string, "}" ) && !--depth ) return qtrue;
+	}
+	return CG_RW_ParseError( handle, "unterminated shared weapon definition" );
+}
+
 static qboolean CG_RegisterWeaponFromWeaponFile( const char *filename, weaponInfo_t *weaponInfo )
 {
 	pc_token_t token;
@@ -1465,6 +1481,9 @@ static qboolean CG_RegisterWeaponFromWeaponFile( const char *filename, weaponInf
 			if( !CG_RW_ParseClient( handle, weaponInfo ) ) {
 				return qfalse;
 			}
+		} else if( !Q_stricmp( token.string, "both" ) ||
+			!Q_stricmp( token.string, "both_altweap" ) ) {
+			if( !CG_RW_SkipSharedDefinition( handle ) ) return qfalse;
 		} else {
 			return CG_RW_ParseError( handle, "unknown token '%s'", token.string );
 		}

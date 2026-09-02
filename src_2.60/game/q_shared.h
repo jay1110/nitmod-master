@@ -1,6 +1,13 @@
 #ifndef __Q_SHARED_H
 #define __Q_SHARED_H
 
+/* Export only engine entrypoints from otherwise hidden WASM side modules. */
+#if defined(__EMSCRIPTEN__)
+#define NITMOD_MODULE_EXPORT __attribute__((visibility("default")))
+#else
+#define NITMOD_MODULE_EXPORT
+#endif
+
 // q_shared.h -- included first by ALL program modules.
 // A user mod should never modify this file
 

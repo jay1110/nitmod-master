@@ -1,4 +1,5 @@
 #include "g_local.h"
+#include "g_nitmod_config.h"
 
 
 void InitTrigger( gentity_t *self) {
@@ -534,7 +535,7 @@ void heal_touch( gentity_t *self, gentity_t *other, trace_t *trace ) {
 	}
 }
 
-#define HEALTH_REGENTIME 10000
+#define HEALTH_REGENTIME g_healthCabinetTime.integer
 void trigger_heal_think(gentity_t* self) {
 	self->nextthink = level.time + HEALTH_REGENTIME;
 /*	if(self->timestamp - level.time > -HEALTH_REGENTIME) {
@@ -725,7 +726,7 @@ void ammo_touch( gentity_t *self, gentity_t *other, trace_t *trace ) {
 	}
 }
 
-#define AMMO_REGENTIME 60000
+#define AMMO_REGENTIME g_ammoCabinetTime.integer
 void trigger_ammo_think(gentity_t* self) {
 	self->nextthink = level.time + AMMO_REGENTIME;
 /*	if(self->timestamp - level.time > -AMMO_REGENTIME) {
@@ -1229,6 +1230,7 @@ void G_SetConfigStringValue( int num, const char* key, const char* value ) {
 	trap_GetConfigstring( num, cs, sizeof(cs) );
 	Info_SetValueForKey( cs, key, value );
 	trap_SetConfigstring( num, cs );
+	G_NITMOD_MirrorEngineConfigString( num, cs );
 }
 
 void Touch_ObjectiveInfo( gentity_t *ent, gentity_t *other, trace_t *trace ) {
@@ -1520,4 +1522,3 @@ void SP_trigger_concussive_dust( gentity_t *self ) {
 	trap_LinkEntity (self);
 }
 // jpw
-

@@ -12,6 +12,16 @@ USER INTERFACE MAIN
 
 #include "ui_local.h"
 
+/* Legacy ET savegame handlers are still compiled, but original Nitmod's
+ * asset header does not define these unused single-player menu identifiers.
+ * Keep their historic values in code; never patch the original PK3 header. */
+#ifndef UI_SAVEGAME_SHOT
+#define UI_SAVEGAME_SHOT 258
+#endif
+#ifndef FEEDER_SAVEGAMES
+#define FEEDER_SAVEGAMES 0x10
+#endif
+
 // NERVE - SMF
 #define AXIS_TEAM		0
 #define ALLIES_TEAM		1
@@ -243,7 +253,7 @@ qboolean _UI_IsFullscreen( void );
 #pragma export on
 #endif
 #endif
-int vmMain( int command, int arg0, int arg1, int arg2, int arg3, int arg4, int arg5, int arg6, int arg7, int arg8, int arg9, int arg10, int arg11  ) {
+NITMOD_MODULE_EXPORT int vmMain( int command, int arg0, int arg1, int arg2, int arg3, int arg4, int arg5, int arg6, int arg7, int arg8, int arg9, int arg10, int arg11  ) {
 #if defined(__MACOS__)
 #ifndef __GNUC__
 #pragma export off
@@ -5593,8 +5603,34 @@ static void UI_BinaryServerInsertion(int num) {
 UI_BuildServerDisplayList
 ==================
 */
+/* NxAC is announced only through a server-status reply (`sv_NxAC`), not the
+ * master-server info string.  -1 means that an asynchronous query is still
+ * outstanding, 0 that it is absent, and 1 that it is present. */
+static int nitmodNxacStatus[MAX_GLOBAL_SERVERS];
+static int nitmodNxacStatusSource = -1;
+
+static int UI_NitmodNxacStatus( int serverNum ) {
+	char address[MAX_ADDRESSLENGTH];
+	char status[MAX_SERVERSTATUS_TEXT];
+
+	if( serverNum < 0 || serverNum >= MAX_GLOBAL_SERVERS ) {
+		return 0;
+	}
+	if( nitmodNxacStatus[serverNum] >= 0 ) {
+		return nitmodNxacStatus[serverNum];
+	}
+
+	trap_LAN_GetServerAddressString( ui_netSource.integer, serverNum,
+		address, sizeof( address ) );
+	if( !address[0] || !trap_LAN_ServerStatus( address, status, sizeof( status ) ) ) {
+		return -1;
+	}
+	nitmodNxacStatus[serverNum] = atoi( Info_ValueForKey( status, "sv_NxAC" ) ) ? 1 : 0;
+	return nitmodNxacStatus[serverNum];
+}
+
 static void UI_BuildServerDisplayList(qboolean force) {
-	int i, count, clients, maxClients, ping, game, len, visible, friendlyFire, maxlives, punkbuster, antilag, password, weaponrestricted, balancedteams;
+	int i, count, clients, maxClients, ping, game, len, visible, friendlyFire, maxlives, punkbuster, antilag, password, weaponrestricted, balancedteams, nxacStatus;
 	char info[MAX_STRING_CHARS];
 	//qboolean startRefresh = qtrue; // TTimo: unused
 	static int numinvisible;
@@ -5608,6 +5644,10 @@ static void UI_BuildServerDisplayList(qboolean force) {
 	// if we shouldn't reset
 	if ( force == 2 ) {
 		force = 0;
+	}
+	if( force || nitmodNxacStatusSource != ui_netSource.integer ) {
+		memset( nitmodNxacStatus, 0xff, sizeof( nitmodNxacStatus ) );
+		nitmodNxacStatusSource = ui_netSource.integer;
 	}
 
 	// do motd updates here too
@@ -5762,6 +5802,38 @@ static void UI_BuildServerDisplayList(qboolean force) {
 			if( ui_joinGameType.integer != -1 ) {
 				game = atoi(Info_ValueForKey(info, "gametype"));
 				if( game != ui_joinGameType.integer ) {
+					trap_LAN_MarkServerVisible( ui_netSource.integer, i, qfalse );
+					continue;
+				}
+			}
+
+			/* Recovered Nitmod browser filter: 0 shows all servers, 1 hides
+			 * Nitmod servers, and 2 shows Nitmod servers only. */
+			trap_Cvar_Update( &ui_browserNitmodonly );
+			if( ui_browserNitmodonly.integer ) {
+				qboolean isNitmod = !Q_stricmp( Info_ValueForKey( info, "game" ), "nitmod" );
+				if( ( ui_browserNitmodonly.integer == 1 && isNitmod ) ||
+					( ui_browserNitmodonly.integer == 2 && !isNitmod ) ) {
+					trap_LAN_MarkServerVisible( ui_netSource.integer, i, qfalse );
+					continue;
+				}
+			}
+
+			/* 0 = all, 1 = NxAC-only, 2 = hide NxAC.  Status is asynchronous;
+			 * keep a pending server visible for the next refresh instead of
+			 * classifying it from incomplete master information. */
+			trap_Cvar_Update( &ui_browserNxAConly );
+			if( ui_browserNxAConly.integer ) {
+				nxacStatus = UI_NitmodNxacStatus( i );
+				if( nxacStatus < 0 ) {
+					/* This server remains visible while its asynchronous status
+					 * request is pending and will be visited again next refresh.
+					 * Undo the early total so clients are not counted repeatedly. */
+					uiInfo.serverStatus.numPlayersOnServers -= clients;
+					continue;
+				}
+				if( ( ui_browserNxAConly.integer == 1 && !nxacStatus ) ||
+					( ui_browserNxAConly.integer == 2 && nxacStatus ) ) {
 					trap_LAN_MarkServerVisible( ui_netSource.integer, i, qfalse );
 					continue;
 				}
@@ -8177,6 +8249,8 @@ vmCvar_t	ui_browserShowPunkBuster;			// DHM - Nerve
 vmCvar_t	ui_browserShowAntilag;	// TTimo
 vmCvar_t	ui_browserShowWeaponsRestricted;
 vmCvar_t	ui_browserShowTeamBalanced;
+vmCvar_t	ui_browserNitmodonly;
+vmCvar_t	ui_browserNxAConly;
 
 vmCvar_t	ui_serverStatusTimeOut;
 
@@ -8331,6 +8405,8 @@ cvarTable_t		cvarTable[] = {
 	{ &ui_browserShowAntilag, "ui_browserShowAntilag", "0", CVAR_ARCHIVE },
 	{ &ui_browserShowWeaponsRestricted, "ui_browserShowWeaponsRestricted", "0", CVAR_ARCHIVE },
 	{ &ui_browserShowTeamBalanced, "ui_browserShowTeamBalanced", "0", CVAR_ARCHIVE },
+	{ &ui_browserNitmodonly, "ui_browserNitmodonly", "0", CVAR_ARCHIVE },
+	{ &ui_browserNxAConly, "ui_browserNxAConly", "0", CVAR_ARCHIVE },
 
 	{ &ui_serverStatusTimeOut, "ui_serverStatusTimeOut", "7000", CVAR_ARCHIVE},
 

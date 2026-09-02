@@ -6,7 +6,7 @@
 #include "../cgame/tr_types.h"
 #include "keycodes.h"
 
-#include "../../etmain/ui/menudef.h"
+#include "../../pak/ui/menudef.h"
 
 #define MAX_MENUNAME 32
 #define MAX_ITEMTEXT 64
@@ -283,6 +283,7 @@ typedef struct itemDef_s {
 	const char *onEnter;
 
 	struct itemDef_s *toolTipData;	// OSP - Tag an item to this item for auto-help popups
+	int bitflag; // Original i386 offset 0x274; action script owns toggling.
 
 } itemDef_t;
 

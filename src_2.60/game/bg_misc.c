@@ -8,7 +8,7 @@
 
 #include "q_shared.h"
 #include "bg_public.h"
-#include "../../etmain/ui/menudef.h"
+#include "../../pak/ui/menudef.h"
 
 #ifdef CGAMEDLL
 	extern	vmCvar_t cg_gameType;
@@ -2612,48 +2612,6 @@ weapon_t BG_FindAmmoForWeapon( weapon_t weapon ) {
 
 /*
 ==============
-BG_AkimboFireSequence
-	returns 'true' if it's the left hand's turn to fire, 'false' if it's the right hand's turn
-==============
-*/
-qboolean BG_AkimboFireSequence( int weapon, int akimboClip, int mainClip ) {
-	if( !BG_IsAkimboWeapon( weapon ) )
-		return qfalse;
-
-	if( !akimboClip )
-		return qfalse;
-
-	// no ammo in main weapon, must be akimbo turn
-	if( !mainClip )
-		return qtrue;
-
-	// at this point, both have ammo
-
-	// now check 'cycle'   // (removed old method 11/5/2001)
-	if( (akimboClip + mainClip) & 1) { 
-		return qfalse;
-	}
-
-	return qtrue;
-}
-
-/*
-==============
-BG_IsAkimboWeapon
-==============
-*/
-qboolean BG_IsAkimboWeapon( int weaponNum ) {
-	if( weaponNum == WP_AKIMBO_COLT ||
-		weaponNum == WP_AKIMBO_SILENCEDCOLT ||
-		weaponNum == WP_AKIMBO_LUGER ||
-		weaponNum == WP_AKIMBO_SILENCEDLUGER )
-		return qtrue;
-	else
-		return qfalse;
-}
-
-/*
-==============
 BG_IsAkimboSideArm
 ==============
 */
@@ -2664,22 +2622,6 @@ qboolean BG_IsAkimboSideArm( int weaponNum, playerState_t *ps ) {
 	case WP_LUGER:	if( ps->weapon == WP_AKIMBO_LUGER || ps->weapon == WP_AKIMBO_SILENCEDLUGER )	return qtrue;	break;
 	}
 	return qfalse;
-}
-
-/*
-==============
-BG_AkimboSidearm
-==============
-*/
-int BG_AkimboSidearm( int weaponNum ) {
-	switch( weaponNum )
-	{
-	case WP_AKIMBO_COLT:			return WP_COLT;				break;
-	case WP_AKIMBO_SILENCEDCOLT:	return WP_COLT;	break;
-	case WP_AKIMBO_LUGER:			return WP_LUGER;			break;
-	case WP_AKIMBO_SILENCEDLUGER:	return WP_LUGER;			break;
-	default:						return WP_NONE;				break;
-	}
 }
 
 /*
@@ -3952,6 +3894,16 @@ void BG_AddPredictableEventToPlayerstate( int newEvent, int eventParm, playerSta
 	ps->events[ps->eventSequence & (MAX_EVENTS-1)] = newEvent;
 	ps->eventParms[ps->eventSequence & (MAX_EVENTS-1)] = eventParm;
 	ps->eventSequence++;
+}
+
+/* Landing damage is predicted by both cgame and qagame.  Keep feedback in
+ * playerState next to the predictable event so both VMs latch the same hit
+ * indicator without relying on decompiler-era field offsets. */
+void BG_AddPredictableDamage( int count, int yaw, int pitch, playerState_t *ps ) {
+	ps->damageEvent++;
+	ps->damageYaw = yaw;
+	ps->damagePitch = pitch;
+	ps->damageCount = count;
 }
 
 // Gordon: would like to just inline this but would likely break qvm support

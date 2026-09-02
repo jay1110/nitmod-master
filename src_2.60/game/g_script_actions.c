@@ -7,6 +7,7 @@
 //===========================================================================
 
 #include "../game/g_local.h"
+#include "g_nitmod_config.h"
 #include "../game/q_shared.h"
 
 /*
@@ -186,6 +187,7 @@ qboolean G_ScriptAction_ShaderRemap( gentity_t* ent, char *params ) {
 
 qboolean G_ScriptAction_ShaderRemapFlush( gentity_t* ent, char *params ) {
 	trap_SetConfigstring(CS_SHADERSTATE, BuildShaderStateConfig());
+	G_NITMOD_MirrorEngineConfigString(CS_SHADERSTATE, BuildShaderStateConfig());
 	return qtrue;
 }
 
@@ -823,6 +825,7 @@ qboolean G_ScriptAction_SetChargeTimeFactor( gentity_t* ent, char *params ) {
 		Info_SetValueForKey( cs, "ald_cvo", va("%i", level.covertopsChargeTime[1]) );
 		trap_SetConfigstring( CS_CHARGETIMES, cs );
 	}
+	nitmod_SendChargeTimes( -1 );
 
 	return qtrue;
 }
@@ -1332,7 +1335,7 @@ qboolean G_ScriptAction_Trigger( gentity_t *ent, char *params )
 {
 	gentity_t *trent;
 	char *pString, name[MAX_QPATH], trigger[MAX_QPATH], *token;
-	int oldId, i;
+	int oldId, i, scriptNameHash;
 	qboolean terminate, found;
 
 	// get the cast name
@@ -1396,7 +1399,8 @@ qboolean G_ScriptAction_Trigger( gentity_t *ent, char *params )
 		found = qfalse;
 		// for all entities/bots with this scriptName
 		trent = NULL;
-		while ((trent = G_Find( trent, FOFS(scriptName), name ))) {
+		scriptNameHash = (int)BG_StringHashValue(name);
+		while ((trent = G_NITMOD_FindByScriptNameHash( trent, scriptNameHash ))) {
 			found = qtrue;
 			if (!(trent->r.svFlags & SVF_BOT)) {
 				oldId = trent->scriptStatus.scriptId;
@@ -1405,8 +1409,6 @@ qboolean G_ScriptAction_Trigger( gentity_t *ent, char *params )
 				if ((trent == ent) && (oldId != trent->scriptStatus.scriptId)) {
 					terminate = qtrue;
 				}
-			} else {
-				Bot_ScriptEvent( trent->s.number, "trigger", trigger );
 			}
 		}
 		//
@@ -2043,7 +2045,7 @@ qboolean G_ScriptAction_Accum( gentity_t *ent, char *params )
 		}
 		if (ent->scriptAccumBuffer[bufferIndex] == atoi(token)) {
 			gentity_t* trent;
-			int oldId;
+			int oldId, scriptNameHash;
 //			qboolean loop = qfalse;
 
 			token = COM_ParseExt( &pString, qfalse );
@@ -2062,7 +2064,8 @@ qboolean G_ScriptAction_Accum( gentity_t *ent, char *params )
 			found = qfalse;
 			// for all entities/bots with this scriptName
 			trent = NULL;
-			while ((trent = G_Find( trent, FOFS(scriptName), lastToken ))) {
+			scriptNameHash = (int)BG_StringHashValue(lastToken);
+			while ((trent = G_NITMOD_FindByScriptNameHash( trent, scriptNameHash ))) {
 				found = qtrue;
 				oldId = trent->scriptStatus.scriptId;
 				G_Script_ScriptEvent( trent, "trigger", name );
@@ -2237,7 +2240,7 @@ qboolean G_ScriptAction_GlobalAccum( gentity_t *ent, char *params )
 		}
 		if (level.globalAccumBuffer[bufferIndex] == atoi(token)) {
 			gentity_t* trent;
-			int oldId;
+			int oldId, scriptNameHash;
 //			qboolean loop = qfalse;
 
 			token = COM_ParseExt( &pString, qfalse );
@@ -2256,7 +2259,8 @@ qboolean G_ScriptAction_GlobalAccum( gentity_t *ent, char *params )
 			found = qfalse;
 			// for all entities/bots with this scriptName
 			trent = NULL;
-			while ((trent = G_Find( trent, FOFS(scriptName), lastToken ))) {
+			scriptNameHash = (int)BG_StringHashValue(lastToken);
+			while ((trent = G_NITMOD_FindByScriptNameHash( trent, scriptNameHash ))) {
 				found = qtrue;
 				oldId = trent->scriptStatus.scriptId;
 				G_Script_ScriptEvent( trent, "trigger", name );
@@ -2466,7 +2470,7 @@ qboolean G_ScriptAction_TagConnect( gentity_t *ent, char *params )
 
 	parent = G_FindByTargetname( NULL, token );
 	if (!parent) {
-		parent = G_Find( NULL, FOFS(scriptName), token );
+		parent = G_NITMOD_FindByScriptNameHash( NULL, (int)BG_StringHashValue(token) );
 		if (!parent) {
 			G_Error( "G_ScriptAction_TagConnect: unable to find entity with targetname \"%s\"", token );
 		}
@@ -4217,6 +4221,7 @@ qboolean etpro_ScriptAction_SetValues( gentity_t *ent, char *params ) {
 	char	*p;
 	char	key[MAX_TOKEN_CHARS], value[MAX_TOKEN_CHARS];
 	int		classchanged = 0;
+	qboolean noClassSpawn = qfalse;
 
 	// rain - reset and fill in the spawnVars info so that spawn
 	// functions can use them
@@ -4244,6 +4249,10 @@ qboolean etpro_ScriptAction_SetValues( gentity_t *ent, char *params ) {
 		if( g_scriptDebug.integer )
 			G_Printf( "%d : (%s) %s: set [%s] [%s] [%s]\n", level.time, ent->scriptName, GAMEVERSION, ent->scriptName, key, value );
 
+		if (!Q_stricmp(key, "classname_nospawn")) {
+			Q_strncpyz(key, "classname", sizeof(key));
+			noClassSpawn = qtrue;
+		}
 		if (!Q_stricmp(key, "classname")) {
 			if (Q_stricmp(value, ent->classname))
 				classchanged = 1;
@@ -4263,6 +4272,13 @@ qboolean etpro_ScriptAction_SetValues( gentity_t *ent, char *params ) {
 			//need to hash this ent targetname for setstate script targets...
 			ent->targetnamehash = BG_StringHashValue( ent->targetname );
 		}
+		if( !Q_stricmp( key, "target" ) ) {
+			ent->nitmodTargetHash = (int)BG_StringHashValue( ent->target );
+		}
+		if( !Q_stricmp( key, "scriptname" ) ) {
+			/* Unlike map spawn, no script_multiplayer alias here. */
+			ent->nitmodScriptNameHash = (int)BG_StringHashValue( ent->scriptName );
+		}
 	}
 
 	// move editor origin to pos
@@ -4271,7 +4287,8 @@ qboolean etpro_ScriptAction_SetValues( gentity_t *ent, char *params ) {
 
 	// rain - if the classname was changed, call the spawn func again
 	if (classchanged) {
-		G_CallSpawn( ent );
+		if (!noClassSpawn) G_CallSpawn( ent );
+		G_NITMOD_RefreshClassnameHash( ent );
 		trap_LinkEntity( ent );
 	}
 

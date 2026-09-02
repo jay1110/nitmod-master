@@ -7,6 +7,7 @@
 */
 
 #include "g_local.h"
+#include "g_nitmod_config.h"
 
 char *hintStrings[HINT_NUM_HINTS] = {
 	"",					// HINT_NONE
@@ -4570,8 +4571,20 @@ void func_constructible_spawn( gentity_t *self, gentity_t *other, gentity_t *act
 func_constructible_explode
 ==============
 */
+static void nitmod_ConstructibleObjectiveEvent( gentity_t *constructible,
+		gentity_t *attacker, int detail, int meansOfDeath ) {
+	if( constructible->parent && attacker && attacker->client ) {
+		nitmod_ObjectiveEvent( 4, detail, constructible->parent->s.teamNum,
+			attacker->s.number, meansOfDeath );
+	}
+}
+
 void func_constructible_explode( gentity_t *self, gentity_t *inflictor, gentity_t *attacker, int damage, int mod )
 {
+	/* This is the authoritative destruction path.  The original reports a
+	 * damaged stage (4,4) for staged constructibles, and uses the OID flag to
+	 * distinguish a destroyed objective (4,3) from a damaged one (4,4). */
+
 	if( self->desstages ) {
 		if( self->grenadeFired > 1 ) {
 			// swap back one stage
@@ -4596,6 +4609,10 @@ void func_constructible_explode( gentity_t *self, gentity_t *inflictor, gentity_
 					self->s.angles2[1] = 0;
 				}
 			}
+
+			/* A partially destroyed staged constructible is always a damage
+			 * event in the reference module. */
+			nitmod_ConstructibleObjectiveEvent( self, attacker, 4, mod );
 
 			// run the script
 			if( self->grenadeFired == self->count2 ) {
@@ -4689,6 +4706,8 @@ void func_constructible_explode( gentity_t *self, gentity_t *inflictor, gentity_
 				G_AddKillSkillPointsForDestruction( attacker, mod, &self->constructibleStats );
 			}
 		} else {
+			nitmod_ConstructibleObjectiveEvent( self, attacker, self->parent &&
+				( self->parent->spawnflags & 8 ) ? 4 : 3, mod );
 
 			if ( !(self->spawnflags & CONSTRUCTIBLE_NO_AAS_BLOCKING) ) {
 				// RF, update blocking status
@@ -4730,6 +4749,8 @@ void func_constructible_explode( gentity_t *self, gentity_t *inflictor, gentity_
 			G_UseEntity( self, inflictor, attacker );	// this will unlink (call func_constructible_use), if another function is used something is VERY wrong
 		}
 	} else {
+		nitmod_ConstructibleObjectiveEvent( self, attacker, self->parent &&
+			( self->parent->spawnflags & 8 ) ? 4 : 3, mod );
 		if ( !(self->spawnflags & CONSTRUCTIBLE_NO_AAS_BLOCKING) ) {
 			if( !(self->spawnflags & CONSTRUCTIBLE_BLOCK_PATHS_WHEN_BUILD) ) {
 				// RF, AAS areas are now unusable
@@ -4766,6 +4787,7 @@ void func_constructible_explode( gentity_t *self, gentity_t *inflictor, gentity_
 		// unlink
 		G_UseEntity( self, inflictor, attacker );	// this will unlink (call func_constructible_use), if another function is used something is VERY wrong
 	}
+
 }
 
 /*

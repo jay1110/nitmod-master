@@ -1,0 +1,5 @@
+# Original Nitmod 2.60 i386 modules.  These files are the byte-identical
+# forensic reference; reconstructed source is validated against them.
+45db79d57b58d3a530c6fc7abbc39613accdb8d1804a2e3cb15324cee5fece7f  cgame.mp.i386.so
+84a7e7958952f804d65fbe6db6b4758ea0cf6b596b26a514a68de0ba3bd9ef49  qagame.mp.i386.so
+886fb9526ed7366261b94949f1a170c17d9d21140780f8bd557bd5540b2b006b  ui.mp.i386.so

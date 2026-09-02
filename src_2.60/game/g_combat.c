@@ -6,6 +6,7 @@
 */
 
 #include "g_local.h"
+#include "g_nitmod_config.h"
 #include "../game/q_shared.h"
 #include "../game/botlib.h"		//bot lib interface
 #include "../game/be_aas.h"
@@ -369,7 +370,6 @@ void player_die( gentity_t *self, gentity_t *inflictor, gentity_t *attacker, int
 			}
 		}
 	}
-
 	// RF, record this death in AAS system so that bots avoid areas which have high death rates
 	if( !OnSameTeam( self, attacker ) ) {
 		BotRecordTeamDeath( self->s.number );
@@ -444,6 +444,9 @@ void player_die( gentity_t *self, gentity_t *inflictor, gentity_t *attacker, int
 	// OSP
 
 	self->client->ps.pm_type = PM_DEAD;
+	/* Only a new death advances the series; repeated corpse/intermission
+	 * calls have returned above. The adapter excludes self and team kills. */
+	NITMOD_UpdateKillSpree( self, attacker );
 
 	G_AddEvent( self, EV_STOPSTREAMINGSOUND, 0);
 

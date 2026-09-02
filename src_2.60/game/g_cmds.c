@@ -1,4 +1,6 @@
 #include "g_local.h"
+#include "g_nitmod_teamcount.h"
+#include "g_nitmod_config.h"
 
 void BotDebug(int clientNum);
 void GetBotAutonomies(int clientNum, int *weapAutonomy, int *moveAutonomy);	
@@ -105,6 +107,9 @@ void G_SendScore( gentity_t *ent ) {
 			trap_SendServerCommand( ent-g_entities, va("%s %i%s", startbuffer, count, buffer));
 		}
 	}
+
+	/* Nitmod clients use this compact score update for the TDM presentation. */
+	nitmod_TeamScores();
 }
 
 /*
@@ -849,6 +854,7 @@ qboolean SetTeam( gentity_t *ent, char *s, qboolean force, weapon_t w1, weapon_t
 	}
 
 	if( setweapons ) {
+		G_NITMOD_RefreshTeamPopulation();
 		G_SetClientWeapons( ent, w1, w2, qfalse );
 	}
 
@@ -997,38 +1003,6 @@ qboolean G_IsHeavyWeapon( weapon_t weap ) {
 	return qfalse;
 }
 
-int G_TeamCount( gentity_t* ent, weapon_t weap ) {
-	int i, j, cnt;
-
-	if( weap == -1 ) { // we aint checking for a weapon, so always include ourselves
-		cnt = 1;
-	} else { // we ARE checking for a weapon, so ignore ourselves
-		cnt = 0;
-	}
-
-	for( i = 0; i < level.numConnectedClients; i++ ) {
-		j = level.sortedClients[i];
-		
-		if( j == ent-g_entities ) {
-			continue;
-		}
-
-		if( level.clients[j].sess.sessionTeam != ent->client->sess.sessionTeam ) {
-			continue;
-		}
-
-		if( weap != -1 ) {
-			if( level.clients[j].sess.playerWeapon != weap && level.clients[j].sess.latchPlayerWeapon != weap ) {
-				continue;
-			}
-		}
-
-		cnt++;
-	}
-
-	return cnt;
-}
-
 qboolean G_IsWeaponDisabled( gentity_t* ent, weapon_t weapon ) {
 	int count, wcount;
 
@@ -1127,7 +1101,18 @@ void Cmd_Team_f( gentity_t *ent, unsigned int dwCommand, qboolean fValue ) {
 		ent->client->sess.latchPlayerType = PC_SOLDIER;
 	}
 
+	{
+		int selected = NITMOD_SelectAvailableClass(ent, ent->client->sess.latchPlayerType);
+		if(selected < 0) {
+			SetTeam(ent, "spectator", qtrue, -1, -1, qfalse);
+			return;
+		}
+		if(selected != ent->client->sess.latchPlayerType)
+			ent->client->sess.playerType = selected;
+		ent->client->sess.latchPlayerType = selected;
+	}
 	if( !SetTeam( ent, s, qfalse, w, w2, qtrue ) ) {
+		G_NITMOD_RefreshTeamPopulation();
 		G_SetClientWeapons( ent, w, w2, qtrue );
 	}
 }
@@ -1154,9 +1139,6 @@ void Cmd_ResetSetup_f( gentity_t* ent ) {
 	if( changed ) {
 		ClientUserinfoChanged( ent-g_entities );
 	}
-}
-
-void Cmd_SetClass_f( gentity_t* ent, unsigned int dwCommand, qboolean fValue ) {
 }
 
 void Cmd_SetWeapons_f( gentity_t* ent, unsigned int dwCommand, qboolean fValue ) {
@@ -2863,6 +2845,7 @@ void G_UpdateSpawnCounts( void ) {
 
 		Info_SetValueForKey( cs, "c", va("%i", count));
 		trap_SetConfigstring( CS_MULTI_SPAWNTARGETS + i, cs );
+		G_NITMOD_MirrorEngineConfigString( CS_MULTI_SPAWNTARGETS + i, cs );
 	}
 }
 
@@ -3306,6 +3289,27 @@ void ClientCommand( int clientNum ) {
 
 	trap_Argv( 0, cmd, sizeof( cmd ) );
 
+	if ( !Q_stricmp( cmd, NITMOD_CAPABILITIES_COMMAND ) ) {
+		char argument[MAX_TOKEN_CHARS];
+		int version;
+		unsigned int capabilities;
+		/* This is a fixed two-field protocol message.  Do not let a malformed
+		 * client command accidentally negotiate a partial capability set. */
+		if ( trap_Argc() != 3 ) {
+			return;
+		}
+		trap_Argv( 1, argument, sizeof( argument ) );
+		if( !NITMOD_ParseProtocolInteger( argument, &version ) ) {
+			return;
+		}
+		trap_Argv( 2, argument, sizeof( argument ) );
+		if( !NITMOD_ParseProtocolUnsigned( argument, &capabilities ) ) {
+			return;
+		}
+		G_NITMOD_ClientCapabilities( clientNum, version, capabilities );
+		return;
+	}
+
 	if (Q_stricmp (cmd, "say") == 0) {
 		if( !ent->client->sess.muted) {
 			Cmd_Say_f (ent, SAY_ALL, qfalse);
@@ -3474,5 +3478,3 @@ void ClientCommand( int clientNum ) {
 		trap_SendServerCommand( clientNum, va("print \"unknown cmd[lof] %s\n\"", cmd ) );
 	}
 }
-
-

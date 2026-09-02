@@ -1065,7 +1065,7 @@ void target_script_trigger_use (gentity_t *ent, gentity_t *other, gentity_t *act
 	if (ent->aiName)
 	{
 		// Find the first entity with this name
-		trent = G_Find( trent, FOFS(scriptName), ent->aiName );
+		trent = G_NITMOD_FindByScriptNameHash( NULL, (int)BG_StringHashValue(ent->aiName) );
 
 		// Was there one?
 		if (trent)

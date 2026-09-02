@@ -28,6 +28,8 @@ cg_limbopanel.c
 cg_loadpanel.c
 cg_localents.c
 cg_main.c
+cg_nitmod.c
+cg_nitmod_config.c
 cg_marks.c
 cg_missionbriefing.c
 cg_multiview.c
@@ -54,6 +56,11 @@ cg_window.c
 ../game/bg_character.c
 ../game/bg_classes.c
 ../game/bg_misc.c
+../game/nitmod_announcements.c
+../game/nitmod_protocol.c
+../game/nitmod_snapshots.c
+../game/nitmod_skills.c
+cg_nitmod_skill_rewards.c
 ../game/bg_pmove.c
 ../game/bg_slidemove.c
 ../game/bg_sscript.c
@@ -61,6 +68,14 @@ cg_window.c
 ../game/bg_tracemap.c
 ../game/q_math.c
 ../game/q_shared.c
+../game/nitmod_weapon_recoil.c
+../game/nitmod_weapon_defaults.c
+../game/nitmod_weapon_consumption.c
+../game/nitmod_weapon_akimbo.c
+../game/nitmod_weapon_clip.c
+../game/nitmod_weapon_inventory.c
+../game/nitmod_weapon_reload.c
+../game/nitmod_weapon_reload_feedback.c
 ../ui/ui_shared.c
 """
 

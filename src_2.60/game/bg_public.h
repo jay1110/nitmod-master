@@ -454,6 +454,7 @@ typedef enum {
 // pmove->pm_flags	(sent as max 16 bits in msg.c)
 #define	PMF_DUCKED			1
 #define	PMF_JUMP_HELD		2
+#define PMF_NITMOD_DOUBLEJUMPED 128
 #define PMF_LADDER			4		// player is on a ladder
 #define	PMF_BACKWARDS_JUMP	8		// go into backwards land
 #define	PMF_BACKWARDS_RUN	16		// coast down to backwards run
@@ -558,10 +559,15 @@ typedef struct {
 	// these will be different functions during game and cgame
 	void		(*trace)( trace_t *results, const vec3_t start, const vec3_t mins, const vec3_t maxs, const vec3_t end, int passEntityNum, int contentMask );
 	int			(*pointcontents)( const vec3_t point, int passEntityNum );
+	/* Mod-local input only, never serialized in playerState/usercmd. */
+	unsigned int nitmodReloadPreferenceFlags;
+	int nitmodDoubleJump;
+	float nitmodDoubleJumpHeight;
 } pmove_t;
 
 // if a full pmove isn't done on the client, you can just update the angles
 void PM_UpdateViewAngles( playerState_t *ps, pmoveExt_t *pmext, usercmd_t *cmd, void (trace)( trace_t *results, const vec3_t start, const vec3_t mins, const vec3_t maxs, const vec3_t end, int passEntityNum, int contentMask ), int tracemask );
+qboolean BG_NITMOD_CheckAirJump(pmove_t *move);
 int Pmove (pmove_t *pmove);
 
 //===================================================================================
@@ -1612,6 +1618,7 @@ void BG_EvaluateTrajectoryDelta( const trajectory_t *tr, int atTime, vec3_t resu
 void	BG_GetMarkDir( const vec3_t dir, const vec3_t normal, vec3_t out );
 
 void	BG_AddPredictableEventToPlayerstate( int newEvent, int eventParm, playerState_t *ps );
+void	BG_AddPredictableDamage( int count, int yaw, int pitch, playerState_t *ps );
 
 //void	BG_TouchJumpPad( playerState_t *ps, entityState_t *jumppad );
 

@@ -1,4 +1,9 @@
 #include "g_local.h"
+#include <limits.h>
+#include "g_nitmod_config.h"
+#include "g_nitmod_entities.h"
+#include "g_nitmod_restrictions.h"
+#include "g_nitmod_teamcount.h"
 
 // Include the "External"/"Public" components of AI_Team
 #include "../botai/ai_teamX.h"
@@ -36,6 +41,12 @@ vmCvar_t	g_minGameClients;		// NERVE - SMF
 vmCvar_t	g_dedicated;
 vmCvar_t	g_speed;
 vmCvar_t	g_gravity;
+vmCvar_t g_doubleJump, g_DJHeight;
+vmCvar_t g_spawnInvul, g_healthCabinetTime, g_ammoCabinetTime;
+vmCvar_t team_maxLandmines;
+vmCvar_t g_intermissionTime, g_intermissionReadyPercent;
+vmCvar_t g_dropHealth, g_dropAmmo, n_medPackSinkDelay, n_ammoPackSinkDelay;
+vmCvar_t team_maxSoldiers, team_maxMedics, team_maxEngineers, team_maxFieldops, team_maxCovertops;
 vmCvar_t	g_cheats;
 vmCvar_t	g_knockback;
 vmCvar_t	g_quadfactor;
@@ -193,6 +204,9 @@ vmCvar_t		url;
 
 vmCvar_t		g_letterbox;
 vmCvar_t		bot_enable;
+vmCvar_t g_damageweapons;
+vmCvar_t n_preciseLandmineTrigger;
+vmCvar_t g_OmniBotFlags;
 
 vmCvar_t		g_debugSkills;
 vmCvar_t		g_heavyWeaponRestriction;
@@ -210,6 +224,7 @@ cvarTable_t		gameCvarTable[] = {
 
 	// noset vars
 	{ NULL, "gamename", GAMEVERSION , CVAR_SERVERINFO | CVAR_ROM, 0, qfalse  },
+	{ NULL, "nitmod_csLayout", "et260", CVAR_SERVERINFO | CVAR_ROM, 0, qfalse },
 	{ NULL, "gamedate", __DATE__ , CVAR_ROM, 0, qfalse  },
 	{ &g_restarted, "g_restarted", "0", CVAR_ROM, 0, qfalse  },
 	{ NULL, "sv_mapname", "", CVAR_SERVERINFO | CVAR_ROM, 0, qfalse  },
@@ -280,6 +295,23 @@ cvarTable_t		gameCvarTable[] = {
 
 	{ &g_speed, "g_speed", "320", 0, 0, qtrue, qtrue },
 	{ &g_gravity, "g_gravity", "800", 0, 0, qtrue, qtrue },
+	{ &g_doubleJump, "g_doubleJump", "0", 0, 0, qfalse, qfalse },
+	{ &g_spawnInvul, "g_spawnInvul", "3", 0, 0, qfalse, qfalse },
+	{ &team_maxLandmines, "team_maxLandmines", "10", 0, 0, qfalse, qfalse },
+	{ &g_intermissionTime, "g_intermissionTime", "60", 0, 0, qfalse, qfalse },
+	{ &g_intermissionReadyPercent, "g_intermissionReadyPercent", "100", 0, 0, qfalse, qfalse },
+	{ &g_dropHealth, "g_dropHealth", "0", 0, 0, qfalse, qfalse },
+	{ &g_dropAmmo, "g_dropAmmo", "0", 0, 0, qfalse, qfalse },
+	{ &n_medPackSinkDelay, "n_medPackSinkDelay", "30000", 0, 0, qfalse, qfalse },
+	{ &n_ammoPackSinkDelay, "n_ammoPackSinkDelay", "30000", 0, 0, qfalse, qfalse },
+	{ &team_maxSoldiers, "team_maxSoldiers", "-1", 0, 0, qfalse, qfalse },
+	{ &team_maxMedics, "team_maxMedics", "-1", 0, 0, qfalse, qfalse },
+	{ &team_maxEngineers, "team_maxEngineers", "-1", 0, 0, qfalse, qfalse },
+	{ &team_maxFieldops, "team_maxFieldops", "-1", 0, 0, qfalse, qfalse },
+	{ &team_maxCovertops, "team_maxCovertops", "-1", 0, 0, qfalse, qfalse },
+	{ &g_healthCabinetTime, "g_healthCabinetTime", "10000", 0, 0, qfalse, qfalse },
+	{ &g_ammoCabinetTime, "g_ammoCabinetTime", "60000", 0, 0, qfalse, qfalse },
+	{ &g_DJHeight, "g_DJHeight", "1.4", 0, 0, qfalse, qfalse },
 	{ &g_knockback, "g_knockback", "1000", 0, 0, qtrue, qtrue },
 	{ &g_quadfactor, "g_quadfactor", "3", 0, 0, qtrue },
 	
@@ -410,6 +442,12 @@ cvarTable_t		gameCvarTable[] = {
 
 	{ &g_letterbox, "cg_letterbox", "0", CVAR_TEMP	},
 	{ &bot_enable,	"bot_enable",	"0", 0			},
+	/* Original registration: default 0, flags/track/reset all zero.
+	 * Currently grenade (0x1), satchel (0x2), airstrike marker (0x4)
+	 * and smoke-bomb (0x8) masks are implemented. */
+	{ &g_damageweapons, "g_damageweapons", "0", 0, 0, qfalse, qfalse },
+	{ &n_preciseLandmineTrigger, "n_preciseLandmineTrigger", "0", CVAR_ARCHIVE, 0, qfalse, qfalse },
+	{ &g_OmniBotFlags, "omnibot_flags", "0", CVAR_ARCHIVE | CVAR_NORESTART, 0, qfalse, qfalse },
 
 	{ &g_debugSkills,	"g_debugSkills", "0", 0		},
 
@@ -456,7 +494,15 @@ This must be the very first function compiled into the .q3vm file
 #pragma export on
 #endif
 #endif
-int vmMain( int command, int arg0, int arg1, int arg2, int arg3, int arg4, int arg5, int arg6 ) {
+NITMOD_MODULE_EXPORT int vmMain( int command, int arg0, int arg1, int arg2, int arg3, int arg4, int arg5, int arg6
+#ifdef __EMSCRIPTEN__
+    , int arg7, int arg8, int arg9, int arg10, int arg11
+#endif
+) {
+#ifdef __EMSCRIPTEN__
+    /* ET:Legacy VM_EntryPoint_t always passes command + 12 wasm32 slots. */
+    (void)arg7; (void)arg8; (void)arg9; (void)arg10; (void)arg11;
+#endif
 #if defined(__MACOS__)
 #ifndef __GNUC__
 #pragma export off
@@ -464,6 +510,7 @@ int vmMain( int command, int arg0, int arg1, int arg2, int arg3, int arg4, int a
 #endif
 	switch ( command ) {
 	case GAME_INIT:
+		G_NITMOD_ResetBotHandles();
 		G_InitGame( arg0, arg1, arg2 );
 		return 0;
 	case GAME_SHUTDOWN:
@@ -1233,6 +1280,7 @@ void G_RegisterCvars( void )
 	qboolean remapped = qfalse;
 
 	level.server_settings = 0;
+	G_NITMOD_RegisterWeaponConfiguration();
 
 	for (i=0, cv=gameCvarTable; i<gameCvarTableSize; i++, cv++) {
 		trap_Cvar_Register(cv->vmCvar, cv->cvarName, cv->defaultString, cv->cvarFlags);
@@ -1286,6 +1334,7 @@ void G_UpdateCvars( void )
 	qboolean fVoteFlags = qfalse;
 	qboolean remapped = qfalse;
 	qboolean chargetimechanged = qfalse;
+	qboolean nitmodSettingsChanged = qfalse;
 
 	for ( i = 0, cv = gameCvarTable ; i < gameCvarTableSize ; i++, cv++ ) {
 		if ( cv->vmCvar ) {
@@ -1293,6 +1342,19 @@ void G_UpdateCvars( void )
 
 			if(cv->modificationCount != cv->vmCvar->modificationCount) {
 				cv->modificationCount = cv->vmCvar->modificationCount;
+				/* These are the currently typed subset of the original NCS
+				 * cvar groups.  The original transmits only on a matching
+				 * modification, rather than polling every server frame. */
+				if( cv->vmCvar == &g_filtercams ||
+					cv->vmCvar == &g_doubleJump || cv->vmCvar == &g_DJHeight ||
+					cv->vmCvar == &g_heavyWeaponRestriction ||
+					cv->vmCvar == &team_maxPanzers ||
+					cv->vmCvar == &team_maxSoldiers || cv->vmCvar == &team_maxMedics ||
+					cv->vmCvar == &team_maxEngineers || cv->vmCvar == &team_maxFieldops ||
+					cv->vmCvar == &team_maxCovertops ||
+					cv->vmCvar == &g_gravity ) {
+					nitmodSettingsChanged = qtrue;
+				}
 
 				if ( cv->trackChange && !(cv->cvarFlags & CVAR_LATCH) ) {
 					trap_SendServerCommand( -1, va("print \"Server:[lof] %s [lon]changed to[lof] %s\n\"", cv->cvarName, cv->vmCvar->string ) );
@@ -1438,6 +1500,11 @@ void G_UpdateCvars( void )
 		Info_SetValueForKey( cs, "axs_cvo", va("%i", level.covertopsChargeTime[0]) );
 		Info_SetValueForKey( cs, "ald_cvo", va("%i", level.covertopsChargeTime[1]) );
 		trap_SetConfigstring( CS_CHARGETIMES, cs );
+		nitmod_SendChargeTimes( -1 );
+	}
+
+	if( nitmodSettingsChanged ) {
+		nitmod_RefreshBaseSettings();
 	}
 }
 
@@ -1601,6 +1668,11 @@ void G_InitGame( int levelTime, int randomSeed, int restart ) {
 	G_ProcessIPBans();
 
 	G_InitMemory();
+	G_NITMOD_ClearConfigStrings();
+	G_NITMOD_ResetTeamPopulation();
+	/* Seed the capability handshake with registered cvars; a client may
+	 * negotiate before the first G_RunFrame refresh. */
+	nitmod_RefreshBaseSettings();
 
 	// NERVE - SMF - intialize gamestate
 	if ( g_gamestate.integer == GS_INITIALIZE ) {
@@ -1752,6 +1824,7 @@ void G_InitGame( int levelTime, int randomSeed, int restart ) {
 	G_ResetTeamMapData();
 
 	// initialize all entities for this game
+	G_NITMOD_ResetEntityLists();
 	memset( g_entities, 0, MAX_GENTITIES * sizeof(g_entities[0]) );
 	level.gentities = g_entities;
 
@@ -1819,6 +1892,9 @@ void G_InitGame( int levelTime, int randomSeed, int restart ) {
 
 	// TAT 11/13/2002 - entities are spawned, so now we can do setup
 	InitialServerEntitySetup();
+	/* Capture all map-start engine configstrings once. Individual mutation
+	 * paths continue to mirror their subsequent updates immediately. */
+	G_NITMOD_ResyncEngineConfigStrings();
 
 	// Gordon: debris test
 	G_LinkDebris();
@@ -2363,7 +2439,7 @@ void BeginIntermission( void ) {
 	}
 
 	level.intermissiontime = level.time;
-	trap_SetConfigstring( CS_INTERMISSION_START_TIME, va( "%i", level.intermissiontime ) );
+	trap_SetConfigstring( CS_INTERMISSION_START_TIME, va( "%i", NITMOD_IntermissionDisplayStart(level.time, g_intermissionTime.integer) ) );
 	trap_Cvar_Set("gamestate", va( "%i", GS_INTERMISSION));
 	trap_Cvar_Update( &g_gamestate );
 
@@ -2517,6 +2593,7 @@ Append information about this game to the log file
 */
 void LogExit( const char *string ) {
 	int				i;
+	int				clientNum;
 	gclient_t		*cl;
 	char			cs[MAX_STRING_CHARS];
 
@@ -2697,6 +2774,16 @@ void LogExit( const char *string ) {
 	}
 
 	G_BuildEndgameStats();
+
+	/* The reference sends a map summary to each human client as LogExit
+	 * completes.  Capability negotiation keeps this custom command isolated
+	 * from unmodified clients. */
+	for( i = 0; i < level.numConnectedClients; i++ ) {
+		clientNum = level.sortedClients[i];
+		if( !( g_entities[clientNum].r.svFlags & SVF_BOT ) ) {
+			nitmod_SendMapEndStats( clientNum );
+		}
+	}
 }
 
 
@@ -2710,13 +2797,30 @@ If one or more players have not acknowledged the continue, the game will
 wait 10 seconds before going on.
 =================
 */
+int NITMOD_IntermissionDisplayStart(int now, int durationSeconds) {
+	double start = now;
+	if(durationSeconds > 0) start += (double)durationSeconds * 1000.0 - 60000.0;
+	return start > INT_MAX ? INT_MAX : start < INT_MIN ? INT_MIN : (int)start;
+}
+
+qboolean NITMOD_IntermissionCanExit(void) {
+	int i, humans = 0, ready = 0;
+	if(level.ref_allready) return qtrue;
+	for(i = 0; i < level.numConnectedClients && i < MAX_CLIENTS; ++i) {
+		int index = level.sortedClients[i];
+		gclient_t *client;
+		if(index < 0 || index >= MAX_CLIENTS) continue;
+		client = &level.clients[index];
+		if(client->pers.connected != CON_CONNECTED || (g_entities[index].r.svFlags & SVF_BOT)) continue;
+		++humans;
+		if(client->pers.ready) ++ready;
+	}
+	if(humans && (float)ready / (float)humans * 100.0f >= g_intermissionReadyPercent.value) return qtrue;
+	return (double)level.time >= (double)level.intermissiontime + (double)g_intermissionTime.integer * 1000.0;
+}
+
 void CheckIntermissionExit( void ) {
 	static int fActions = 0;
-	qboolean exit = qtrue;
-	int i;
-	// rain - for #105
-	gclient_t *cl;
-	int ready = 0, notReady = 0;
 
 	// OSP - end-of-level auto-actions
 	//		  maybe make the weapon stats dump available to single player?
@@ -2729,37 +2833,8 @@ void CheckIntermissionExit( void ) {
 		fActions |= EOM_MATCHINFO;
 	}
 
-	for( i = 0; i < level.numConnectedClients; i++ ) {
-		// rain - #105 - spectators and people who are still loading
-		// don't have to be ready at the end of the round.
-		// additionally, make readypercent apply here.
-
-		cl = level.clients + level.sortedClients[i];
-
-		if ( cl->pers.connected != CON_CONNECTED || cl->sess.sessionTeam == TEAM_SPECTATOR ) {
-			continue;
-		} else if ( cl->pers.ready || ( g_entities[level.sortedClients[i]].r.svFlags & SVF_BOT ) ) {
-			ready++;
-		} else {
-			notReady++;
-		}
-	}
-
-
-	// rain - #105 - use the same code as the beginning of round ready to
-	// decide whether enough players are ready to exceed
-	// match_readypercent
-	if( level.ref_allready || ( ( ready + notReady > 0 ) && 100 * ready / ( ready + notReady ) >= match_readypercent.integer ) ) {
-		level.ref_allready = qfalse;
-		exit = qtrue;
-	} else {
-		exit = qfalse;
-	}
-
-	// Gordon: changing this to a minute for now
-	if( !exit && (level.time < level.intermissiontime + 60000) ) {
-		return;
-	}
+	if(!NITMOD_IntermissionCanExit()) return;
+	level.ref_allready = qfalse;
 
 	ExitLevel();
 }
@@ -3792,9 +3867,12 @@ uebrgpiebrpgibqeripgubeqrpigubqifejbgipegbrtibgurepqgbn%i", level.time )
 
 	G_UpdateTeamMapData();
 
+	/* Flush extended configstrings after the game state for this frame settles. */
+	nitrox_UpdateConfigstrings();
+
 	if(level.gameManager) {
-		level.gameManager->s.otherEntityNum = MAX_TEAM_LANDMINES - G_CountTeamLandmines(TEAM_AXIS);
-		level.gameManager->s.otherEntityNum2 = MAX_TEAM_LANDMINES - G_CountTeamLandmines(TEAM_ALLIES);
+		level.gameManager->s.otherEntityNum = team_maxLandmines.integer - G_CountTeamLandmines(TEAM_AXIS);
+		level.gameManager->s.otherEntityNum2 = team_maxLandmines.integer - G_CountTeamLandmines(TEAM_ALLIES);
 	}
 
 #ifdef SAVEGAME_SUPPORT

@@ -5,6 +5,7 @@
 #include "q_shared.h"
 #include "bg_public.h"
 #include "g_public.h"
+#include "nitmod_bot_handle.h"
 
 #include "../game/be_aas.h"
 
@@ -12,7 +13,7 @@
 
 // the "gameversion" client command will print this plus compile date
 #ifndef PRE_RELEASE_DEMO
-#define GAMEVERSION			"etmain"
+#define GAMEVERSION			"nitmod"
 #else
 //#define GAMEVERSION			"You look like you need a monkey!"
 #define GAMEVERSION			"ettest"
@@ -484,6 +485,10 @@ struct gentity_s {
 
 	//bani
 	int	etpro_misc_1;
+	/* Nitmod original cached classname hash; not part of engine shared prefix. */
+	int nitmodClassnameHash;
+	int nitmodTargetHash;
+	int nitmodScriptNameHash;
 };
 
 // Ridah
@@ -565,6 +570,7 @@ typedef struct {
 	int			latchPlayerType;	// DHM - Nerve :: for GT_WOLF not archived
 	int			latchPlayerWeapon;	// DHM - Nerve :: for GT_WOLF not archived
 	int			latchPlayerWeapon2;	// Gordon: secondary weapon
+	int             rifleGrenadeStatus; // versioned Nitmod equipment sidecar
 	int			ignoreClients[MAX_CLIENTS / (sizeof(int)*8)];
 	qboolean	muted;
 	float		skillpoints[SK_NUM_SKILLS];		// Arnout: skillpoints
@@ -623,6 +629,12 @@ typedef struct ipXPStorage_s {
 
 #define MAX_COMPLAINTIPS 5
 
+typedef struct {
+	char address[22];
+	char host[16];
+	int port;
+} nitmodClientAddress_t;
+
 // client data that stays across multiple respawns, but is cleared
 // on each level change or team change at ClientBegin()
 typedef struct {
@@ -653,6 +665,7 @@ typedef struct {
 	qboolean	teamInfo;			// send team overlay updates?
 
 	qboolean	bAutoReloadAux;			// TTimo - auxiliary storage for pmoveExt_t::bAutoReload, to achieve persistance
+	qboolean bAltReloadAux; /* Negotiated preference only; recovered gameplay remains opt-in. */
 
 	int			applicationClient;		// Gordon: this client has requested to join your fireteam
 	int			applicationEndTime;		// Gordon: you have X seconds to reply or this message will self destruct!
@@ -700,6 +713,7 @@ typedef struct {
     int				characterIndex;
 
 	ipFilter_t		complaintips[MAX_COMPLAINTIPS];
+	nitmodClientAddress_t nitmodAddress;
 } clientPersistant_t;
 
 typedef struct {
@@ -1390,6 +1404,7 @@ void Svcmd_ShuffleTeams_f(void);
 // g_weapon.c
 //
 void FireWeapon( gentity_t *ent );
+qboolean ReviveEntity( gentity_t *ent, gentity_t *traceEnt );
 void G_BurnMeGood( gentity_t *self, gentity_t *body );
 
 //
@@ -1618,6 +1633,20 @@ extern	vmCvar_t	g_friendlyFire;
 extern	vmCvar_t	g_password;
 extern	vmCvar_t	sv_privatepassword;
 extern	vmCvar_t	g_gravity;
+extern vmCvar_t g_doubleJump, g_DJHeight;
+extern vmCvar_t g_spawnInvul, g_healthCabinetTime, g_ammoCabinetTime;
+extern vmCvar_t team_maxLandmines;
+extern vmCvar_t g_intermissionTime, g_intermissionReadyPercent;
+int NITMOD_IntermissionDisplayStart(int now, int durationSeconds);
+qboolean NITMOD_IntermissionCanExit(void);
+extern vmCvar_t g_dropHealth, g_dropAmmo, n_medPackSinkDelay, n_ammoPackSinkDelay;
+int NITMOD_PackSinkDelay(int configured);
+int NITMOD_LimboPackCount(int configured, int war, int gameState, int playerClass, int requiredClass);
+void NITMOD_DropLimboPacks(gentity_t *ent);
+extern vmCvar_t team_maxSoldiers, team_maxMedics, team_maxEngineers, team_maxFieldops, team_maxCovertops;
+qboolean G_IsClassDisabled(gentity_t *ent, int playerClass, qboolean quiet);
+int NITMOD_SelectAvailableClass(gentity_t *ent, int requested);
+void NITMOD_SetSpawnProtection(gclient_t *client, qboolean revived);
 extern	vmCvar_t	g_speed;
 extern	vmCvar_t	g_knockback;
 extern	vmCvar_t	g_quadfactor;
@@ -2167,6 +2196,50 @@ void G_SendSystemMessage( sysMsg_t message, int team );
 int G_GetSysMessageNumber( const char* sysMsg );
 int G_CountTeamLandmines ( team_t team );
 qboolean G_SweepForLandmines( vec3_t origin, float radius, int team );
+void G_NITMOD_SatchelDie( gentity_t *self, gentity_t *inflictor, gentity_t *attacker, int damage, int mod );
+extern vmCvar_t g_damageweapons;
+extern vmCvar_t n_preciseLandmineTrigger;
+extern vmCvar_t g_OmniBotFlags;
+void G_NITMOD_ResetBotHandles(void);
+void G_NITMOD_BotEntityDeleted(gentity_t *entity);
+nitmodBotHandle_t G_NITMOD_BotEntityHandle(int index);
+gentity_t *G_NITMOD_BotResolveEntity(nitmodBotHandle_t handle);
+/* Semantic engine adapters, not a binary-compatible C++ vtable. */
+int G_NITMOD_BotGameTime(void);
+/* Semantic result codes: 0 success, 3 invalid entity/output. */
+int G_NITMOD_BotEntityPosition(nitmodBotHandle_t handle, vec3_t position);
+int G_NITMOD_BotEntityVelocity(nitmodBotHandle_t handle, vec3_t velocity);
+gentity_t *G_NITMOD_BotBoundsEntity(nitmodBotHandle_t handle);
+void G_NITMOD_RefreshClassnameHash(gentity_t *entity);
+void G_NITMOD_InitSpawnNameHashes(gentity_t *entity);
+gentity_t *G_NITMOD_FindByClassNameHash(gentity_t *from, int hash);
+gentity_t *G_NITMOD_FindByScriptNameHash(gentity_t *from, int hash);
+void G_NITMOD_SetTeamItemClassnameHash(gentity_t *entity, const gitem_t *item);
+int G_NITMOD_BotEntityLocalAABB(nitmodBotHandle_t handle, vec3_t mins, vec3_t maxs);
+int G_NITMOD_BotEntityWorldAABB(nitmodBotHandle_t handle, vec3_t mins, vec3_t maxs);
+/* Internal AABB stage; map-spawn cache connected, dynamic writers pending. */
+int G_NITMOD_BotLocalBounds(const gentity_t *selected, int cachedClassHash,
+                          vec3_t mins, vec3_t maxs);
+int G_NITMOD_BotEntityEyePosition(nitmodBotHandle_t handle, vec3_t position);
+int G_NITMOD_BotEntityBonePosition(nitmodBotHandle_t handle, int bone, vec3_t position);
+int G_NITMOD_BotEntityWorldOBB(nitmodBotHandle_t handle, vec3_t center,
+    vec3_t axis0, vec3_t axis1, vec3_t axis2, vec3_t halfExtents);
+/* Each orientation output is optional, including all three together. */
+int G_NITMOD_BotEntityOrientation(nitmodBotHandle_t handle, vec3_t forward,
+                                vec3_t right, vec3_t up);
+nitmodBotHandle_t G_NITMOD_BotEntityFromID(int index);
+int G_NITMOD_BotIDFromEntity(nitmodBotHandle_t handle);
+qboolean G_NITMOD_BotEntityExists(nitmodBotHandle_t handle);
+qboolean G_NITMOD_MineBotContact(gentity_t *candidate, team_t mineTeam,
+                               qboolean spotted, int omniBotFlags);
+qboolean sEntWillTriggerMine(gentity_t *ent, gentity_t *mine);
+qboolean G_NITMOD_MineTeamContact(gentity_t *candidate, gentity_t *owner,
+                                team_t mineTeam, int friendlyFireFlags);
+void G_NITMOD_ConfigureSatchelDamage( gentity_t *entity, int damageWeaponFlags );
+void G_NITMOD_WeaponDie( gentity_t *self, gentity_t *inflictor, gentity_t *attacker, int damage, int mod );
+void G_NITMOD_ConfigureSmokeDamage( gentity_t *entity, int damageWeaponFlags );
+void G_NITMOD_ConfigureGrenadeDamage( gentity_t *entity, int damageWeaponFlags );
+void G_NITMOD_ConfigureAirstrikeMarkerDamage( gentity_t *entity, int damageWeaponFlags );
 
 void G_AddClientToFireteam( int entityNum, int leaderNum );
 void G_InviteToFireTeam( int entityNum, int otherEntityNum );

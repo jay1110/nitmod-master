@@ -1,5 +1,6 @@
 #include "g_local.h"
-#include "../../etmain/ui/menudef.h"
+#include "g_nitmod_equipment.h"
+#include "../../pak/ui/menudef.h"
 
 
 /*
@@ -64,6 +65,7 @@ void G_WriteClientSessionData( gclient_t *client, qboolean restart )
 		);
 
 	trap_Cvar_Set( va( "session%i", client - level.clients ), s );
+	G_NITMOD_WriteEquipment( client, client - level.clients );
 
 	// Arnout: store the clients stats (7) and medals (7)
 	// addition: but only if it isn't a forced map_restart (done by someone on the console)
@@ -166,6 +168,8 @@ void G_ReadSessionData( gclient_t *client )
 	int mvc_l, mvc_h;
 	char s[MAX_STRING_CHARS];
 	qboolean test;
+
+	G_NITMOD_ReadEquipment( client, client - level.clients );
 
 	trap_Cvar_VariableStringBuffer( va( "session%i", client - level.clients ), s, sizeof(s) );
 
@@ -285,6 +289,7 @@ void G_InitSessionData( gclient_t *client, char *userinfo ) {
 //	const char		*value;
 
 	sess = &client->sess;
+	sess->rifleGrenadeStatus = 0;
 
 	// initial team determination
 	sess->sessionTeam = TEAM_SPECTATOR;	
