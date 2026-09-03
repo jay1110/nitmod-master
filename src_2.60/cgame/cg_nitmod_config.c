@@ -173,6 +173,12 @@ void NITMOD_ShoveSound(int entityNum) {
 	trap_S_StartSoundVControl(NULL, entityNum, CHAN_AUTO, cgs.media.sfx_bullet_fleshhit[0], 255);
 }
 
+void NITMOD_ShoveSoundCommand(void) {
+	int entityNum;
+	if(trap_Argc() == 2 && NITMOD_ParseProtocolInteger(CG_Argv(1), &entityNum))
+		NITMOD_ShoveSound(entityNum);
+}
+
 void NITMOD_PrivateMessageSound(int clientNum) {
 	if(clientNum != cg.clientNum || clientNum < 0 || clientNum >= MAX_CLIENTS) return;
 	trap_Cvar_Update(&cg_pmSounds);

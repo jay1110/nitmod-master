@@ -2079,6 +2079,10 @@ static void CG_ServerCommand( void ) {
 		NITMOD_GameStateCommand();
 		return;
 	}
+	if(!Q_stricmp(cmd, "nsh") && NITMOD_ServerSupports(NITMOD_FEATURE_SHOVE_SOUND)) {
+		NITMOD_ShoveSoundCommand();
+		return;
+	}
 	if ( !Q_stricmp( cmd, "mes" ) && NITMOD_ServerSupports( NITMOD_FEATURE_MAP_END_STATS ) ) {
 		NITMOD_MapEndStatsCommand();
 		return;

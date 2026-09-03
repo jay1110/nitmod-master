@@ -2,7 +2,7 @@
 
 The original spawn cases 4 and 9 (grenade) share the g_damageweapons & 1
 branch in sorted nitmod_unknown.c. Both configure health 40, takedamage,
-CONTENTS_BODY, mins/initial absmin (-4,-4,0), maxs/initial absmax (4,4,6),
+CONTENTS_CORPSE, mins/initial absmin (-4,-4,0), maxs/initial absmax (4,4,6),
 and Nit_WeapDie. This matches the separately recovered smoke-bomb setup
 except for its enabling mask (8).
 

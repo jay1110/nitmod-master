@@ -276,7 +276,7 @@ qagame,0x2a861c,0x0,campaign_maps,,64,0,0,0,,no-literal-source-mention
 qagame,0x2a8638,0x0,C,,64,0,0,0,src_2.60/game/bg_classes.c;src_2.60/game/g_cmds.c;src_2.60/game/g_cmds_ext.c;src_2.60/game/nitmod_skills.c,needs-semantic-audit
 qagame,0x2a8654,0x2e3e440,refereePassword,,0,0,0,0,src_2.60/game/g_main.c,needs-semantic-audit
 qagame,0x2a8670,0x2e3d5a0,g_spectatorInactivity,0,0,0,1,0,src_2.60/game/g_main.c,needs-semantic-audit
-qagame,0x2a868c,0x2e4daa0,g_inactivityOptions,0,0,0,1,0,,no-literal-source-mention
+qagame,0x2a868c,0x2e4daa0,g_inactivityOptions,0,0,0,1,0,src_2.60/game/g_main.c,needs-semantic-audit
 qagame,0x2a86a8,0x2e49720,match_latejoin,1,0,0,0,0,src_2.60/game/g_config.c;src_2.60/game/g_main.c,needs-semantic-audit
 qagame,0x2a86c4,0x2e426a0,match_minplayers,4,0,0,0,0,src_2.60/game/g_main.c,needs-semantic-audit
 qagame,0x2a86e0,0x2e48ac0,match_mutespecs,0,0,0,0,1,src_2.60/game/g_config.c;src_2.60/game/g_main.c;src_2.60/game/g_vote.c,needs-semantic-audit
@@ -356,8 +356,8 @@ qagame,0x2a8edc,0x2e37de0,nextmap,,256,0,0,0,src_2.60/game/g_main.c;src_2.60/gam
 qagame,0x2a8ef8,0x2e4c0c0,nextcampaign,,256,0,0,0,src_2.60/game/g_main.c;src_2.60/game/g_vote.c,needs-semantic-audit
 qagame,0x2a8f14,0x2e4e040,g_disableComplaints,0,1,0,0,0,src_2.60/game/g_main.c,needs-semantic-audit
 qagame,0x2a8f30,0x2e493c0,g_playDead,1,0,0,0,0,,no-literal-source-mention
-qagame,0x2a8f4c,0x2e48880,g_shove,80,0,0,0,0,,no-literal-source-mention
-qagame,0x2a8f68,0x2e3da20,g_dragCorpse,1,0,0,0,0,,no-literal-source-mention
+qagame,0x2a8f4c,0x2e48880,g_shove,80,0,0,0,0,src_2.60/game/g_main.c,needs-semantic-audit
+qagame,0x2a8f68,0x2e3da20,g_dragCorpse,1,0,0,0,0,src_2.60/game/g_main.c,needs-semantic-audit
 qagame,0x2a8f84,0x2e41140,g_classChange,0,0,0,0,0,,no-literal-source-mention
 qagame,0x2a8fa0,0x2e4d500,g_forceLimboHealth,75,0,0,0,0,,no-literal-source-mention
 qagame,0x2a8fbc,0x2e3c5e0,g_privateMessages,1,0,0,0,0,,no-literal-source-mention
@@ -385,7 +385,7 @@ qagame,0x2a9208,0x2e489a0,g_healthCabinetTime,10000,0,0,0,0,src_2.60/game/g_main
 qagame,0x2a9224,0x2e48640,g_maxWarp,4,0,0,0,0,,no-literal-source-mention
 qagame,0x2a9240,0x2e41ec0,g_antiwarp,1,0,0,0,0,,no-literal-source-mention
 qagame,0x2a925c,0x2e38260,g_goombaFlags,25,0,0,0,0,,no-literal-source-mention
-qagame,0x2a9278,0x2e41020,g_shoveNoZ,0,0,0,0,0,,no-literal-source-mention
+qagame,0x2a9278,0x2e41020,g_shoveNoZ,0,0,0,0,0,src_2.60/game/g_main.c,needs-semantic-audit
 qagame,0x2a9294,0x2e4dce0,g_mapScriptDirectory,,0,0,0,0,,no-literal-source-mention
 qagame,0x2a92b0,0x2e3c700,g_campaignFile,,0,0,0,0,,no-literal-source-mention
 qagame,0x2a92cc,0x2e38fe0,g_fear,2000,0,0,0,0,,no-literal-source-mention
@@ -409,7 +409,7 @@ qagame,0x2a94a8,0x2e38b60,skill_lightweapons,20 50 90 140 200,0,0,0,0,,no-litera
 qagame,0x2a94c4,0x2e44ce0,sv_fps,20,8,0,0,0,src_2.60/game/g_antilag.c;src_2.60/game/g_config.c,needs-semantic-audit
 qagame,0x2a94e0,0x2e3b500,g_truePing,0,0,0,0,0,,no-literal-source-mention
 qagame,0x2a94fc,0x2e4c9c0,g_skipCorrection,1,0,0,0,0,,no-literal-source-mention
-qagame,0x2a9518,0x2e403c0,sv_privateClients,0,8,0,0,0,,no-literal-source-mention
+qagame,0x2a9518,0x2e403c0,sv_privateClients,0,8,0,0,0,src_2.60/game/g_active.c,needs-semantic-audit
 qagame,0x2a9534,0x2e3c940,g_teamDamageRestriction,0,0,0,0,0,,no-literal-source-mention
 qagame,0x2a9550,0x2e4d620,g_minHits,6,0,0,0,0,,no-literal-source-mention
 qagame,0x2a956c,0x2e494e0,g_autoTempBan,0,0,0,0,0,,no-literal-source-mention
@@ -423,8 +423,8 @@ qagame,0x2a9630,0x2e38140,team_airstrikeTime,10,0,0,0,0,,no-literal-source-menti
 qagame,0x2a964c,0x2e42fa0,team_artyTime,10,0,0,0,0,,no-literal-source-mention
 qagame,0x2a9668,0x2e37a80,g_constructiblexpsharing,0,0,0,0,0,,no-literal-source-mention
 qagame,0x2a9684,0x2e45820,g_asblock,0,0,0,0,0,,no-literal-source-mention
-qagame,0x2a96a0,0x2e39340,g_canisterKick,0,0,0,0,0,,no-literal-source-mention
-qagame,0x2a96bc,0x2e4ba00,g_canisterKickOwner,0,0,0,0,0,,no-literal-source-mention
+qagame,0x2a96a0,0x2e39340,g_canisterKick,0,0,0,0,0,src_2.60/game/g_main.c,needs-semantic-audit
+qagame,0x2a96bc,0x2e4ba00,g_canisterKickOwner,0,0,0,0,0,src_2.60/game/g_main.c,needs-semantic-audit
 qagame,0x2a96d8,0x2e4c1e0,mod_version,2.3.5,68,0,0,0,,no-literal-source-mention
 qagame,0x2a96f4,0x2e4c1e0,mod_build,linux-i386,68,0,0,0,,no-literal-source-mention
 qagame,0x2a9710,0x2e49840,mod_url,etmods.net,68,0,0,0,src_2.60/game/g_main.c,needs-semantic-audit

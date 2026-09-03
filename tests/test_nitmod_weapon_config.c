@@ -10,15 +10,30 @@ static int badIndex = -1, calls, unknown;
 static const char *badValue;
 static const char *medicValue = "0";
 static int registrations, badRegistration;
+static vmCvar_t *tracked[9];
+static int updateCalls, mutation = -1;
+void trap_Cvar_Update(vmCvar_t *cvar) {
+    int i;
+    ++updateCalls;
+    for(i = 0; i < 9; ++i) if(tracked[i] == cvar) {
+        if(i == mutation) { ++cvar->modificationCount; mutation = -1; }
+        return;
+    }
+    badRegistration = 1;
+}
 void trap_Cvar_Register( vmCvar_t *cvar, const char *name, const char *value, int flags ) {
     int i;
     registrations++;
+    if(!cvar) { badRegistration = 1; return; }
+    tracked[(registrations - 1) % 9] = cvar;
+    cvar->modificationCount = 7;
+    cvar->integer = !strcmp(name, "g_war") ? 3 : atoi(value);
     if( !strcmp(name, "g_medics") ) {
-        if( cvar || flags || strcmp(value, "0") ) badRegistration = 1;
+        if( flags || strcmp(value, "0") ) badRegistration = 1;
         return;
     }
     for( i = 0; i < 11; i++ ) if( !strcmp(name, names[i]) ) {
-        if( cvar || flags || i == 3 || i == 4 || i == 6 ||
+        if( flags || i == 3 || i == 4 || i == 6 ||
             strcmp(value, i >= 7 ? "-1" : "0") ) badRegistration = 1;
         return;
     }
@@ -45,10 +60,21 @@ int main( void ) {
     int i, j;
     char oversized[MAX_CVAR_VALUE_STRING + 8];
     unsigned int medicOptions;
+    CHECK(!G_NITMOD_UpdateWeaponConfiguration() && updateCalls == 0);
+    CHECK(G_NITMOD_ConfiguredWarMode() == 0);
     G_NITMOD_RegisterWeaponConfiguration();
     CHECK( registrations == 9 && !badRegistration );
     G_NITMOD_RegisterWeaponConfiguration();
     CHECK( registrations == 18 && !badRegistration );
+    CHECK(G_NITMOD_ConfiguredWarMode() == 3);
+    CHECK(!G_NITMOD_UpdateWeaponConfiguration() && updateCalls == 9);
+    for(i = 0; i < 9; ++i) {
+        mutation = i;
+        CHECK(G_NITMOD_UpdateWeaponConfiguration());
+        CHECK(!G_NITMOD_UpdateWeaponConfiguration());
+    }
+    tracked[0]->integer = 4;
+    CHECK(G_NITMOD_ConfiguredWarMode() == 4 && !badRegistration);
     memset(&input, 0x5a, sizeof(input)); expected = input;
     expected.warMode = 3; expected.pickAnyWeapon = 1; expected.weaponsOptions = ~0u;
     expected.heavyPercent = 100; expected.maxClients = 32; expected.panzerPercent = 20;

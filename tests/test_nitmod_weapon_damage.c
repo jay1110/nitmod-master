@@ -18,7 +18,7 @@ int main(void) {
         expected = entity;
         if(flags & mask) {
             expected.health = 40; expected.takedamage = qtrue;
-            expected.r.contents = CONTENTS_BODY; expected.die = G_NITMOD_WeaponDie;
+            expected.r.contents = CONTENTS_CORPSE; expected.die = G_NITMOD_WeaponDie;
             for(axis = 0; axis < 3; ++axis) {
                 expected.r.mins[axis] = expected.r.absmin[axis] = axis == 2 ? 0 : -4;
                 expected.r.maxs[axis] = expected.r.absmax[axis] = axis == 2 ? 6 : 4;

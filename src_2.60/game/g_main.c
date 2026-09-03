@@ -45,7 +45,11 @@ vmCvar_t g_doubleJump, g_DJHeight;
 vmCvar_t g_spawnInvul, g_healthCabinetTime, g_ammoCabinetTime;
 vmCvar_t team_maxLandmines;
 vmCvar_t g_intermissionTime, g_intermissionReadyPercent;
+vmCvar_t g_inactivityOptions;
 vmCvar_t g_dropHealth, g_dropAmmo, n_medPackSinkDelay, n_ammoPackSinkDelay;
+vmCvar_t g_dragCorpse;
+vmCvar_t g_shove, g_shoveNoZ;
+vmCvar_t g_canisterKick, g_canisterKickOwner;
 vmCvar_t team_maxSoldiers, team_maxMedics, team_maxEngineers, team_maxFieldops, team_maxCovertops;
 vmCvar_t	g_cheats;
 vmCvar_t	g_knockback;
@@ -299,8 +303,14 @@ cvarTable_t		gameCvarTable[] = {
 	{ &g_spawnInvul, "g_spawnInvul", "3", 0, 0, qfalse, qfalse },
 	{ &team_maxLandmines, "team_maxLandmines", "10", 0, 0, qfalse, qfalse },
 	{ &g_intermissionTime, "g_intermissionTime", "60", 0, 0, qfalse, qfalse },
+	{ &g_inactivityOptions, "g_inactivityOptions", "0", 0, 0, qtrue, qfalse },
 	{ &g_intermissionReadyPercent, "g_intermissionReadyPercent", "100", 0, 0, qfalse, qfalse },
 	{ &g_dropHealth, "g_dropHealth", "0", 0, 0, qfalse, qfalse },
+	{ &g_dragCorpse, "g_dragCorpse", "1", 0, 0, qfalse, qfalse },
+	{ &g_shove, "g_shove", "80", 0, 0, qfalse, qfalse },
+	{ &g_shoveNoZ, "g_shoveNoZ", "0", 0, 0, qfalse, qfalse },
+	{ &g_canisterKick, "g_canisterKick", "0", 0, 0, qfalse, qfalse },
+	{ &g_canisterKickOwner, "g_canisterKickOwner", "0", 0, 0, qfalse, qfalse },
 	{ &g_dropAmmo, "g_dropAmmo", "0", 0, 0, qfalse, qfalse },
 	{ &n_medPackSinkDelay, "n_medPackSinkDelay", "30000", 0, 0, qfalse, qfalse },
 	{ &n_ammoPackSinkDelay, "n_ammoPackSinkDelay", "30000", 0, 0, qfalse, qfalse },
@@ -1335,6 +1345,7 @@ void G_UpdateCvars( void )
 	qboolean remapped = qfalse;
 	qboolean chargetimechanged = qfalse;
 	qboolean nitmodSettingsChanged = qfalse;
+	nitmodSettingsChanged = G_NITMOD_UpdateWeaponConfiguration() ? qtrue : qfalse;
 
 	for ( i = 0, cv = gameCvarTable ; i < gameCvarTableSize ; i++, cv++ ) {
 		if ( cv->vmCvar ) {

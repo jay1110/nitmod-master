@@ -18,7 +18,7 @@ static void ConfigureSmallCanisterDamage( gentity_t *entity, int damageWeaponFla
     if( !entity || !(damageWeaponFlags & mask) ) return;
     entity->health = 40;
     entity->takedamage = qtrue;
-    entity->r.contents = CONTENTS_BODY;
+    entity->r.contents = CONTENTS_CORPSE;
     entity->r.mins[0] = entity->r.mins[1] = -4.0f;
     entity->r.mins[2] = 0.0f;
     entity->r.maxs[0] = entity->r.maxs[1] = 4.0f;

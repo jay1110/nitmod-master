@@ -3,6 +3,29 @@
 #include "nitmod_protocol.h"
 #include <limits.h>
 
+enum { NITMOD_TRACKED_WEAPON_CVARS = 9 };
+static vmCvar_t trackedWeaponCvars[NITMOD_TRACKED_WEAPON_CVARS];
+static int weaponModificationCounts[NITMOD_TRACKED_WEAPON_CVARS];
+static qboolean weaponCvarsRegistered;
+
+int G_NITMOD_UpdateWeaponConfiguration(void) {
+    int i, changed = 0;
+    if(!weaponCvarsRegistered) return 0;
+    for(i = 0; i < NITMOD_TRACKED_WEAPON_CVARS; ++i) {
+        trap_Cvar_Update(&trackedWeaponCvars[i]);
+        if(weaponModificationCounts[i] != trackedWeaponCvars[i].modificationCount) {
+            weaponModificationCounts[i] = trackedWeaponCvars[i].modificationCount;
+            changed = 1;
+        }
+    }
+    return changed;
+}
+
+int G_NITMOD_ConfiguredWarMode(void) {
+    /* g_war is the first registration below, initialized by the engine. */
+    return weaponCvarsRegistered ? trackedWeaponCvars[0].integer : 0;
+}
+
 int G_NITMOD_ReadMedicOptions( unsigned int *options ) {
     char text[MAX_CVAR_VALUE_STRING];
     int value;
@@ -50,8 +73,12 @@ void G_NITMOD_RegisterWeaponConfiguration( void ) {
         { "g_medics", "0", 0 }
     };
     int i;
-    for( i = 0; i < sizeof(defaults) / sizeof(defaults[0]); i++ )
-        trap_Cvar_Register(NULL, defaults[i].name, defaults[i].value, defaults[i].flags);
+    typedef char trackedCountCheck[(sizeof(defaults) / sizeof(defaults[0]) == NITMOD_TRACKED_WEAPON_CVARS) ? 1 : -1];
+    for( i = 0; i < sizeof(defaults) / sizeof(defaults[0]); i++ ) {
+        trap_Cvar_Register(&trackedWeaponCvars[i], defaults[i].name, defaults[i].value, defaults[i].flags);
+        weaponModificationCounts[i] = trackedWeaponCvars[i].modificationCount;
+    }
+    weaponCvarsRegistered = qtrue;
 }
 
 int G_NITMOD_ReadWeaponConfiguration( nitmodWeaponPolicyInput_t *input ) {

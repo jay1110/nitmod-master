@@ -3,7 +3,7 @@
 Original spawn case 0x15 in sorted nitmod_unknown.c tests g_damageweapons & 4
 and subsequently registers the entity in AirstrikeEntities. This, rather than
 the distinct case 0x30 named bomb, maps to native WP_SMOKE_MARKER.
-The original assigns 40 HP, takedamage, CONTENTS_BODY, (-4,-4,0)/(4,4,6)
+The original assigns 40 HP, takedamage, CONTENTS_CORPSE, (-4,-4,0)/(4,4,6)
 bounds and Nit_WeapDie. Those assignments share the previously reconstructed
 small-canister configuration and delayed-death handler.
 

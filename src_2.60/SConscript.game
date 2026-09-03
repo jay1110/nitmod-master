@@ -76,6 +76,7 @@ g_nitmod_weapon_config.c
 g_nitmod_weapon_adapter.c
 g_nitmod_class_command.c
 g_nitmod_loadout.c
+g_nitmod_canister.c
 g_nitmod_pickup.c
 nitmod_weapon_definition.c
 g_nitmod_weapon_definition.c

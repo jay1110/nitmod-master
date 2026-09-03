@@ -8,7 +8,7 @@ explicit signed wrap at INT_MAX; null rejection is a defensive difference.
 
 The sorted spawn branch for smoke_bomb (original weapon 0x1c) enables damage
 only under g_damageweapons & 8. Reconstructed typed fields are health=40,
-takedamage=true, CONTENTS_BODY, mins=(-4,-4,0), maxs=(4,4,6), and matching
+takedamage=true, CONTENTS_CORPSE, mins=(-4,-4,0), maxs=(4,4,6), and matching
 initial absmin/absmax. The latter follow the original pre-link initialization;
 engine linking still owns calculation of world-space bounds.
 

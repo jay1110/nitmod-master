@@ -1756,6 +1756,7 @@ gentity_t *fire_grenade (gentity_t *self, vec3_t start, vec3_t dir, int grenadeW
 	}
 
 // JPW NERVE -- blast radius proportional to damage
+	G_NITMOD_ConfigureCanisterKick(bolt);
 	bolt->splashRadius = G_GetWeaponDamage(grenadeWPID);
 // jpw
 

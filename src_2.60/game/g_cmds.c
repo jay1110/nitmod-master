@@ -2718,6 +2718,56 @@ tryagain:
 }
 
 
+/* Original G_PushPlayer 0x5b660; see experimental-player-shove.md for
+ * intentionally incomplete extended-state and wire mappings. */
+qboolean G_PushPlayer(gentity_t *actor, gentity_t *target) {
+	vec3_t impulse;
+	float vertical;
+	int i;
+	if(!actor || !actor->client || !target || !target->client || actor == target ||
+	   !g_shove.integer || actor->health <= 0 || target->health <= 0 ||
+	   actor->client->ps.persistant[PERS_HWEAPON_USE] ||
+	   (double)level.time - actor->client->nitmodLastShoveTime < 500.0) return qfalse;
+	actor->client->nitmodLastShoveTime = level.time;
+	AngleVectors(actor->client->ps.viewangles, impulse, NULL, NULL);
+	VectorNormalizeFast(impulse);
+	VectorScale(impulse, (float)g_shove.integer * 5.0f, impulse);
+	vertical = impulse[2];
+	impulse[2] = !g_shoveNoZ.integer && vertical > fabs(impulse[0]) &&
+		vertical > fabs(impulse[1]) ? vertical * .8f : 64.0f;
+	VectorAdd(target->s.pos.trDelta, impulse, target->s.pos.trDelta);
+	VectorAdd(target->client->ps.velocity, impulse, target->client->ps.velocity);
+	target->client->ps.pm_time = 100;
+	target->client->ps.pm_flags |= PMF_TIME_KNOCKBACK;
+	/* Event 96 belongs to the original wire layout, not native ET. */
+	for(i = 0; i < level.maxclients && i < MAX_CLIENTS; ++i) {
+		if(level.clients[i].pers.connected == CON_CONNECTED &&
+		   G_NITMOD_ClientSupports(i, NITMOD_FEATURE_SHOVE_SOUND))
+			trap_SendServerCommand(i, va("nsh %i", target->s.number));
+	}
+	return qtrue;
+}
+
+/* Original G_DragCorpse 0x5b860: horizontal pull only. Activation owns
+ * target selection; body-queue entities without a client cannot be pulled. */
+qboolean G_DragCorpse(gentity_t *actor, gentity_t *body) {
+	vec3_t direction;
+	float distance, delta;
+	int axis;
+	if(!g_dragCorpse.integer || !actor || !body || !body->client || actor == body)
+		return qfalse;
+	VectorSubtract(actor->r.currentOrigin, body->r.currentOrigin, direction);
+	direction[2] = 0;
+	distance = VectorNormalize(direction);
+	if(!(distance >= 40.0f && distance <= 85.0f)) return qfalse;
+	for(axis = 0; axis < 2; ++axis) {
+		delta = direction[axis] * 110.0f - body->client->ps.velocity[axis];
+		body->s.pos.trDelta[axis] += delta;
+		body->client->ps.velocity[axis] += delta;
+	}
+	return qtrue;
+}
+
 void Cmd_Activate2_f( gentity_t *ent ) {
 	trace_t		tr;
 	vec3_t		end;
@@ -2727,13 +2777,32 @@ void Cmd_Activate2_f( gentity_t *ent ) {
 	qboolean	found = qfalse;
 	qboolean	pass2 = qfalse;
 
-	if( ent->client->sess.playerType != PC_COVERTOPS ) {
+	if(!ent || !ent->client || ent->health <= 0 ||
+	   ent->s.weapon == WP_MORTAR_SET || ent->s.weapon == WP_MOBILE_MG42_SET) {
 		return;
 	}
 
 	AngleVectors (ent->client->ps.viewangles, forward, right, up);
 	CalcMuzzlePointForActivate (ent, forward, right, up, offset);
 	VectorMA (offset, 96, forward, end);
+	G_CanisterKick(ent);
+
+	/* Nitmod checks client-backed corpses before the class-specific action. */
+	trap_Trace(&tr, offset, NULL, NULL, end, ent->s.number, CONTENTS_CORPSE);
+	if(tr.entityNum >= 0 && tr.entityNum < MAX_GENTITIES &&
+	   g_entities[tr.entityNum].client) {
+		G_DragCorpse(ent, &g_entities[tr.entityNum]);
+		return;
+	}
+	trap_Trace(&tr, offset, NULL, NULL, end, ent->s.number, CONTENTS_BODY);
+	if(tr.entityNum >= 0 && tr.entityNum < MAX_GENTITIES &&
+	   g_entities[tr.entityNum].client) {
+		if(g_entities[tr.entityNum].health <= 0)
+			G_DragCorpse(ent, &g_entities[tr.entityNum]);
+		else G_PushPlayer(ent, &g_entities[tr.entityNum]);
+		return;
+	}
+	if(ent->client->sess.playerType != PC_COVERTOPS) return;
 
 	trap_Trace (&tr, offset, NULL, NULL, end, ent->s.number, (CONTENTS_SOLID|CONTENTS_BODY|CONTENTS_CORPSE));
 

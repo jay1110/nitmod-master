@@ -871,6 +871,7 @@ struct gclient_s {
 	qboolean		hasaward;
 	qboolean		wantsscore;
 	qboolean		maxlivescalced;
+	int nitmodLastShoveTime;
 };
 
 typedef struct {
@@ -1637,9 +1638,17 @@ extern vmCvar_t g_doubleJump, g_DJHeight;
 extern vmCvar_t g_spawnInvul, g_healthCabinetTime, g_ammoCabinetTime;
 extern vmCvar_t team_maxLandmines;
 extern vmCvar_t g_intermissionTime, g_intermissionReadyPercent;
+extern vmCvar_t g_inactivityOptions;
 int NITMOD_IntermissionDisplayStart(int now, int durationSeconds);
 qboolean NITMOD_IntermissionCanExit(void);
 extern vmCvar_t g_dropHealth, g_dropAmmo, n_medPackSinkDelay, n_ammoPackSinkDelay;
+extern vmCvar_t g_dragCorpse;
+extern vmCvar_t g_shove, g_shoveNoZ;
+extern vmCvar_t g_canisterKick, g_canisterKickOwner;
+void G_CanisterKick(gentity_t *actor);
+void G_NITMOD_ConfigureCanisterKick(gentity_t *missile);
+qboolean G_PushPlayer(gentity_t *actor, gentity_t *target);
+qboolean G_DragCorpse(gentity_t *actor, gentity_t *body);
 int NITMOD_PackSinkDelay(int configured);
 int NITMOD_LimboPackCount(int configured, int war, int gameState, int playerClass, int requiredClass);
 void NITMOD_DropLimboPacks(gentity_t *ent);

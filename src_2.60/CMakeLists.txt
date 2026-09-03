@@ -142,7 +142,7 @@ if(NITMOD_BUILD_QAGAME)
         game/g_nitmod_restrictions.c game/g_nitmod_teamcount.c game/g_nitmod_equipment.c
         game/g_nitmod_rifle.c game/nitmod_weapon_limits.c game/g_nitmod_weapon_policy.c
         game/g_nitmod_weapon_config.c game/g_nitmod_weapon_adapter.c game/g_nitmod_class_command.c
-        game/g_nitmod_loadout.c game/g_nitmod_pickup.c game/nitmod_weapon_definition.c
+        game/g_nitmod_loadout.c game/g_nitmod_pickup.c game/nitmod_weapon_definition.c game/g_nitmod_canister.c
         game/g_nitmod_weapon_definition.c game/g_nitmod_weapon_registry.c
         game/nitmod_weapon_paths.c game/nitmod_weapon_recoil.c game/nitmod_weapon_defaults.c
         game/nitmod_weapon_consumption.c game/nitmod_weapon_akimbo.c game/nitmod_weapon_clip.c game/nitmod_weapon_inventory.c game/nitmod_weapon_reload.c)

@@ -36,6 +36,9 @@ for name, default in [('g_doubleJump', '0'), ('g_DJHeight', '1.4'), ('g_spawnInv
     assert (record['default'], record['flags'], record['track_change'], record['reset']) == (default, 0, 0, 0)
     assert ('{ &' + name + ', "' + name + '", "' + default + '", 0, 0, qfalse, qfalse }') in server
 print('749 original static Cvar records reproduced; source mentions are not functional parity')
+record = next(r for r in rows if r['module'] == 'qagame' and r['name'] == 'g_inactivityOptions')
+assert (record['default'], record['flags'], record['track_change'], record['reset']) == ('0', 0, 1, 0)
+assert '{ &g_inactivityOptions, "g_inactivityOptions", "0", 0, 0, qtrue, qfalse }' in server
 for relative in ['game/g_main.c', 'game/g_script.c', 'game/g_weapon.c',
                  'game/g_missile.c', 'botai/ai_dmgoal_mp.c']:
     text = (root / 'src_2.60' / relative).read_text()

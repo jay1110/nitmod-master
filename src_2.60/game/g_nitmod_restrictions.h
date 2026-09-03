@@ -45,6 +45,8 @@ int G_NITMOD_RefreshWeaponSnapshot( nitmodGameState_t *state );
 /* Register only recovered Cvars absent from native ET; existing
  * engine values are preserved by registration, never overwritten by Set. */
 void G_NITMOD_RegisterWeaponConfiguration( void );
+int G_NITMOD_UpdateWeaponConfiguration(void);
+int G_NITMOD_ConfiguredWarMode(void);
 typedef struct {
     nitmodWeaponDecision_t decision;
     nitmodWeaponLimit_t limit;

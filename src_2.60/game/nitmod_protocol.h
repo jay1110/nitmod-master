@@ -34,6 +34,7 @@ int NITMOD_ParseProtocolFloat( const char *text, float *value );
 #define NITMOD_FEATURE_WEAPON_MESSAGES  ( 1u << 10 )
 /* Preference transport only; does not advertise recovered reload gameplay. */
 #define NITMOD_FEATURE_RELOAD_PREFS      ( 1u << 11 )
+#define NITMOD_FEATURE_SHOVE_SOUND       ( 1u << 12 )
 
 /* Complete original ncp/SrvMsgs table; out-of-range reasons return NULL. */
 const char *NITMOD_ServerMessageText(int reason);
@@ -46,7 +47,7 @@ const char *NITMOD_WeaponLimitText( int reason );
 #define NITMOD_FEATURES_CLIENT ( NITMOD_FEATURE_NCS | NITMOD_FEATURE_CHARGE_TIMES | \
 	NITMOD_FEATURE_SIMPLE_CS | NITMOD_FEATURE_OBJECTIVES | NITMOD_FEATURE_FIRETEAMS | \
 	NITMOD_FEATURE_TEAM_SCORES | NITMOD_FEATURE_MAP_END_STATS | NITMOD_FEATURE_SPREE_EVENTS | \
-	NITMOD_FEATURE_HIT_SOUNDS | NITMOD_FEATURE_WEAPON_MESSAGES | NITMOD_FEATURE_RELOAD_PREFS )
+	NITMOD_FEATURE_HIT_SOUNDS | NITMOD_FEATURE_WEAPON_MESSAGES | NITMOD_FEATURE_RELOAD_PREFS | NITMOD_FEATURE_SHOVE_SOUND )
 #define NITMOD_FEATURES_SERVER NITMOD_FEATURES_CLIENT
 
 /* Recovered extended-configstring layout; this differs from native ET CS. */

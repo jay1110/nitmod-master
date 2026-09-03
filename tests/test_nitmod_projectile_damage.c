@@ -64,8 +64,53 @@ static void VictimPain(gentity_t *self, gentity_t *attacker, int damage, vec3_t 
     ++painCalls;
 }
 static int classTest, classWar;
+static int dragTest, dragTraces;
+static int kickTest, kickQueries;
 static int packTest, packLinks;
+static int inactivityTest, inactivityWarnings, inactivityDrops, inactivityPrivate;
+extern qboolean ClientInactivityTimer(gclient_t *client);
 static int QDECL EngineCallback(int command, ...) {
+    if(kickTest && command == G_ENTITIES_IN_BOX) {
+        va_list args;
+        const float *mins, *maxs;
+        int *entities;
+        va_start(args, command);
+        mins = va_arg(args, const float *); maxs = va_arg(args, const float *);
+        entities = va_arg(args, int *);
+        if(va_arg(args, int) != MAX_GENTITIES || fabs(mins[0] + 8) > .01 ||
+           fabs(maxs[0] - 56) > .01 || mins[2] != -24 || maxs[2] != 8) exit(2);
+        entities[0] = MAX_CLIENTS;
+        ++kickQueries;
+        va_end(args); return 1;
+    }
+    if(dragTest && command == G_TRACE) {
+        va_list args;
+        trace_t *trace;
+        va_start(args, command);
+        trace = va_arg(args, trace_t *);
+        va_arg(args, const float *); va_arg(args, const float *);
+        va_arg(args, const float *); va_arg(args, const float *);
+        if(va_arg(args, int) != 2 || va_arg(args, int) != CONTENTS_CORPSE) exit(2);
+        memset(trace, 0, sizeof(*trace));
+        trace->entityNum = 7;
+        ++dragTraces;
+        va_end(args); return 0;
+    }
+    if(inactivityTest && command == G_CVAR_VARIABLE_INTEGER_VALUE) return inactivityPrivate;
+    if(inactivityTest && command == G_SEND_SERVER_COMMAND) {
+        va_list args; const char *message;
+        va_start(args, command);
+        if(va_arg(args, int) != 3) exit(2);
+        message = va_arg(args, const char *);
+        if(!strstr(message, "30 seconds until disconnect")) exit(2);
+        ++inactivityWarnings; va_end(args); return 0;
+    }
+    if(inactivityTest && command == G_DROP_CLIENT) {
+        va_list args;
+        va_start(args, command);
+        if(va_arg(args, int) != 3 || strcmp(va_arg(args, const char *), "Dropped due to inactivity") || va_arg(args, int) != 0) exit(2);
+        ++inactivityDrops; va_end(args); return 0;
+    }
     if(packTest && command == G_CVAR_VARIABLE_INTEGER_VALUE) return 0;
     if(packTest && command == G_TRACE) {
         va_list args;
@@ -1264,6 +1309,51 @@ static int CheckMineTransitions(void) {
 }
 extern void trigger_heal_think(gentity_t *self);
 extern void trigger_ammo_think(gentity_t *self);
+static int CheckInactivityOptions(void) {
+    static gclient_t clients[4];
+    gclient_t *savedClients = level.clients;
+    int savedMax = level.maxclients, savedCount = level.numConnectedClients, savedTime = level.time;
+    int option, following, full, privateOccupied, i, errors = 0;
+    level.clients = clients; level.maxclients = 4; level.time = 100000;
+    g_inactivity.integer = g_spectatorInactivity.integer = 60;
+    inactivityTest = 1; inactivityPrivate = 2; inactivityDrops = 0;
+    for(option = 0; option < 4; ++option) for(following = 0; following < 2; ++following)
+        for(full = 0; full < 2; ++full) for(privateOccupied = 0; privateOccupied < 2; ++privateOccupied) {
+            int exempt;
+            memset(clients, 0, sizeof(clients));
+            clients[0].pers.connected = CON_CONNECTED;
+            clients[1].pers.connected = privateOccupied ? CON_CONNECTED : CON_DISCONNECTED;
+            clients[3].sess.sessionTeam = TEAM_SPECTATOR;
+            clients[3].sess.spectatorState = following ? SPECTATOR_FOLLOW : SPECTATOR_FREE;
+            clients[3].inactivityTime = 110000;
+            g_inactivityOptions.integer = option;
+            level.numConnectedClients = (privateOccupied ? 4 : 3) - !full;
+            exempt = (following && (option & 1)) || (!full && !(option & 2));
+            inactivityWarnings = 0;
+            if(!ClientInactivityTimer(&clients[3]) || inactivityWarnings != !exempt ||
+               clients[3].inactivityTime != (exempt ? 160000 : 110000) ||
+               clients[3].inactivityWarning != !exempt) ++errors;
+        }
+    memset(clients, 0, sizeof(clients)); clients[3].sess.sessionTeam = TEAM_SPECTATOR;
+    g_inactivityOptions.integer = 2; clients[3].inactivityWarning = qtrue; clients[3].inactivityTime = 99999;
+    if(ClientInactivityTimer(&clients[3]) || inactivityDrops != 1) ++errors;
+    for(i = 0; i < 4; ++i) {
+        memset(&clients[3], 0, sizeof(clients[3])); clients[3].sess.sessionTeam = TEAM_AXIS;
+        if(i == 0) clients[3].ps.pm_flags = PMF_LIMBO;
+        if(i == 1) clients[3].ps.pm_type = PM_DEAD;
+        if(i == 2) { clients[3].ps.eFlags = EF_PRONE; clients[3].ps.weapon = WP_MOBILE_MG42_SET; }
+        if(i == 3) clients[3].pers.cmd.forwardmove = 1;
+        inactivityWarnings = 0;
+        if(!ClientInactivityTimer(&clients[3]) || clients[3].inactivityTime != 160000 || inactivityWarnings) ++errors;
+    }
+    g_inactivity.integer = -1; clients[3].ps.pm_flags = 0; clients[3].pers.cmd.forwardmove = 0;
+    if(!ClientInactivityTimer(&clients[3]) || clients[3].inactivityTime != 160000) ++errors;
+    inactivityTest = 0; level.clients = savedClients; level.maxclients = savedMax;
+    level.numConnectedClients = savedCount; level.time = savedTime;
+    g_inactivity.integer = g_spectatorInactivity.integer = g_inactivityOptions.integer = 0;
+    printf("Inactivity: 32 spectator option profiles, disconnect and activity resets, %d errors\n", errors);
+    return errors;
+}
 static int CheckIntermissionCvars(void) {
     static gclient_t clients[4];
     gclient_t *savedClients = level.clients;
@@ -1448,6 +1538,209 @@ static int CheckSupplyAndSpawnCvars(void) {
     printf("Supply/spawn Cvars: 144 protection profiles and 8 refill calls, %d errors\n", errors);
     return errors;
 }
+static int CheckCanisterSpawn(void) {
+    static gentity_t actor;
+    static gclient_t client;
+    gentity_t saved = g_entities[MAX_CLIENTS], *missile;
+    vmCvar_t savedKick = g_canisterKick, savedDamage = g_damageweapons;
+    const int weapons[] = {WP_GRENADE_LAUNCHER, WP_GRENADE_PINEAPPLE,
+        WP_SMOKE_MARKER, WP_SMOKE_BOMB, WP_GPG40};
+    vec3_t start = {100, 200, 300}, velocity = {10, 20, 30};
+    int oldCount = level.num_entities, oldTime = level.time;
+    int w, kick, damage, errors = 0;
+    memset(&actor, 0, sizeof(actor)); memset(&client, 0, sizeof(client));
+    actor.client = &client; actor.s.number = 3;
+    actor.s.groundEntityNum = ENTITYNUM_NONE;
+    client.sess.sessionTeam = TEAM_AXIS;
+    level.num_entities = MAX_CLIENTS + 1; level.time = 1000;
+    for(w = 0; w < 5; ++w) for(kick = -1; kick <= 1; ++kick)
+    for(damage = 0; damage <= 1; ++damage) {
+        memset(&g_entities[MAX_CLIENTS], 0, sizeof(gentity_t));
+        g_canisterKick.integer = kick; g_damageweapons.integer = damage ? 13 : 0;
+        client.ps.grenadeTimeLeft = 0;
+        missile = fire_grenade(&actor, start, velocity, weapons[w]);
+        if(missile != &g_entities[MAX_CLIENTS] || missile->parent != &actor ||
+           missile->r.ownerNum != 3 || missile->s.teamNum != TEAM_AXIS ||
+           !VectorCompare(missile->r.currentOrigin, start) ||
+           missile->think != G_ExplodeMissile ||
+           missile->nextthink != (w == 4 ? 5000 : 3500)) ++errors;
+        if(w < 4 && kick) {
+            if(missile->r.contents != CONTENTS_CORPSE ||
+               missile->r.mins[0] != -4 || missile->r.mins[1] != -4 || missile->r.mins[2] != 0 ||
+               missile->r.maxs[0] != 4 || missile->r.maxs[1] != 4 || missile->r.maxs[2] != 6 ||
+               !VectorCompare(missile->r.mins, missile->r.absmin) ||
+               !VectorCompare(missile->r.maxs, missile->r.absmax)) ++errors;
+        } else if(missile->r.contents != (w < 4 && damage ? CONTENTS_CORPSE : 0)) ++errors;
+        if(missile->takedamage != (w < 4 && damage) ||
+           missile->die != (w < 4 && damage ? G_NITMOD_WeaponDie : NULL)) ++errors;
+    }
+    G_NITMOD_ConfigureCanisterKick(NULL);
+    g_entities[MAX_CLIENTS] = saved; level.num_entities = oldCount; level.time = oldTime;
+    g_canisterKick = savedKick; g_damageweapons = savedDamage;
+    return errors;
+}
+
+static int CheckCanisterKick(void) {
+    static gentity_t actor;
+    static gclient_t client;
+    static gclient_t bodyClient;
+    gentity_t savedBody = g_entities[7];
+    gentity_t saved = g_entities[MAX_CLIENTS];
+    gentity_t *missile = &g_entities[MAX_CLIENTS];
+    vmCvar_t savedKick = g_canisterKick, savedOwner = g_canisterKickOwner;
+    const int weapons[] = {WP_GRENADE_LAUNCHER, WP_GRENADE_PINEAPPLE,
+        WP_SMOKE_MARKER, WP_SMOKE_BOMB, WP_PANZERFAUST};
+    int w, owner, gate, active, changesOwner, admitted, errors = 0, savedTime = level.time;
+    memset(&actor, 0, sizeof(actor)); memset(&client, 0, sizeof(client));
+    actor.client = &client; actor.s.number = 3;
+    client.sess.sessionTeam = TEAM_AXIS;
+    level.time = 1000; kickTest = 1;
+    for(w = 0; w < 5; ++w) for(owner = 0; owner < 2; ++owner)
+    for(gate = 0; gate < 5; ++gate) for(active = 0; active < 2; ++active) {
+        memset(missile, 0, sizeof(*missile));
+        missile->s.eType = ET_MISSILE; missile->s.weapon = weapons[w];
+        missile->s.pos.trBase[2] = 7; missile->nextthink = 4000;
+        missile->think = NormalThink;
+        missile->r.ownerNum = 9; missile->s.teamNum = TEAM_ALLIES;
+        missile->active = active;
+        g_canisterKick.integer = gate == 1 ? 0 : 80;
+        g_canisterKickOwner.integer = owner;
+        client.ps.pm_flags = gate == 2 ? PMF_LIMBO : 0;
+        client.ps.pm_type = gate == 3 ? PM_DEAD : PM_NORMAL;
+        client.ps.eFlags = gate == 4 ? EF_PRONE : 0;
+        kickQueries = 0;
+        G_CanisterKick(&actor);
+        admitted = gate == 0 && w < 4;
+        changesOwner = admitted && owner && (w != 2 || !active);
+        if(kickQueries != (gate == 0) || missile->nextthink != 4000 || missile->think != NormalThink ||
+           missile->s.pos.trType != (admitted ? TR_GRAVITY : TR_STATIONARY) ||
+           missile->s.pos.trBase[2] != (admitted ? 37 : 7)) ++errors;
+        if(admitted && (missile->s.pos.trTime != 950 ||
+           !VectorCompare(missile->s.pos.trBase, missile->r.currentOrigin) ||
+           missile->s.pos.trDelta[0] != 772 || missile->s.pos.trDelta[2] != 367)) ++errors;
+        if(missile->parent != (changesOwner ? &actor : NULL) ||
+           missile->r.ownerNum != (changesOwner ? 3 : 9) ||
+           missile->s.teamNum != (changesOwner ? TEAM_AXIS : TEAM_ALLIES) ||
+           missile->active != active) ++errors;
+    }
+    /* Real secondary activation must kick before the corpse interaction. */
+    memset(missile, 0, sizeof(*missile));
+    missile->s.eType = ET_MISSILE; missile->s.weapon = WP_SMOKE_MARKER;
+    memset(&g_entities[7], 0, sizeof(g_entities[7]));
+    memset(&bodyClient, 0, sizeof(bodyClient));
+    g_entities[7].client = &bodyClient;
+    actor.health = 100; actor.s.number = 2;
+    client.ps.pm_flags = client.ps.eFlags = 0; client.ps.pm_type = PM_NORMAL;
+    g_canisterKick.integer = 80; g_canisterKickOwner.integer = 1;
+    kickQueries = dragTraces = 0; dragTest = 1;
+    Cmd_Activate2_f(&actor);
+    if(kickQueries != 1 || dragTraces != 1 || missile->parent != &actor ||
+       missile->r.ownerNum != 2 || missile->s.pos.trType != TR_GRAVITY) ++errors;
+    dragTest = 0; g_entities[7] = savedBody;
+    kickTest = 0; level.time = savedTime;
+    *missile = saved; g_canisterKick = savedKick; g_canisterKickOwner = savedOwner;
+    return errors;
+}
+
+static int CheckPlayerShove(void) {
+    static gentity_t actor, target;
+    static gclient_t ac, tc;
+    vmCvar_t savedShove = g_shove, savedNoZ = g_shoveNoZ;
+    int savedTime = level.time, savedMax = level.maxclients;
+    int strength, noZ, pitch, errors = 0;
+    level.maxclients = 0; /* transport is tested separately from physics */
+    for(strength = 0; strength <= 80; strength += 80)
+    for(noZ = 0; noZ < 2; ++noZ)
+    for(pitch = -90; pitch <= 90; pitch += 90) {
+        memset(&actor, 0, sizeof(actor)); memset(&target, 0, sizeof(target));
+        memset(&ac, 0, sizeof(ac)); memset(&tc, 0, sizeof(tc));
+        actor.client = &ac; target.client = &tc;
+        actor.health = target.health = 100;
+        ac.ps.viewangles[0] = pitch;
+        g_shove.integer = strength; g_shoveNoZ.integer = noZ;
+        level.time = 1000;
+        if(G_PushPlayer(&actor, &target) != (strength != 0)) ++errors;
+        if(strength) {
+            if(fabs(tc.ps.velocity[2] - (pitch == -90 && !noZ ? 320 : 64)) > 1 ||
+               !VectorCompare(tc.ps.velocity, target.s.pos.trDelta) ||
+               tc.ps.pm_time != 100 || !(tc.ps.pm_flags & PMF_TIME_KNOCKBACK) ||
+               ac.nitmodLastShoveTime != 1000) ++errors;
+            level.time = 1499;
+            if(G_PushPlayer(&actor, &target)) ++errors;
+            level.time = 1500;
+            if(!G_PushPlayer(&actor, &target)) ++errors;
+        } else if(tc.ps.pm_time || ac.nitmodLastShoveTime) ++errors;
+    }
+    if(G_PushPlayer(NULL, &target) || G_PushPlayer(&actor, NULL) ||
+       G_PushPlayer(&actor, &actor)) ++errors;
+    level.time = savedTime; level.maxclients = savedMax;
+    g_shove = savedShove; g_shoveNoZ = savedNoZ;
+    return errors;
+}
+
+static int CheckCorpseDrag(void) {
+    static gentity_t actor, body;
+    static gclient_t client;
+    static gclient_t actorClient;
+    gentity_t savedTarget = g_entities[7];
+    const float distances[] = {0, 39, 40, 60, 85, 86};
+    int setting, d, sign, errors = 0, expected;
+    vmCvar_t saved = g_dragCorpse;
+    for(setting = -1; setting <= 1; ++setting)
+    for(d = 0; d < 6; ++d)
+    for(sign = -1; sign <= 1; sign += 2) {
+        memset(&actor, 0, sizeof(actor));
+        memset(&body, 0, sizeof(body));
+        memset(&client, 0, sizeof(client));
+        body.client = &client;
+        actor.r.currentOrigin[0] = distances[d] * sign;
+        actor.r.currentOrigin[2] = 900; /* height is deliberately ignored */
+        VectorSet(client.ps.velocity, 12, 20, 30);
+        VectorSet(body.s.pos.trDelta, 40, 50, 60);
+        g_dragCorpse.integer = setting;
+        expected = setting != 0 && d >= 2 && d <= 4;
+        if(G_DragCorpse(&actor, &body) != expected) ++errors;
+        if(fabs(client.ps.velocity[0] - (expected ? sign * 110 : 12)) > .001 ||
+           fabs(client.ps.velocity[1] - (expected ? 0 : 20)) > .001 ||
+           client.ps.velocity[2] != 30 || body.s.pos.trDelta[2] != 60 ||
+           fabs(body.s.pos.trDelta[0] - (expected ? 28 + sign * 110 : 40)) > .001 ||
+           fabs(body.s.pos.trDelta[1] - (expected ? 30 : 50)) > .001)
+            ++errors;
+    }
+    if(G_DragCorpse(NULL, &body) || G_DragCorpse(&actor, NULL) ||
+       G_DragCorpse(&body, &body)) ++errors;
+    body.client = NULL;
+    if(G_DragCorpse(&actor, &body)) ++errors;
+    /* Exercise the real activate2 dispatch, including non-covert classes. */
+    memset(&actorClient, 0, sizeof(actorClient));
+    memset(&actor, 0, sizeof(actor));
+    actor.client = &actorClient;
+    actor.s.number = 2;
+    actor.health = 100;
+    actor.r.currentOrigin[0] = 60;
+    memset(&g_entities[7], 0, sizeof(g_entities[7]));
+    g_entities[7].client = &client;
+    dragTest = 1;
+    for(d = 0; d < NUM_PLAYER_CLASSES; ++d)
+    for(setting = 0; setting <= 1; ++setting) {
+        actorClient.sess.playerType = d;
+        g_dragCorpse.integer = setting;
+        VectorClear(client.ps.velocity);
+        dragTraces = 0;
+        Cmd_Activate2_f(&actor);
+        if(dragTraces != 1 || fabs(client.ps.velocity[0] - setting * 110) > .001)
+            ++errors;
+    }
+    actor.health = 0;
+    dragTraces = 0;
+    Cmd_Activate2_f(&actor);
+    if(dragTraces) ++errors;
+    dragTest = 0;
+    g_entities[7] = savedTarget;
+    g_dragCorpse = saved;
+    return errors;
+}
+
 int main(void) {
     int kind, enabled, gate, bypass, splash, i, admitted, damageFlags, profiles = 0, errors = 0;
     if(strcmp(GAMEVERSION, "nitmod")) ++errors;
@@ -1458,6 +1751,11 @@ int main(void) {
     errors += CheckClassLimits();
     errors += CheckLimboPacks();
     errors += CheckIntermissionCvars();
+    errors += CheckInactivityOptions();
+    errors += CheckCorpseDrag();
+    errors += CheckPlayerShove();
+    errors += CheckCanisterKick();
+    errors += CheckCanisterSpawn();
     errors += CheckBotEngineAdapters();
     errors += CheckBotEntityPosition();
     errors += CheckBotEntityVelocity();

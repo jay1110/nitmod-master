@@ -16,6 +16,7 @@ void NITMOD_SendWeaponLimitMessage( int slot, int reason ) {
     sendCount++; sentSlot = slot; sentReason = reason;
 }
 void trap_Cvar_Register( vmCvar_t *cvar, const char *name, const char *value, int flags ) { }
+void trap_Cvar_Update(vmCvar_t *cvar) { fprintf(stderr, "unexpected Cvar update in read-only adapter test\n"); exit(2); }
 void trap_Cvar_VariableStringBuffer( const char *name, char *buffer, int size ) {
     const char *value = "0";
     if( !strcmp(name, "g_heavyWeaponRestriction") ) value = heavyZero ? "0" : "100";

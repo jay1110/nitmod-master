@@ -749,6 +749,17 @@ int main(int argc, char **argv) {
                        shoveEntity < MAX_GENTITIES && handles[sound] > 0)) ++errors;
                     if(cent.currentState.event != (96 | bits)) ++errors;
                 }
+        {
+            const char *values[] = {"5", "-1", "1024", "oops", "2147483648"};
+            int value, count;
+            fields[0] = "nsh"; shoveEntity = 5; shoveValue = 1;
+            cgs.media.sfx_bullet_fleshhit[0] = 94;
+            for(value = 0; value < 5; ++value) for(count = 1; count <= 3; ++count) {
+                fields[1] = values[value]; argcValue = count; shovePlays = 0;
+                NITMOD_ShoveSoundCommand();
+                if(shovePlays != (value == 0 && count == 2)) ++errors;
+            }
+        }
         shoveTest = 0;
     }
     {

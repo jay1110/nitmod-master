@@ -39,6 +39,7 @@ extern vmCvar_t cg_pmSounds;
 extern vmCvar_t cg_shoveSounds;
 extern vmCvar_t cg_noGreetingSounds;
 void NITMOD_ShoveSound(int entityNum);
+void NITMOD_ShoveSoundCommand(void);
 extern vmCvar_t cg_drawBanners;
 extern vmCvar_t nitmodHitSounds;
 qboolean NITMOD_DisplayCommand(const char *command);

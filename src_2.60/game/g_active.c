@@ -533,8 +533,23 @@ Returns qfalse if the client is dropped
 =================
 */
 qboolean ClientInactivityTimer( gclient_t *client ) {
+	int duration = client->sess.sessionTeam == TEAM_SPECTATOR ? g_spectatorInactivity.integer : g_inactivity.integer;
+	qboolean spectatorExempt = qfalse;
+	if(client->sess.sessionTeam == TEAM_SPECTATOR && duration > 0) {
+		int i, occupiedPrivate = 0;
+		int privateSlots = trap_Cvar_VariableIntegerValue("sv_privateClients");
+		if(privateSlots < 0) privateSlots = 0;
+		if(privateSlots > level.maxclients) privateSlots = level.maxclients;
+		if(privateSlots > MAX_CLIENTS) privateSlots = MAX_CLIENTS;
+		for(i = 0; i < privateSlots; ++i)
+			if(level.clients[i].pers.connected != CON_DISCONNECTED) ++occupiedPrivate;
+		spectatorExempt = ((g_inactivityOptions.integer & 1) && client->sess.spectatorState == SPECTATOR_FOLLOW) ||
+			(!(g_inactivityOptions.integer & 2) &&
+			 ((client - level.clients < privateSlots && occupiedPrivate < privateSlots) ||
+			  level.numConnectedClients < level.maxclients + occupiedPrivate - privateSlots));
+	}
 	// OSP - modified
-	if( ( g_inactivity.integer == 0 && client->sess.sessionTeam != TEAM_SPECTATOR ) || ( g_spectatorInactivity.integer == 0 && client->sess.sessionTeam == TEAM_SPECTATOR ) ) {
+	if( duration <= 0 ) {
 
 		// give everyone some time, so if the operator sets g_inactivity during
 		// gameplay, everyone isn't kicked
@@ -547,7 +562,8 @@ qboolean ClientInactivityTimer( gclient_t *client ) {
 		(client->pers.cmd.buttons & BUTTON_ATTACK) ||
 		(client->pers.cmd.wbuttons & WBUTTON_LEANLEFT) ||
 		(client->pers.cmd.wbuttons & WBUTTON_LEANRIGHT)
-		|| client->ps.pm_type == PM_DEAD ) {
+		|| client->ps.pm_type == PM_DEAD || (client->ps.pm_flags & PMF_LIMBO) ||
+		((client->ps.eFlags & EF_PRONE) && client->ps.weapon == WP_MOBILE_MG42_SET) || spectatorExempt ) {
 
 		client->inactivityWarning = qfalse;
 		client->inactivityTime = level.time + 1000 *
@@ -558,18 +574,24 @@ qboolean ClientInactivityTimer( gclient_t *client ) {
 	} else if ( !client->pers.localClient ) {
 		if ( level.time > client->inactivityTime && client->inactivityWarning) {
 			client->inactivityWarning = qfalse;
-			client->inactivityTime = level.time + 60 * 1000;
-			trap_DropClient(client - level.clients, "Dropped due to inactivity", 0 );
-			return(qfalse);
+			if(client->sess.sessionTeam != TEAM_SPECTATOR) {
+				client->inactivityTime = level.time + (g_spectatorInactivity.integer > 0 ? g_spectatorInactivity.integer * 1000 : 60000);
+				SetTeam(&g_entities[client - level.clients], "spectator", qtrue, 0, 0, qfalse);
+				/* Fixed text avoids embedding player-controlled names in commands. */
+				trap_SendServerCommand(client - level.clients, "cp \"Moved to spectators due to inactivity\"");
+				return qtrue;
+			}
+			client->inactivityTime = level.time + 60000;
+			trap_DropClient(client - level.clients, "Dropped due to inactivity", 0);
+			return qfalse;
 		}
 
-		if ( !client->inactivityWarning && level.time > client->inactivityTime - 10000 ) {
-			CPx(client - level.clients, "cp \"^310 seconds until inactivity drop!\n\"");
-			CPx(client - level.clients, "print \"^310 seconds until inactivity drop!\n\"");
-			G_Printf("10s inactivity warning issued to: %s\n", client->pers.netname);
+		if ( !client->inactivityWarning && (double)level.time > (double)client->inactivityTime - (double)duration * 500.0 ) {
+			trap_SendServerCommand(client - level.clients, va("cp \"%i seconds until %s for inactivity\"", duration / 2,
+				client->sess.sessionTeam == TEAM_SPECTATOR ? "disconnect" : "moving to spectators"));
 
 			client->inactivityWarning = qtrue;
-			client->inactivityTime = level.time + 10000;	// Just for safety
+			/* Original warning does not extend the expiration time. */
 		}
 	}
 	return qtrue;
