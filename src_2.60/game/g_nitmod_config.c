@@ -584,6 +584,7 @@ void nitmod_RefreshBaseSettings( void ) {
 	simple.filterCams = g_filtercams.integer;
 	simple.doubleJump = g_doubleJump.integer;
 	simple.war = G_NITMOD_ConfiguredWarMode();
+	simple.noReload = G_NITMOD_ConfiguredNoReload();
 	state.doubleJumpHeight = g_DJHeight.value;
 	G_NITMOD_RefreshWeaponSnapshot( &state );
 	state.gravity = g_gravity.integer;

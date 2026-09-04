@@ -99,7 +99,7 @@ int weapBanksMultiPlayer[MAX_WEAP_BANKS_MP][MAX_WEAPS_IN_BANK_MP] = {
 	{WP_GRENADE_LAUNCHER,	WP_GRENADE_PINEAPPLE,	0,					0,							0,						0,							0,			0,			0,			0,		0,				0			},
 	{WP_MEDIC_SYRINGE,		WP_PLIERS,				WP_SMOKE_MARKER,	WP_SMOKE_BOMB,				0,						0,							0,			0,			0,			0,		0,				0,			},
 	{WP_DYNAMITE,			WP_MEDKIT,				WP_AMMO,			WP_SATCHEL,					WP_SATCHEL_DET,			0,							0,			0,			0,			0,		0,				0			},
-	{WP_LANDMINE,			WP_MEDIC_ADRENALINE,	0,					0,							0,						0,							0,			0,			0,			0,		0,				0			},
+	{WP_LANDMINE, WP_TRIPMINE, WP_MEDIC_ADRENALINE, 0, 0, 0, 0, 0, 0, 0, 0, 0}, // original bank 7, excluding unimplemented poison mine
 	{WP_BINOCULARS,			0,						0,					0,							0,						0,							0,			0,			0,			0,		0,				0			},
 	{0,						0,						0,					0,							0,						0,							0,			0,			0,			0,		0,				0			},
 };
@@ -1411,8 +1411,8 @@ weapon_medic_adrenaline (.3 .3 1) (-16 -16 -16) (16 16 16) suspended
 		50, // this should never be picked up
 		IT_WEAPON,
 		WP_MEDIC_ADRENALINE,
-		WP_MEDIC_SYRINGE,
-		WP_MEDIC_SYRINGE,
+		WP_MEDIC_ADRENALINE,
+		WP_MEDIC_ADRENALINE,
 		"",						// precache
 		"",						// sounds
 //		{0,0,0,0,0}
@@ -3933,6 +3933,11 @@ This is done after each set of usercmd_t on the server,
 and after local prediction on the client
 ========================
 */
+void BG_NITMOD_CopyLeanState(const playerState_t *ps, entityState_t *state) {
+	if(!ps || !state) return;
+	state->constantLight = ps->pm_type == PM_SPECTATOR ? 0 : ps->holdable[NITMOD_HOLDABLE_LEAN_DIRECTION];
+}
+
 void BG_PlayerStateToEntityState( playerState_t *ps, entityState_t *s, qboolean snap ) {
 	int		i;
 

@@ -36,9 +36,11 @@ int main( void ) {
         CHECK( NITMOD_AnnouncementCount( i, -1 ) == -1 );
         CHECK( NITMOD_AnnouncementCount( i, INT_MAX ) == -1 );
     }
-    /* Unknown multi-kill table retains a tier, not an invented kill count. */
+    /* Original MKName bounds the five multi-kill tiers. */
     CHECK( NITMOD_AnnouncementCount( 3, 2 ) == 3 );
-    CHECK( NITMOD_AnnouncementCount( 3, INT_MAX - 1 ) == INT_MAX );
+    CHECK( NITMOD_AnnouncementCount( 3, 4 ) == 5 );
+    CHECK( NITMOD_AnnouncementCount( 3, 5 ) == -1 );
+    CHECK( NITMOD_AnnouncementCount( 3, INT_MAX - 1 ) == -1 );
     for( i = 0; i < (int)( sizeof(invalid) / sizeof(invalid[0]) ); i++ ) {
         value = 77;
         CHECK( !NITMOD_ParseAnnouncementInteger( invalid[i], &value ) );

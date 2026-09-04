@@ -454,7 +454,7 @@ void CG_LaunchGib( centity_t *cent, vec3_t origin, vec3_t angles, vec3_t velocit
 CG_LoseHat
 ==============
 */
-void CG_LoseHat( centity_t *cent, vec3_t dir )
+void CG_LoseACC( centity_t *cent, vec3_t dir, int accessory, char *tag, qboolean head )
 {
 	clientInfo_t	*ci;
 	int				clientNum;
@@ -463,18 +463,20 @@ void CG_LoseHat( centity_t *cent, vec3_t dir )
 	vec3_t			origin, velocity;
 	bg_character_t	*character;
 
+	if(!cent || !dir || !tag || accessory < 0 || accessory >= ACC_MAX) return;
 	clientNum = cent->currentState.clientNum;
 	if( clientNum < 0 || clientNum >= MAX_CLIENTS ) {
-		CG_Error( "Bad clientNum on player entity");
+		return;
 	}
 	ci = &cgs.clientinfo[ clientNum ];
 	character = CG_CharacterForClientinfo( ci,  cent );
 
 	// don't launch anything if they don't have one
-	if( !character->accModels[ACC_HAT] )
+	if( !character || !character->accModels[accessory] )
 		return;
 
-	tagIndex = CG_GetOriginForTag( cent, &cent->pe.headRefEnt, "tag_mouth", 0, origin, NULL );
+	VectorClear(origin);
+	tagIndex = CG_GetOriginForTag( cent, head ? &cent->pe.headRefEnt : &cent->pe.bodyRefEnt, tag, 0, origin, NULL );
 
 	velocity[0] = dir[0]*(0.75+random())*GIB_VELOCITY;
 	velocity[1] = dir[1]*(0.75+random())*GIB_VELOCITY;
@@ -493,8 +495,8 @@ void CG_LoseHat( centity_t *cent, vec3_t dir )
 
 		VectorCopy( origin, re->origin );
 		AxisCopy( axisDefault, re->axis );
-		re->hModel = character->accModels[ACC_HAT];
-		re->customSkin = character->accSkins[ACC_HAT];
+		re->hModel = character->accModels[accessory];
+		re->customSkin = character->accSkins[accessory];
 
 		re->fadeStartTime		= le->endTime - 1000;
 		re->fadeEndTime			= le->endTime;
@@ -511,7 +513,8 @@ void CG_LoseHat( centity_t *cent, vec3_t dir )
 		le->angles.trDelta[0]	= 0;
 		le->angles.trDelta[1]	= (100 + (rand()&500)) - 300;
 //		le->angles.trDelta[2]	= 0;
-		le->angles.trDelta[2]	= 400;	// (SA) this is set with a very particular value to try to get it
+		le->angles.trDelta[2]	= head ? 400 : 50;	// Original accessory tumble rates
+		if(!head) le->effectFlags |= 2; // Original body-accessory effect bit
 										// to flip exactly once before landing (based on player alive
 										// (standing) and on level ground) and will be unnecessary when
 										// I have things landing properly on their own
@@ -537,6 +540,10 @@ CG_GetOriginForTag
   returns the index of the tag it used, so we can cycle through tag's with the same name
 ======================
 */
+void CG_LoseHat(centity_t *cent, vec3_t dir) {
+	CG_LoseACC(cent, dir, ACC_HAT, "tag_mouth", qtrue);
+}
+
 int CG_GetOriginForTag( centity_t *cent, refEntity_t *parent, char *tagName, int startIndex, vec3_t org, vec3_t axis[3] ) {
 	int				i;
 	orientation_t	lerped;

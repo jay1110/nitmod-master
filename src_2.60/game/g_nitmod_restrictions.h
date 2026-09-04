@@ -20,7 +20,7 @@ int G_NITMOD_IsClassPrimary( const struct gentity_s *entity, int nativeWeapon,
 int G_NITMOD_LimitMessage( const struct gentity_s *entity, int nativeWeapon,
     nitmodWeaponLimit_t limit, int isClassPrimary, int silent );
 
-/* Read-only snapshot supplied by the future engine adapter. Counts exclude
+/* Read-only snapshot supplied by the engine adapter. Counts exclude
  * the requester. For rifle grenades weaponCount is the matching base-rifle
  * family with equipment status; oppositeRifleCount is the other family.
  * teamSize is the original team population, not a weapon count. */
@@ -40,6 +40,9 @@ int G_NITMOD_ReadMedicOptions( unsigned int *options );
  * the correctly selected, validated weapon definition. Does not grant items. */
 int G_NITMOD_CanPickupWeapon( struct gentity_s *entity, int nativeWeapon,
     unsigned int classMask );
+/* 0/1 final decision, -1 means retain native class policy or unavailable
+ * configuration. Does not assume a missing original class mask is zero. */
+int G_NITMOD_PickupPrecheck( struct gentity_s *entity, int nativeWeapon );
 /* Atomic mapping to the existing # snapshot; unrelated fields preserved. */
 int G_NITMOD_RefreshWeaponSnapshot( nitmodGameState_t *state );
 /* Register only recovered Cvars absent from native ET; existing
@@ -47,12 +50,14 @@ int G_NITMOD_RefreshWeaponSnapshot( nitmodGameState_t *state );
 void G_NITMOD_RegisterWeaponConfiguration( void );
 int G_NITMOD_UpdateWeaponConfiguration(void);
 int G_NITMOD_ConfiguredWarMode(void);
+int G_NITMOD_ConfiguredNoReload(void);
+int G_NITMOD_ConfiguredWeaponFlags(void);
 typedef struct {
     nitmodWeaponDecision_t decision;
     nitmodWeaponLimit_t limit;
     int messageReason; /* original nitmod_cp ID, NOT a native event */
 } nitmodWeaponPolicyResult_t;
-/* Complete decision composition for mapped weapons, not an engine hook.
+/* Decision composition used by the active native spawn/loadout adapter.
  * INVALID denies safely; it is never converted into a player cap message. */
 nitmodWeaponPolicyResult_t G_NITMOD_EvaluateWeaponPolicy(
     const struct gentity_s *entity, int nativeWeapon,
@@ -65,7 +70,7 @@ nitmodWeaponPolicyResult_t G_NITMOD_EvaluateServerWeaponPolicy(
  * Result reports the decision/reason, not whether transport delivered it. */
 nitmodWeaponPolicyResult_t G_NITMOD_CheckWeaponAndNotify(
     struct gentity_s *entity, int nativeWeapon, int pickupContext, int silent );
-/* 1 changed, 0 unchanged, -1 invalid/unavailable. Native setter remains active.
+/* 1 changed, 0 unchanged, -1 invalid/unavailable (native setter falls back).
  * Uses native weapon IDs and may send a capability-gated denial message. */
 int G_NITMOD_SetClientWeapons( struct gentity_s *entity, int primary, int secondary,
     int updateClient );

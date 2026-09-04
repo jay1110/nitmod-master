@@ -1,5 +1,9 @@
 # Shared native firing-clip selection
 
+Current status: the Nitmod path now activates the validated consumption/refill
+adapter with synchronized settings; see active-weapon-refill.md. The inactive
+policy and native-only limitations below describe the earlier integration.
+
 `PM_WeaponFiringClip` extracts the identical native alias/akimbo selection
 previously duplicated in `PM_WeaponUseAmmo` and `PM_WeaponAmmoAvailable`.
 Both consumers now resolve the same hand through this function. Main clip

@@ -3,7 +3,7 @@
 
 /* Original cgame ELF cg_skillRewards at 0x138a00 (7 rows, 5 pointers).
  * Text recovery does not implement the advertised gameplay abilities.
- * Kept separate from the active four-level native reward table. */
+ * Used for original-server promotion text, separate from native rewards. */
 static const char *const nitmodSkillRewards[NITMOD_SKILL_COUNT][NITMOD_SKILL_LEVEL_COUNT - 1] = {
 	{ "Binoculars", "Improved Physical Fitness", "Improved Health", "Trap Awareness", "Improved lungs capacity" },
 	{ "Additional Explosive Ammunition", "Faster Arming and Defusing", "Improved Construction and Demolitions", "a Flak Jacket", "Bombs" },

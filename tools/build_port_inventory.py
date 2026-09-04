@@ -23,6 +23,129 @@ FIELDS = ["component", "source_file", "function", "ghidra_address", "target_modu
 # previous CSV invocation, so regenerating after a decompiler split never
 # erases review work.
 SEED_ANNOTATIONS = {
+    ("cgame", "cgame_client.c", "CG_RailTrail2"): (
+        "cgame/cg_nitmod_debug.c", "ported_partial", "sorted-reference/full-cgame-keyed-rail-tests",
+        "Color, keyed segment refresh and fade lifetime. See reference/client-keyed-rail-events.md."),
+    ("cgame", "cgame_client.c", "CG_FindLocalEntity"): (
+        "cgame/cg_localents.c", "ported_partial", "sorted-reference/full-cgame-keyed-rail-tests",
+        "Typed group/segment lookup over active list, deliberately excludes freed slots."),
+    ("cgame", "cgame_ui.c", "CG_RailTrail"): (
+        "cgame/cg_nitmod_debug.c; cgame/cg_event.c", "ported_partial", "sorted-reference/full-cgame-keyed-rail-tests",
+        "Original event 50 colored line/box dispatch; native ET behavior retained."),
+    ("cgame", "cgame_effects.c", "CG_RailTrail_part_5"): (
+        "cgame/cg_nitmod_debug.c", "ported_partial", "sorted-reference/full-cgame-keyed-rail-tests",
+        "Twelve stable box segment identities and endpoint construction; live visual parity pending."),
+    ("cgame", "cgame_client.c", "CG_BotDebugLine"): (
+        "cgame/cg_nitmod_debug.c; cgame/cg_nitmod_events.c", "ported_partial", "original-ELF-0x5efe0/full-cgame-event-render-tests",
+        "Original events 104-106: line, RGB basis and oriented box with native fade lifecycle. See reference/client-debug-vector-events.md."),
+    ("cgame", "cgame_spawn.c", "SP_corona"): (
+        "cgame/cg_nitmod_coronas.c; cgame/cg_spawn.c", "ported_partial", "original-ELF-0xb2d10/full-cgame-spawn-fixture",
+        "1024 typed static map coronas with original server-key exclusions and color priority. See reference/client-static-map-coronas.md."),
+    ("cgame", "cgame_client.c", "CG_Coronas"): (
+        "cgame/cg_nitmod_coronas.c; cgame/cg_view.c", "ported_partial", "original-ELF-0x4a370/96-render-profiles",
+        "Active map corona PVS, distance, direction, occlusion and scene submission. See reference/client-static-map-coronas.md."),
+    ("cgame", "cgame_ui.c", "CG_Debriefing_InfoRequests"): (
+        "cgame/cg_debriefing.c", "ported_partial", "original-ELF-0x39290/1536-request-profiles",
+        "Map-list priority followed by player statistics without starvation; optional imhr nonblocking. See reference/client-debrief-page-lifecycle.md."),
+    ("cgame", "cgame_ui.c", "CG_Debriefing_NextButton_KeyDown"): (
+        "cgame/cg_debriefing.c; cgame/cg_nitmod_mapvote.c", "ported_partial", "original-ELF-0x36670/576-page-transitions",
+        "Four views with original TDM/DM vote gates; local native page IDs retained. See reference/client-debrief-page-lifecycle.md."),
+    ("ui", "ui_ui_misc.c", "UI_AdjustFrom640"): (
+        "ui/ui_atoms.c; ui/ui_shared.c", "ported_partial", "original-ELF-0x10900/full-UI-widescreen-fixture",
+        "Original aspect correction for pictures and text, seven viewport profiles. See reference/ui-widescreen-layout.md."),
+    ("ui", "ui_ui_misc.c", "AdjustFrom640"): (
+        "ui/ui_shared.c", "ported_partial", "original-ELF-0x38670/full-UI-widescreen-fixture",
+        "UI model viewport scaling; cgame shared path unchanged. See reference/ui-widescreen-layout.md."),
+    ("ui", "ui_ui_menu.c", "Menu_UpdatePosition"): (
+        "ui/ui_shared.c", "ported_partial", "original-ELF-0x2ee10/full-UI-widescreen-fixture",
+        "Centered menus, clouds and legacy full-background rules; idempotent source rectangles are a documented correction. See reference/ui-widescreen-layout.md."),
+    ("ui", "ui_ui_misc.c", "_UI_MouseEvent"): (
+        "ui/ui_main.c", "ported_partial", "original-ELF-0x27780/full-UI-widescreen-fixture",
+        "Original widened virtual cursor range with overflow-safe deltas. See reference/ui-widescreen-layout.md."),
+    ("ui", "ui_ui_draw.c", "UI_DrawMapCinematic"): (
+        "ui/ui_main.c", "ported_partial", "original-ELF-0x1e1e0/full-UI-lifecycle-tests",
+        "Rewritten cinematic lifecycle with shared validated catalog selection; delayed failure fallback retained. See reference/ui-map-preview.md."),
+    ("ui", "ui_ui_draw.c", "UI_DrawMapPreview"): (
+        "ui/ui_main.c", "ported_partial", "original-decompile/full-UI-catalog-tests",
+        "Existing mapped rendering with bounded selection and campaign references; original off-by-one deliberately fixed. See reference/ui-map-preview.md."),
+    ("qagame", "nitmod_weapons.c", "G_AddClassWeapons"): (
+        "game/g_client.c", "ported_partial", "original-ELF-0x4ba20/full-qagame-spawn-tests",
+        "Active rifle attachment limits and dualSMG grants plus g_medics bit 4 primary suppression. Native skill/ammo policy retained. See reference/active-spawn-equipment.md and reference/active-medic-loadout.md."),
+    ("cgame", "cgame_pmove.c", "PM_WeaponUseAmmo"): (
+        "game/bg_pmove.c; game/nitmod_weapon_clip.c; game/nitmod_weapon_consumption.c", "ported_partial", "shared-consumption/25344-full-module-cases",
+        "Active exact-zero refill with synchronized war/noReload inputs; native ammo defaults retained. See reference/active-weapon-refill.md."),
+    ("qagame", "nitmod_pmove.c", "PM_WeaponUseAmmo"): (
+        "game/bg_pmove.c; game/nitmod_weapon_clip.c; game/nitmod_weapon_consumption.c", "ported_partial", "original-ELF-0x2aa40/25344-full-module-cases",
+        "Shared active consumption and Akimbo hand selection; bit 0 and panzer war only. See reference/active-weapon-refill.md."),
+    ("ui", "ui_ui_misc.c", "UI_ServersQsortCompare_bis"): (
+        "ui/ui_nitmod_browser.c", "ported_partial", "original-decompile/8-server-human-sort-fixture",
+        "Human population sort shared by insertion and qsort. See reference/ui-human-player-sort.md."),
+    ("ui", "ui_ui_misc.c", "UI_ServersSort"): (
+        "ui/ui_main.c; ui/ui_nitmod_browser.c", "ported_partial", "original-decompile/full-UI-status-fixture",
+        "Column 2 selects status-derived human population; bounded async fallback differs from original retry policy. See reference/ui-human-player-sort.md."),
+    ("cgame", "cgame_client.c", "CG_CheckAmmo"): (
+        "cgame/cg_nitmod_ammo.c", "ported_partial", "original-decompile/full-cgame-warning-matrix",
+        "Reserve thresholds and sound transitions; deliberate two-word ownership correction. See reference/client-ammo-warning.md."),
+    ("ui", "ui_ui_draw.c", "UI_DrawCampaignDescription"): (
+        "ui/ui_nitmod_description.c", "ported_partial", "original-decompile/full-UI-layout-fixture",
+        "Shared bounded text renderer and validated catalog selection; malformed-input differences documented in reference/ui-description-layout.md."),
+    ("ui", "ui_ui_draw.c", "UI_DrawGametypeDescription"): (
+        "ui/ui_nitmod_description.c", "ported_partial", "original-decompile/full-UI-layout-fixture",
+        "Original double-star paragraphs and baseline retained; browser screenshot parity pending. See reference/ui-description-layout.md."),
+    ("cgame", "cgame_pmove.c", "PM_CheckForReload"): (
+        "game/bg_pmove.c; game/nitmod_weapon_reload.c", "ported_partial", "original-ELF-0x19c80/production-request-matrix",
+        "Active scoped and unscoped decision with replicated war mode; native auto-reload policy retained. See reference/active-scoped-reload.md."),
+    ("qagame", "nitmod_pmove.c", "PM_CheckForReload"): (
+        "game/bg_pmove.c; game/nitmod_weapon_reload.c", "ported_partial", "original-ELF-0x2a7a0/production-request-matrix",
+        "Shared scoped war=2 reload and normal unscope transaction; original ability masks pending. See reference/active-scoped-reload.md."),
+    ("cgame", "cgame_pmove.c", "PM_BeginWeaponReload"): (
+        "game/bg_pmove.c; game/nitmod_weapon_reload_feedback.c", "ported_partial", "recovered-helper/production-start-matrix",
+        "Active fifteen-identity validated start bundle including three scoped rifles; native Garand policy retained. See reference/active-scoped-reload.md."),
+    ("qagame", "nitmod_pmove.c", "PM_BeginWeaponReload"): (
+        "game/bg_pmove.c; game/nitmod_weapon_reload_feedback.c", "ported_partial", "recovered-helper/production-start-matrix",
+        "Same fifteen-identity validated start as prediction; original dynamic definitions still pending. See reference/active-scoped-reload.md."),
+    ("cgame", "cgame_pmove.c", "PM_ReloadClip"): (
+        "game/bg_pmove.c; game/nitmod_weapon_reload.c", "ported_partial", "original-ELF-0xa500/full-module-transfer-fixture",
+        "Active typed magazine transfer including Akimbo; current native capacities. See reference/active-reload-completion.md."),
+    ("qagame", "nitmod_pmove.c", "PM_ReloadClip"): (
+        "game/bg_pmove.c; game/nitmod_weapon_reload.c", "ported_partial", "original-ELF-0x12bf0/full-module-transfer-fixture",
+        "Same active transfer and atomic validation as cgame; original weapon-definition loading remains pending. See reference/active-reload-completion.md."),
+    ("cgame", "cgame_client.c", "CG_Letterbox"): (
+        "cgame/cg_nitmod_view.c", "ported_partial", "original-ELF-0xbaec0/144-viewport-cases",
+        "Original percentage/even-dimension viewport without native letterbox reduction; widened arithmetic documented. See reference/client-scope-viewport.md."),
+    ("ui", "ui_ui_misc.c", "UI_BuildFindPlayerList"): (
+        "ui/ui_nitmod_search.c", "ported_partial", "original-ELF-0x19d60/36-search-timelines",
+        "Typed request lifecycle; deduplicated player-only matches and isolated status UI updates. Deliberate corrections documented in reference/ui-player-search.md."),
+    ("ui", "ui_ui_misc.c", "UI_GetServerStatusInfo"): (
+        "ui/ui_nitmod_status.c", "ported_partial", "original-ELF-0x151c0/decoder-and-live-menu-fixtures",
+        "Bounded status rows and player storage; request/cancel and URL menu lifecycle tested. Browser transcript pending. See reference/ui-server-status.md."),
+    ("cgame", "cgame_ents.c", "CG_DrawPicFullScreen"): (
+        "cgame/cg_drawtools.c", "ported_partial", "original-ELF-0x50270/overlay-render-fixtures",
+        "Full-screen scale and signed UV flips; six overlay consumers migrated. See reference/client-fullscreen-overlays.md."),
+    ("cgame", "cgame_ents.c", "CG_FillRectFullScreen"): (
+        "cgame/cg_drawtools.c", "ported_partial", "original-ELF-0x50340/overlay-render-fixtures",
+        "Full-screen solid rectangle and renderer color reset; native fallback retained. See reference/client-fullscreen-overlays.md."),
+    ("cgame", "cgame_ui.c", "CG_DrawFlashFade"): (
+        "cgame/cg_draw.c", "ported_partial", "original-ELF-0x3da00/96-blackout-cases",
+        "Original multiview and administrative blindness blackout synchronization. See reference/client-admin-blind.md."),
+    ("cgame", "cgame_client.c", "CG_CalcFov"): (
+        "cgame/cg_nitmod_view.c", "ported_partial", "original-ELF-0xbbe20/3024-FOV-cases",
+        "Original poison/liquid FOV composition; existing zoom and sensitivity extracted and tested. Browser parity pending. See reference/client-poison-view.md."),
+    ("cgame", "cgame_client.c", "CG_CalcViewValues"): (
+        "cgame/cg_view.c; cgame/cg_nitmod_view.c", "ported_partial", "original-ELF-0xbc2b0/492-poison-lean-cases",
+        "Poison camera rotation and g_weapons 256 lean divisor; not the complete original camera function. See reference/client-poison-view.md."),
+    ("cgame", "cgame_client.c", "CG_CalculateWeaponPosition"): (
+        "cgame/cg_nitmod_weapon_pose.c", "ported_partial", "original-ELF-0xbf590/typed-pose-matrix",
+        "Original-protocol visual lean and complete pose extraction; snapshot firing/reload states normalized. Clock-reset deviation documented. See reference/client-weapon-pose.md."),
+    ("cgame", "cgame_weapons.c", "CG_WeaponFireRecoil"): (
+        "cgame/cg_weapons.c", "ported_partial", "original-ELF-0xcde60/32-seeds-per-weapon",
+        "Existing native behavior verified; no new recoil feature. RNG draw count and kick state checked; browser replay pending. See reference/client-weapon-pose.md."),
+    ("cgame", "cgame_ui.c", "CG_Debriefing_ParseHitRegions"): (
+        "cgame/cg_debriefing.c", "ported_partial", "original-ELF-0x39a00/source-contract",
+        "Four typed count/percentage pairs, exact arity and atomic commit. See reference/debrief-intermission-protocol.md."),
+    ("qagame", "nitmod_cmds.c", "Cmd_IntermissionHitRegions_f"): (
+        "game/g_cmds.c", "ported_partial", "original-ELF-0x60600/source-contract",
+        "Typed HR_HEAD/ARMS/BODY/LEGS source and original count/percentage wire order. See reference/debrief-intermission-protocol.md."),
     ("ui", "ui_ui_parse.c", "ItemParse_bitflag"): (
         "ui/ui_shared.c; ui/ui_shared.h", "ported_partial", "original-ui-ELF-0x29a00/real-keyword-parser",
         "Typed trailing bitflag integer at wasm32 offset 0x274; actual Item_Parse tested. See reference/map-load-compatibility.md."),
@@ -124,19 +247,25 @@ SEED_ANNOTATIONS = {
         "Active ordinary team/weapon counting includes selected or latched team-equivalent weapons, once per client, requester excluded. Nine mapped pairs tested in both directions. Rifle-grenade private-flag/base-rifle branch remains native exact-match behavior. See reference/team-weapon-count.md."),
     ("qagame", "nitmod_weapons.c", "G_IsWeaponDisabled"): (
         "game/g_nitmod_weapon_policy.c; game/g_nitmod_restrictions.c; game/nitmod_weapon_limits.c", "ported_partial", "original-i386-control-flow/typed-restriction-tests",
-        "Read-only typed decision composition covers spectator/mode precedence, heavy/panzer/fixed limits, STEN and notification policy with recovered primary classification. Not gameplay-active; engine snapshot, Cvar ownership and message transport pending. See reference/weapon-restrictions.md."),
+        "Active ordinary spawn/selection restriction composition with original mapped limits and Sten policy; native fallback on unavailable inputs. See reference/active-loadout-restrictions.md."),
+    ("qagame", "nitmod_weapons.c", "G_CanPickupWeapon"): (
+        "game/g_items.c; game/g_nitmod_weapon_adapter.c", "ported_partial", "original-ELF-0x71e30/full-qagame-pickup-matrix",
+        "Active restriction and war/pickAny early returns with capability-gated denial. Ordinary classes retain native policy until original class masks are available. See reference/active-pickup-restrictions.md."),
     ("qagame", "nitmod_weapons.c", "G_SetClientWeapons"): (
         "game/g_nitmod_loadout.c", "ported_partial", "typed-loadout/integrated-policy-tests",
-        "Typed primary denial/secondary latch transaction and conditional clientinfo publication; invalid policy leaves weapon latches unchanged. Disabled class handler uses it; active native setter unchanged. Original secondary-before-check ordering deliberately hardened. See reference/weapon-restrictions.md."),
+        "Active team/loadout primary denial and secondary latch transaction with capability-gated messages; changed-only clientinfo publication. See reference/active-loadout-restrictions.md."),
+    ("qagame", "nitmod_cmds.c", "Cmd_SetClass_f"): (
+        "game/g_nitmod_class_command.c; game/g_cmds_ext.c", "ported_partial", "original-ELF-0x5e880/full-qagame-dispatch",
+        "Active command-table dispatch and recovered class/loadout handler; native weapon IDs and existing SetTeam flow retained. See reference/active-loadout-restrictions.md."),
     ("qagame", "nitmod_bg.c", "BG_WeaponIsPrimaryForClassAndTeam"): (
         "game/g_nitmod_restrictions.c", "ported_partial", "original-i386-class-tables/typed-classification-tests",
         "Original six-slot class tables mapped to native weapons; pickup override order preserved. 4000 combinations plus invalid bounds tested. Connected to isolated weapon policy, not native loadouts. See reference/weapon-restrictions.md."),
     ("qagame", "nitmod_weapons.c", "G_RemoveWeapons"): (
         "game/g_nitmod_weapons.c", "ported_partial", "original-ELF-item-identities/typed-inventory-tests",
-        "42 native weapon identities mapped from the original 46 removals; four Nitmod-only poison/bomb variants intentionally omitted. Ownership only; knife and satchel detonator preserved. Built but not gameplay-active. War lifecycle and event mapping pending; see reference/weapon-removal.md."),
+        "42 mapped native identities; four Nitmod-only poison/bomb variants omitted. Active war=4 frame hook with per-spawn latch and native EV_NOAMMO. Ammo and surviving bits preserved. See reference/active-war-entry.md."),
     ("qagame", "nitmod_client.c", "ClientThink_checkWeapons"): (
         "game/g_nitmod_abilities.c (adrenaline reconciliation only)", "ported_partial", "original-i386-disassembly/typed-inventory-tests",
-        "Typed guards and adrenaline reconciliation plus mode-4 entry transaction recovered. War entry removes mapped weapons then selects knife and emits native EV_NOAMMO before latching. Event ordering, repeats and explicit reset tested. Not gameplay-active: lifecycle/configuration and generic restrictions pending. See reference/weapon-removal.md."),
+        "Mode-4 entry active after ClientEndFrame with connected-team guards and per-spawn gclient latch. Full qagame lifecycle-adapter tests; original demo-client facility absent in ET 2.60. Adrenaline and dynamic generic restrictions remain partial. See reference/active-war-entry.md."),
     ("qagame", "nitmod_unknown.c", "EntHasAdren"): (
         "game/g_nitmod_abilities.c", "ported_partial", "original-i386-disassembly/typed-eligibility-tests",
         "Typed entity/client eligibility wrappers use explicit first-aid unlock bit 0x10 and class mask. Nulls reject safely. Built but not gameplay-active; state ownership and inventory reconciliation pending. See reference/skill-abilities-disassembly.md."),
@@ -347,8 +476,39 @@ SEED_ANNOTATIONS = {
     ("cgame", "cgame_nitrox.c", "nitrox_ProcessNewCS"): (
         "cgame/cg_nitmod_config.c", "ported_partial", "dispatch/source-build",
         "Only reconstructed custom ranges are handled."),
+    ("cgame", "cgame_client.c", "CG_parseMapVoteListInfo"): (
+        "cgame/cg_nitmod_mapvote.c", "ported", "control-flow/protocol-tests",
+        "Typed bounded parser for original immaplist records."),
+    ("cgame", "cgame_client.c", "CG_parseMapVoteTally"): (
+        "cgame/cg_nitmod_mapvote.c", "ported", "control-flow/protocol-tests",
+        "Bounded original imvotetally parser."),
+    ("cgame", "cgame_client.c", "CG_MapVoteList_Draw"): (
+        "cgame/cg_nitmod_mapvote.c", "ported", "control-flow/source-build",
+        "Scrollable 19-row original-protocol map list and tally display."),
+    ("cgame", "cgame_client.c", "CG_MapVote_VoteButton_KeyDown"): (
+        "cgame/cg_nitmod_mapvote.c", "ported", "control-flow/protocol-tests",
+        "Validated original single-vote request."),
+    ("cgame", "cgame_client.c", "CG_MapVote_MultiVoteButton_KeyDown"): (
+        "cgame/cg_nitmod_mapvote.c", "ported", "control-flow/protocol-tests",
+        "Three bounded choices with duplicate rejection."),
+    ("cgame", "cgame_client.c", "CG_MapVoteList_KeyDown"): (
+        "cgame/cg_nitmod_mapvote.c", "ported", "control-flow/source-build",
+        "Typed mouse row selection plus wheel and keyboard scrolling."),
+    ("cgame", "cgame_client.c", "CG_MapVote_VoteButton_Draw"): (
+        "cgame/cg_nitmod_mapvote.c", "ported", "control-flow/source-build",
+        "Explicit single-vote control integrated into debriefing."),
+    ("cgame", "cgame_client.c", "CG_MapVote_SetSelectedMap"): (
+        "cgame/cg_nitmod_mapvote.c", "ported", "control-flow/source-build",
+        "Validated selection and levelshot fallback."),
+    ("cgame", "cgame_client.c", "CG_MapVote_MultiVoteButton_Draw"): (
+        "cgame/cg_nitmod_mapvote.c", "ported", "control-flow/source-build",
+        "Three original multi-vote controls."),
+    ("cgame", "cgame_events.c", "CG_EntityEvent"): (
+        "cgame/cg_event.c; cgame/cg_nitmod_events.c", "ported_partial",
+        "ELF-event-table/control-flow/source-build",
+        "Original IDs 1-103 mapped including typed EV_BODY_DP; remaining presentation parity is tracked separately."),
     ("ui", "ui_ui_misc.c", "UI_BuildServerDisplayList"): (
-        "ui/ui_main.c", "ported_partial", "filter/source-build",
+        "ui/ui_nitmod_browser.c", "ported_partial", "filter/refresh-runtime-matrix",
         "Nitmod and sv_NxAC browser filters are reconstructed; runtime transcript pending."),
 }
 

@@ -34,6 +34,8 @@ One hundred full-qagame fixture profiles exercise weapon/owner/gate/active combi
 query bounds, truncation, trajectory, fuse preservation and ownership. Engine
 box queries are doubled; real collision-world selection/browser play remains
 unverified. This is an experimental subset, not full CanisterKick parity.
+An additional real Cmd_Activate2_f fixture verifies that an inactive marker
+is kicked and reassigned before the corpse-interaction early return.
 
 ## Spawn collision integration
 

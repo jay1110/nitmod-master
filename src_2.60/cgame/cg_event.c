@@ -2,6 +2,9 @@
 
 #include "cg_local.h"
 #include "cg_nitmod_config.h"
+#include "cg_nitmod_hud.h"
+#include "cg_nitmod_events.h"
+#include "cg_nitmod_debug.h"
 
 extern void CG_StartShakeCamera( float param );
 extern void CG_Tracer( vec3_t source, vec3_t dest, int sparks );
@@ -21,10 +24,12 @@ static void CG_Obituary( entityState_t *ent ) {
 	char		attackerName[32];
 	clientInfo_t	*ci, *ca; // JPW NERVE ca = attacker
 	qhandle_t	deathShader = cgs.media.pmImages[PM_DEATH];
+	if(NITMOD_UsesOriginalProtocol()) { CG_NitmodObituary(ent); return; }
 
 	target = ent->otherEntityNum;
 	attacker = ent->otherEntityNum2;
 	mod = ent->eventParm;
+	if(NITMOD_UsesOriginalProtocol()) mod = CG_NitmodDeathCause(mod);
 
 	if ( target < 0 || target >= MAX_CLIENTS ) {
 		CG_Error( "CG_Obituary: target out of range" );
@@ -142,7 +147,7 @@ static void CG_Obituary( entityState_t *ent ) {
 
 	if (message) {
 		message = CG_TranslateString( message );
-		CG_AddPMItem( PM_DEATH, va( "%s %s.", targetName, message ), deathShader );
+		CG_NitmodObituaryPrint( va( "%s %s.", targetName, message ), deathShader, ent );
 		return;
 	}
 
@@ -159,7 +164,8 @@ static void CG_Obituary( entityState_t *ent ) {
 		} else {
 			s = va("%s %s", CG_TranslateString( "You killed" ), targetName );
 		}
-		CG_PriorityCenterPrint( s, SCREEN_HEIGHT * 0.75, BIGCHAR_WIDTH * 0.6, 1 );
+		if(!CG_NitmodKillPrint(s, ci->team == ca->team, cg.time))
+			CG_PriorityCenterPrint( s, SCREEN_HEIGHT * 0.75, BIGCHAR_WIDTH * 0.6, 1 );
 		// print the text message as well
 	}
 
@@ -177,6 +183,7 @@ static void CG_Obituary( entityState_t *ent ) {
 	}
 
 	if( ca ) {
+		CG_NitmodObituarySounds(ent);
 		switch( mod ) {
 		case MOD_KNIFE:
 			message = "was stabbed by";
@@ -360,6 +367,7 @@ static void CG_Obituary( entityState_t *ent ) {
 			break;
 		}
 
+		if(NITMOD_UsesOriginalProtocol()) CG_NitmodSpecialObituary(ent->eventParm, &message, &message2);
 		if( ci->team == ca->team ) {
 			message = "^1WAS KILLED BY TEAMMATE^7";
 			message2="";
@@ -369,7 +377,7 @@ static void CG_Obituary( entityState_t *ent ) {
 			message = CG_TranslateString( message );
 			if ( message2 ) {
 				message2 = CG_TranslateString( message2 );
-				CG_AddPMItem( PM_DEATH, va( "%s %s %s%s", targetName, message, attackerName, message2 ), deathShader );
+				CG_NitmodObituaryPrint( va( "%s %s %s%s", targetName, message, attackerName, message2 ), deathShader, ent );
 //				CG_Printf( "[cgnotify]%s %s %s%s\n", targetName, message, attackerName, message2 );
 			}
 			return;
@@ -379,7 +387,7 @@ static void CG_Obituary( entityState_t *ent ) {
 	// we don't know what it was
 	switch( mod ) {
 		default:
-			CG_AddPMItem( PM_DEATH, va( "%s died.", targetName ), deathShader );
+			CG_NitmodObituaryPrint( va( "%s died.", targetName ), deathShader, ent );
 			break;
 	}
 }
@@ -550,6 +558,19 @@ static fxSound_t fxSounds[POSSIBLE_PIECES] = {
 	{ 1, { -1, -1, -1 }, { "sound/world/stonefall.wav", NULL, NULL } }
 };
 
+/* Network material IDs are not trusted array indices. random() includes
+ * its upper endpoint, so it must not be multiplied into an array index. */
+static sfxHandle_t CG_MaterialSound(int material) {
+	fxSound_t *fx;
+	int index;
+	if(material < 0 || material >= POSSIBLE_PIECES) return 0;
+	fx = &fxSounds[material];
+	index = rand() % fx->max;
+	if(fx->sound[index] == -1)
+		fx->sound[index] = trap_S_RegisterSound(fx->soundfile[index], qfalse);
+	return fx->sound[index] > 0 ? fx->sound[index] : 0;
+}
+
 void CG_PrecacheFXSounds( void ) {
 	int i, j;
 
@@ -572,6 +593,10 @@ CG_Explode
 void CG_Explode(centity_t *cent, vec3_t origin, vec3_t dir, qhandle_t shader) {
 
 	qhandle_t		inheritmodel = 0;
+	if(cent->currentState.frame < 0 || cent->currentState.frame >= POSSIBLE_PIECES) return;
+	if(cent->currentState.dl_intensity < -1 || cent->currentState.dl_intensity >= MAX_SOUNDS) return;
+	if((cent->currentState.eFlags & EF_INHERITSHADER) &&
+	   (cent->currentState.modelindex < 0 || cent->currentState.modelindex >= MAX_MODELS)) return;
 
 	// inherit shader
 	// (SA) FIXME: do this at spawn time rather than explode time so any new necessary shaders are created earlier
@@ -587,13 +612,7 @@ void CG_Explode(centity_t *cent, vec3_t origin, vec3_t dir, qhandle_t shader) {
 	if( !cent->currentState.dl_intensity ) {
 		sfxHandle_t sound;
 
-		sound = random()*fxSounds[cent->currentState.frame].max;
-
-		if( fxSounds[cent->currentState.frame].sound[sound] == -1 ) {
-			fxSounds[cent->currentState.frame].sound[sound] = trap_S_RegisterSound( fxSounds[cent->currentState.frame].soundfile[sound], qfalse );
-		}
-
-		sound = fxSounds[cent->currentState.frame].sound[sound];
+		sound = CG_MaterialSound(cent->currentState.frame);
 
 		CG_Explodef(	origin, 
 						dir, 
@@ -633,6 +652,10 @@ CG_Explode
 void CG_Rubble(centity_t *cent, vec3_t origin, vec3_t dir, qhandle_t shader) {
 
 	qhandle_t		inheritmodel = 0;
+	if(cent->currentState.frame < 0 || cent->currentState.frame >= POSSIBLE_PIECES) return;
+	if(cent->currentState.dl_intensity < -1 || cent->currentState.dl_intensity >= MAX_SOUNDS) return;
+	if((cent->currentState.eFlags & EF_INHERITSHADER) &&
+	   (cent->currentState.modelindex < 0 || cent->currentState.modelindex >= MAX_MODELS)) return;
 
 	// inherit shader
 	// (SA) FIXME: do this at spawn time rather than explode time so any new necessary shaders are created earlier
@@ -648,13 +671,7 @@ void CG_Rubble(centity_t *cent, vec3_t origin, vec3_t dir, qhandle_t shader) {
 	if( !cent->currentState.dl_intensity ) {
 		sfxHandle_t sound;
 
-		sound = random()*fxSounds[cent->currentState.frame].max;
-
-		if( fxSounds[cent->currentState.frame].sound[sound] == -1 ) {
-			fxSounds[cent->currentState.frame].sound[sound] = trap_S_RegisterSound( fxSounds[cent->currentState.frame].soundfile[sound], qfalse );
-		}
-
-		sound = fxSounds[cent->currentState.frame].sound[sound];
+		sound = CG_MaterialSound(cent->currentState.frame);
 
 		CG_RubbleFx(	origin, 
 						dir, 
@@ -1544,6 +1561,7 @@ void CG_Debris (centity_t *cent, vec3_t origin, vec3_t dir) {
 	localEntity_t	*le;
 	refEntity_t		*re;
 	int				type;
+	if(cent->currentState.modelindex < 0 || cent->currentState.modelindex >= MAX_MODELS) return;
 		
 	type = cent->currentState.density;
 
@@ -1664,9 +1682,54 @@ void CG_MachineGunEjectBrass( centity_t *cent );
 void CG_MachineGunEjectBrassNew( centity_t *cent );
 // jpw
 #define	DEBUGNAME(x) if(cg_debugEvents.integer){CG_Printf(x"\n");}
-void CG_EntityEvent( centity_t *cent, vec3_t position ) {
+/* Original cases 52..55 at 0x622a8, distant branch 0x65eee.
+ * The original uses weapon media rather than ET's character death sounds. */
+static void CG_NitmodDeathEvent(const entityState_t *es, int variant) {
+	const weaponInfo_t *weapon;
+	sfxHandle_t sound;
+	vec3_t direction, origin;
+	float distance;
+	if(es->otherEntityNum2 >= 0 && es->otherEntityNum2 < MAX_GENTITIES)
+		cg_entities[es->otherEntityNum2].pe.painTime = cg.time;
+	if(es->weapon < 0 || es->weapon >= MAX_WEAPONS) return;
+	weapon = &cg_weapons[es->weapon];
+	if(!weapon->deathBySound[0] || weapon->deathBySoundCount <= 0 || weapon->deathBySoundCount > 4) return;
+	sound = weapon->deathBySound[variant % weapon->deathBySoundCount];
+	if(sound <= 0) return;
+	trap_S_StartSound(NULL, es->number, CHAN_VOICE, sound);
+	if(!cg.refdef_current || !weapon->deathBySoundFar[0] ||
+		weapon->deathBySoundFarCount <= 0 || weapon->deathBySoundFarCount > 4) return;
+	sound = weapon->deathBySoundFar[variant % weapon->deathBySoundFarCount];
+	if(sound <= 0) return;
+	VectorSubtract(es->pos.trBase, cg.refdef_current->vieworg, direction);
+	distance = VectorNormalize(direction);
+	if(distance > 512 && distance < 4096) {
+		VectorMA(cg.refdef_current->vieworg, 64, direction, origin);
+		trap_S_StartSoundEx(origin, es->number, CHAN_VOICE, sound, SND_NOCUT);
+	}
+}
+
+int CG_NitmodEventDispatch(int wireEvent) {
+	static const int handlers[] = { 0,
+#define X(id, name, handler) handler,
+#include "cg_nitmod_eventmap.h"
+#undef X
+	};
+	return wireEvent >= 0 && wireEvent < (int)(sizeof(handlers) / sizeof(handlers[0]))
+		? handlers[wireEvent] : wireEvent;
+}
+
+static void CG_EntityEventForProtocol(centity_t *cent, vec3_t position, qboolean original);
+void CG_EntityEvent(centity_t *cent, vec3_t position) {
+	CG_EntityEventForProtocol(cent, position, NITMOD_UsesOriginalProtocol());
+}
+void CG_NativeEntityEvent(centity_t *cent, vec3_t position) {
+	CG_EntityEventForProtocol(cent, position, qfalse);
+}
+static void CG_EntityEventForProtocol( centity_t *cent, vec3_t position, qboolean original ) {
 	entityState_t		*es;
 	int					event;
+	int wireEvent;
 	vec3_t				dir;
 	const char			*s;
 	int					clientNum;
@@ -1685,28 +1748,37 @@ void CG_EntityEvent( centity_t *cent, vec3_t position ) {
 
 	es = &cent->currentState;
 	event = es->event & ~EV_EVENT_BITS;
+	wireEvent = event;
+	if(original && CG_NitmodExtendedEvent(cent, event)) return;
+	if(original && event == 101) {
+		CG_NitmodSpreeStart(es->effect1Time, es->effect2Time, es->effect3Time);
+		return;
+	}
+	if(original && event >= 52 && event <= 55) {
+		CG_NitmodDeathEvent(es, event - 52);
+		return;
+	}
 	/* Original 0x60 uses the first flesh impact sound (cgs + 69264). */
-	if(event == 96 && NITMOD_UsesOriginalProtocol()) {
+	if(event == 96 && original) {
 		NITMOD_ShoveSound(es->number);
 		return;
 	}
-	if(event == 99 && NITMOD_UsesOriginalProtocol()) {
+	if(event == 99 && original) {
 		NITMOD_HitSoundEvent(es->eventParm);
 		return;
 	}
-	/* Original case 0x11: landing hurt sound, pain timestamp, -24 view dip.
-	 * Native 17 (EV_FALL_MEDIUM) has no handler in this baseline. */
-	if(event == 17 && NITMOD_UsesOriginalProtocol()) event = EV_FALL_DMG_50;
 	/* Original 0x62 targets the local client and honors cg_pmSounds. */
-	if( event == 98 && NITMOD_UsesOriginalProtocol() ) {
+	if( event == 98 && original ) {
 		NITMOD_PrivateMessageSound(es->number);
 		return;
 	}
-	/* Original Nitmod CG_EntityEvent case 0x5d plays the team's medic
-	 * voice. Translate only the dispatch value, never the snapshot or
-	 * shared ET enum (native 93 is an unrelated event). */
-	if( event == 93 && NITMOD_UsesOriginalProtocol() ) {
-		event = EV_MEDIC_CALL;
+	/* Translate dispatch only, never snapshot IDs or the shared ET enum. */
+	if(original && wireEvent <= 93) {
+		event = CG_NitmodEventDispatch(wireEvent);
+		if(event < 0) {
+			CG_Error("Unsupported original Nitmod event: %i", wireEvent);
+			return;
+		}
 	}
 
 	if ( cg_debugEvents.integer ) {
@@ -1716,6 +1788,36 @@ void CG_EntityEvent( centity_t *cent, vec3_t position ) {
 	if ( !event ) {
 		DEBUGNAME("ZEROEVENT");
 		return;
+	}
+
+	/* Validate payloads before any table lookup. This applies to both the
+	 * translated original protocol and locally predicted ET events. */
+	switch(event) {
+	case EV_GENERAL_SOUND:
+	case EV_GENERAL_SOUND_VOLUME:
+	case EV_GLOBAL_SOUND:
+	case EV_GLOBAL_TEAM_SOUND:
+	case EV_GLOBAL_CLIENT_SOUND:
+		if(es->eventParm < 0 || es->eventParm >= MAX_SOUNDS) return;
+		break;
+	case EV_FX_SOUND:
+		if(es->eventParm < 0 || es->eventParm >= POSSIBLE_PIECES) return;
+		break;
+	case EV_GRENADE_BOUNCE:
+		if(es->eventParm < 0 || es->eventParm > FOOTSTEP_TOTAL) return;
+		break;
+	case EV_WEAP_OVERHEAT:
+	case EV_SPINUP:
+	case EV_FILL_CLIP:
+	case EV_FIRE_WEAPON:
+	case EV_FIRE_WEAPONB:
+	case EV_FIRE_WEAPON_LASTSHOT:
+	case EV_FIRE_WEAPON_MG42:
+	case EV_FIRE_WEAPON_MOUNTEDMG42:
+	case EV_FIRE_WEAPON_AAGUN:
+		if(es->weapon < WP_NONE || es->weapon >= WP_NUM_WEAPONS) return;
+		break;
+	default: break;
 	}
 
 	clientNum = es->clientNum;
@@ -1880,7 +1982,7 @@ void CG_EntityEvent( centity_t *cent, vec3_t position ) {
 		}
 
 		// add this amount
-		step = 4 * (event - EV_STEP_4 + 1 );
+		step = original && wireEvent == 11 ? es->eventParm : 4 * (event - EV_STEP_4 + 1 );
 		cg.stepChange = oldStep + step;
 		if ( cg.stepChange > MAX_STEP_CHANGE ) {
 			cg.stepChange = MAX_STEP_CHANGE;
@@ -1907,7 +2009,8 @@ void CG_EntityEvent( centity_t *cent, vec3_t position ) {
 		break;
 	case EV_WATER_UNDER:
 		DEBUGNAME("EV_WATER_UNDER");
-		trap_S_StartSound (NULL, es->number, CHAN_AUTO, cgs.media.watrUnSound );
+		if(!original || es->eventParm)
+			trap_S_StartSound (NULL, es->number, CHAN_AUTO, cgs.media.watrUnSound );
 		if( cg.clientNum == es->number ) {
 			cg.waterundertime = cg.time + HOLDBREATHTIME;
 		}
@@ -1935,6 +2038,7 @@ void CG_EntityEvent( centity_t *cent, vec3_t position ) {
 			int		index;
 
 			index = es->eventParm;		// player predicted
+			if(original) index = NITMOD_ItemFromWire(index);
 
 			if ( index < 1 || index >= bg_numItems ) {
 				break;
@@ -1971,6 +2075,7 @@ void CG_EntityEvent( centity_t *cent, vec3_t position ) {
 			int		index;
 
 			index = es->eventParm;		// player predicted
+			if(original) index = NITMOD_ItemFromWire(index);
 
 			if ( index < 1 || index >= bg_numItems ) {
 				break;
@@ -2008,7 +2113,7 @@ void CG_EntityEvent( centity_t *cent, vec3_t position ) {
 		if( BG_PlayerMounted( es->eFlags ) ) {
 			trap_S_StartSoundVControl( NULL, es->number, CHAN_AUTO, cgs.media.hWeaponHeatSnd, 255 );
 		} else if( es->eFlags & EF_MOUNTEDTANK ) {
-			if( cg_entities[cg_entities[cg_entities[ es->number ].tagParent].tankparent].currentState.density & 8 ) {
+			if( CG_MountedTankIsBrowning(cent) ) {
 				trap_S_StartSoundVControl( NULL, es->number, CHAN_AUTO, cgs.media.hWeaponHeatSnd_2, 255 );
 			} else {
 				trap_S_StartSoundVControl( NULL, es->number, CHAN_AUTO, cgs.media.hWeaponHeatSnd, 255 );
@@ -2120,25 +2225,25 @@ void CG_EntityEvent( centity_t *cent, vec3_t position ) {
 		gdist = VectorNormalize(norm);
 		if(gdist > 512 && gdist < 4096) {
 			VectorMA(cg.refdef_current->vieworg, 64, norm, gorg);
-			if( cg_entities[cg_entities[cg_entities[ cent->currentState.number ].tagParent].tankparent].currentState.density & 8 ) { // should we use a browning?
+			if( CG_MountedTankIsBrowning(cent) ) { // should we use a browning?
 				trap_S_StartSoundEx( gorg, cent->currentState.number, CHAN_WEAPON, cgs.media.hWeaponEchoSnd_2, SND_NOCUT);
 			} else {
 				trap_S_StartSoundEx( gorg, cent->currentState.number, CHAN_WEAPON, cgs.media.hWeaponEchoSnd, SND_NOCUT);
 			}
 		}
 		DEBUGNAME("EV_FIRE_WEAPON_MG42");
-		CG_FireWeapon( cent );
+		CG_FireWeapon(cent, event);
 		break;
 	case EV_FIRE_WEAPON_AAGUN:
 		DEBUGNAME("EV_FIRE_WEAPON_AAGUN");
-		CG_FireWeapon( cent);
+		CG_FireWeapon(cent, event);
 		break;
 	case EV_FIRE_WEAPON:
 	case EV_FIRE_WEAPONB:
 		DEBUGNAME("EV_FIRE_WEAPON");
 		if( cent->currentState.clientNum == cg.snap->ps.clientNum && cg.snap->ps.eFlags & EF_ZOOMING ) // to stop airstrike sfx
 			break;
-		CG_FireWeapon( cent);
+		CG_FireWeapon(cent, event);
 		if( event == EV_FIRE_WEAPONB )	// akimbo firing
 			cent->akimboFire = qtrue;
 		else
@@ -2146,7 +2251,7 @@ void CG_EntityEvent( centity_t *cent, vec3_t position ) {
 		break;
 	case EV_FIRE_WEAPON_LASTSHOT:
 		DEBUGNAME("EV_FIRE_WEAPON_LASTSHOT");
-		CG_FireWeapon( cent);
+		CG_FireWeapon(cent, event);
 		break;
 
 	case EV_NOFIRE_UNDERWATER:
@@ -2198,6 +2303,7 @@ void CG_EntityEvent( centity_t *cent, vec3_t position ) {
 		break;*/
 
 	case EV_RAILTRAIL:
+		if(original) { CG_NitmodRailEvent(es); break; }
 		CG_RailTrail( &cgs.clientinfo[ es->otherEntityNum2 ], es->origin2, es->pos.trBase, es->dmgFlags);	//----(SA)	added 'type' field
 		break;
 
@@ -2314,15 +2420,8 @@ void CG_EntityEvent( centity_t *cent, vec3_t position ) {
 
 			DEBUGNAME("EV_FX_SOUND");
 
-			sound = random()*fxSounds[ es->eventParm ].max;
-
-			if( fxSounds[ es->eventParm ].sound[ sound ] == -1 ) {
-				fxSounds[ es->eventParm ].sound[ sound ] = trap_S_RegisterSound( fxSounds[ es->eventParm ].soundfile[ sound ], qfalse );
-			}
-
-			sound = fxSounds[ es->eventParm ].sound[ sound ];
-
-			trap_S_StartSoundVControl( NULL, es->number, CHAN_VOICE, sound, 255 );
+			sound = CG_MaterialSound(es->eventParm);
+			if(sound > 0) trap_S_StartSoundVControl( NULL, es->number, CHAN_VOICE, sound, 255 );
 		}
 		break;
 	case EV_GENERAL_SOUND_VOLUME:
@@ -2666,6 +2765,7 @@ void CG_EntityEvent( centity_t *cent, vec3_t position ) {
 
 			VectorSubtract( cg.snap->ps.origin, cent->lerpOrigin, v );
 			len = VectorLength (v);
+			if(cent->currentState.onFireStart <= 0) break;
 
 			if(len > cent->currentState.onFireStart) {
 				break;
@@ -2704,6 +2804,7 @@ void CG_EntityEvent( centity_t *cent, vec3_t position ) {
 	case EV_AIRSTRIKEMESSAGE:
 		{
 			const char* wav = NULL;
+			if(original) CG_NitmodFireSupportChat(es, qtrue);
 
 			switch( cent->currentState.density ) {
 				case 0: // too many called
@@ -2738,6 +2839,7 @@ void CG_EntityEvent( centity_t *cent, vec3_t position ) {
 	case EV_ARTYMESSAGE:
 		{
 			const char* wav = NULL;
+			if(original) CG_NitmodFireSupportChat(es, qfalse);
 
 			switch( cent->currentState.density ) {
 				case 0: // too many called

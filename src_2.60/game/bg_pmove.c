@@ -13,6 +13,7 @@
 
 #include "bg_local.h"
 #include "nitmod_weapon_reload.h"
+#include "nitmod_weapon_clip.h"
 
 #ifdef CGAMEDLL
 #define PM_GameType cg_gameType.integer
@@ -2335,6 +2336,21 @@ static void PM_BeginWeaponReload( int weapon ) {
 	gitem_t* item;
 	int reloadTime;
 
+	/* Reviewed light/akimbo and scoped start transactions.
+	 * Keep native skill policy until original ability words are synchronized;
+	 * do not pretend a native skill level is itself an original ability mask. */
+	if(pm->nitmodReloadEnabled && (NITMOD_ReloadUsesOuterClipGate(weapon) ||
+		weapon == WP_GARAND_SCOPE || weapon == WP_K43_SCOPE || weapon == WP_FG42SCOPE)) {
+		nitmodWeaponOptions_t options;
+		unsigned int lightBits = pm->skill[SK_LIGHT_WEAPONS] >= 2 ? NITMOD_FAST_RELOAD : 0;
+		memset(&options, 0, sizeof(options));
+		/* Keep the native Garand clip policy until dynamic original weapon
+		 * definitions are connected. Other scoped rifles allow midclip reload. */
+		options.noMidclipReload = weapon == WP_GARAND_SCOPE;
+		NITMOD_BeginWeaponReload(pm, weapon, GetAmmoTableData(weapon), &options, 0, lightBits);
+		return;
+	}
+
 	// Original Nitmod accepts normal and alternate firing, as well as ready.
 	if( !NITMOD_ReloadStateAllowed(pm->ps->weaponstate) )
 		return;
@@ -2396,7 +2412,7 @@ static void PM_BeginWeaponReload( int weapon ) {
 	PM_AddEvent( EV_FILL_CLIP );	// play reload sound
 }
 
-static void PM_ReloadClip( int weapon );
+void PM_ReloadClip( int weapon );
 
 /* Completes the raising phase only after both weapon timers expire.
  * Reload intent resets READY before entering the existing native reload
@@ -2631,8 +2647,14 @@ static void PM_FinishWeaponChange( void ) {
 PM_ReloadClip
 ==============
 */
-static void PM_ReloadClip( int weapon ) {
+void PM_ReloadClip( int weapon ) {
 	int ammoreserve, ammoclip, ammomove;
+	nitmodWeaponInventorySlots_t slots;
+	if(pm->nitmodReloadEnabled && NITMOD_WeaponInventorySlots(weapon, &slots)) {
+		/* Failed transfers are atomic; never fall back to unchecked mutation. */
+		NITMOD_ReloadWeaponClips(pm->ps, weapon, ammoTableMP, WP_NUM_WEAPONS);
+		return;
+	}
 
 	ammoreserve = pm->ps->ammo[ BG_FindAmmoForWeapon(weapon)];
 	ammoclip	= pm->ps->ammoclip[BG_FindClipForWeapon( weapon )];
@@ -2659,7 +2681,12 @@ PM_FinishWeaponReload
 ==============
 */
 
-static void PM_FinishWeaponReload(void) {
+void PM_FinishWeaponReload(void) {
+	nitmodWeaponInventorySlots_t slots;
+	if(pm->nitmodReloadEnabled && NITMOD_WeaponInventorySlots(pm->ps->weapon, &slots)) {
+		NITMOD_FinishWeaponReload(pm, ammoTableMP, WP_NUM_WEAPONS);
+		return;
+	}
 	PM_ReloadClip(pm->ps->weapon);			// move ammo into clip
 	pm->ps->weaponstate = WEAPON_READY;		// ready to fire
 	PM_StartWeaponAnim(PM_IdleAnimForWeapon(pm->ps->weapon));
@@ -2675,6 +2702,7 @@ void PM_CheckForReload( int weapon ) {
 	qboolean autoreload;
 	qboolean reloadRequested;
 	int clipWeap, ammoWeap;
+	nitmodWeaponInventorySlots_t slots;
 
 	if(pm->noWeapClips)	// no need to reload
 		return;
@@ -2682,6 +2710,23 @@ void PM_CheckForReload( int weapon ) {
 	// GPG40 and M7 don't reload
 	if( weapon == WP_GPG40 || weapon == WP_M7 )
 		return;
+
+	/* War mode is shared by server and prediction. Original scoped ability
+	 * words remain unavailable: zero preserves the normal unscope policy. */
+	if(pm->nitmodReloadEnabled && NITMOD_WeaponInventorySlots(weapon, &slots)) {
+		nitmodReloadPolicy_t policy;
+		nitmodReloadDecision_t decision;
+		if(NITMOD_BuildReloadPolicy(pm,
+			(pm->nitmodReloadPreferenceFlags & NITMOD_CGF_ALT_RELOAD) != 0,
+			IS_AUTORELOAD_WEAPON(weapon), 0, pm->nitmodWarMode, &policy) &&
+			NITMOD_DecideReload(pm->ps, weapon, &policy, ammoTableMP, WP_NUM_WEAPONS, &decision)) {
+			if(decision.action == NITMOD_RELOAD_ACTION_BEGIN)
+				PM_BeginWeaponReload(decision.weapon);
+			else if(decision.action == NITMOD_RELOAD_ACTION_UNSCOPE)
+				PM_BeginWeaponChange(weapon, decision.weapon, qtrue);
+		}
+		return;
+	}
 
 	// Shared key semantics; both Pmove callers refresh the preference input.
 	reloadRequested = (qboolean)NITMOD_ManualReloadRequested(&pm->cmd, pm->nitmodReloadPreferenceFlags);
@@ -2758,7 +2803,10 @@ static int PM_ProcessWeaponTransitions( void ) {
 	if( pm->ps->weaponDelay > 0 ) return 1;
 	PM_CheckForReload( pm->ps->weapon );
 	if( pm->ps->weaponTime > 0 || pm->ps->weaponDelay > 0 ) return 1;
-	if( pm->ps->weaponstate == WEAPON_RELOADING ) PM_FinishWeaponReload();
+	if( pm->ps->weaponstate == WEAPON_RELOADING ) {
+		PM_FinishWeaponReload();
+		if(pm->ps->weaponstate == WEAPON_RELOADING) return 1;
+	}
 	if( pm->ps->weaponstate == WEAPON_DROPPING || pm->ps->weaponstate == WEAPON_DROPPING_TORELOAD ) {
 		PM_FinishWeaponChange();
 		return 1;
@@ -2824,6 +2872,12 @@ static int PM_WeaponFiringClip( int wp ) {
 }
 
 void PM_WeaponUseAmmo( int wp, int amount ) {
+	nitmodWeaponInventorySlots_t slots;
+	if(!pm->noWeapClips && pm->nitmodReloadEnabled && NITMOD_WeaponInventorySlots(wp,&slots)) {
+		NITMOD_ConsumeSelectedWeaponClip(pm->ps,wp,amount,pm->nitmodWarMode,
+			pm->nitmodNoReload,ammoTableMP,WP_NUM_WEAPONS);
+		return;
+	}
 	if(pm->noWeapClips)
 		pm->ps->ammo[ BG_FindAmmoForWeapon(wp)] -= amount;
 	else
@@ -4309,8 +4363,10 @@ void PM_UpdateLean(playerState_t *ps, usercmd_t *cmd, pmove_t *tpm) {
 	float		leanofs = 0;
 	vec3_t		viewangles;
 	trace_t		trace;
+	qboolean nitmod = pm && pm->ps == ps && pm->nitmodLeanEnabled;
 
-	if( (cmd->wbuttons & (WBUTTON_LEANLEFT|WBUTTON_LEANRIGHT))  && !cmd->forwardmove && cmd->upmove <= 0 ) {
+	if( (cmd->wbuttons & (WBUTTON_LEANLEFT|WBUTTON_LEANRIGHT)) &&
+		((nitmod && ps->pm_type == PM_SPECTATOR) || (!cmd->forwardmove && cmd->upmove <= 0)) ) {
 		// if both are pressed, result is no lean
 		if(cmd->wbuttons & WBUTTON_LEANLEFT)
 			leaning -= 1;
@@ -4318,11 +4374,11 @@ void PM_UpdateLean(playerState_t *ps, usercmd_t *cmd, pmove_t *tpm) {
 			leaning += 1;
 	}
 
-	if(	BG_PlayerMounted(ps->eFlags) ) {
+	if(nitmod ? (ps->eFlags & (EF_MG42_ACTIVE | EF_MOUNTEDTANK)) : BG_PlayerMounted(ps->eFlags)) {
 		leaning = 0;	// leaning not allowed on mg42
 	}
 
-	if(ps->eFlags & EF_FIRING)
+	if((ps->eFlags & EF_FIRING) && !(nitmod && (pm->nitmodWeaponFlags & 256)))
 		leaning = 0;	// not allowed to lean while firing
 
   // ATVI Wolfenstein Misc #479 - initial fix to #270 would crash in g_synchronousClients 1 situation
@@ -4331,6 +4387,7 @@ void PM_UpdateLean(playerState_t *ps, usercmd_t *cmd, pmove_t *tpm) {
 	
 	if( ps->eFlags & EF_PRONE || ps->weapon == WP_MORTAR_SET )
 		leaning = 0;	// not allowed to lean while prone
+	if(nitmod && (ps->eFlags & (EF_DEAD | EF_SPARE0))) leaning = 0;
 
 	leanofs = ps->leanf;
 
@@ -4392,8 +4449,9 @@ void PM_UpdateLean(playerState_t *ps, usercmd_t *cmd, pmove_t *tpm) {
 	}
 
 
-	if(ps->leanf)
+	if(ps->leanf && !(nitmod && ps->pm_type == PM_SPECTATOR))
 		cmd->rightmove = 0;		// also disallowed in cl_input ~391
+	if(nitmod) ps->holdable[NITMOD_HOLDABLE_LEAN_DIRECTION] = leaning;
 
 }
 

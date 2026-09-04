@@ -57,7 +57,8 @@ Draw all the status / pacifier stuff during level loading
 void CG_DrawInformation( qboolean forcerefresh ) {
 	static int lastcalled = 0;
 
-	if( lastcalled && (trap_Milliseconds() - lastcalled < 500) ) {
+	/* Original Nitmod CG_DrawInformation uses a 50 ms refresh throttle. */
+	if( lastcalled && (trap_Milliseconds() - lastcalled < 50) ) {
 		return;
 	}
 	lastcalled = trap_Milliseconds();

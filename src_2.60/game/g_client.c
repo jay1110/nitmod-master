@@ -812,6 +812,7 @@ SetWolfSpawnWeapons
 void SetWolfSpawnWeapons( gclient_t *client ) 
 {
 	int		pc = client->sess.playerType;
+	unsigned int medicOptions = 0;
 	qboolean	isBot = (g_entities[client->ps.clientNum].r.svFlags & SVF_BOT) ? qtrue : qfalse;
 	qboolean	isPOW = (g_entities[client->ps.clientNum].r.svFlags & SVF_POW) ? qtrue : qfalse;
 
@@ -819,6 +820,7 @@ void SetWolfSpawnWeapons( gclient_t *client )
 
 	if ( client->sess.sessionTeam == TEAM_SPECTATOR )
 		return;
+	if(pc == PC_MEDIC) G_NITMOD_ReadMedicOptions(&medicOptions);
 
 	// Reset special weapon time
 	client->ps.classWeaponTime = -999999;
@@ -866,7 +868,9 @@ void SetWolfSpawnWeapons( gclient_t *client )
 				switch( client->sess.playerWeapon ) {
 				case WP_KAR98:
 					if( AddWeaponToPlayer( client, WP_KAR98, GetAmmoTableData(WP_KAR98)->defaultStartingAmmo, GetAmmoTableData(WP_KAR98)->defaultStartingClip, qtrue ) ) {
-						client->sess.rifleGrenadeStatus = AddWeaponToPlayer( client, WP_GPG40, GetAmmoTableData(WP_GPG40)->defaultStartingAmmo, GetAmmoTableData(WP_GPG40)->defaultStartingClip, qfalse ) ? 1 : 0;
+						if(!G_IsWeaponDisabled(&g_entities[client->ps.clientNum], WP_GPG40)) {
+							client->sess.rifleGrenadeStatus = AddWeaponToPlayer( client, WP_GPG40, GetAmmoTableData(WP_GPG40)->defaultStartingAmmo, GetAmmoTableData(WP_GPG40)->defaultStartingClip, qfalse ) ? 1 : 0;
+						}
 					}
 					break;
 				default:
@@ -880,7 +884,9 @@ void SetWolfSpawnWeapons( gclient_t *client )
 				switch( client->sess.playerWeapon ) {
 				case WP_CARBINE:
 					if( AddWeaponToPlayer( client, WP_CARBINE, GetAmmoTableData(WP_CARBINE)->defaultStartingAmmo, GetAmmoTableData(WP_CARBINE)->defaultStartingClip, qtrue ) ) {
-						client->sess.rifleGrenadeStatus = AddWeaponToPlayer( client, WP_M7, GetAmmoTableData(WP_M7)->defaultStartingAmmo, GetAmmoTableData(WP_M7)->defaultStartingClip, qfalse ) ? 1 : 0;
+						if(!G_IsWeaponDisabled(&g_entities[client->ps.clientNum], WP_M7)) {
+							client->sess.rifleGrenadeStatus = AddWeaponToPlayer( client, WP_M7, GetAmmoTableData(WP_M7)->defaultStartingAmmo, GetAmmoTableData(WP_M7)->defaultStartingClip, qfalse ) ? 1 : 0;
+						}
 					}
 					break;
 				default:
@@ -925,10 +931,12 @@ void SetWolfSpawnWeapons( gclient_t *client )
 			AddWeaponToPlayer( client, WP_MEDKIT, GetAmmoTableData(WP_MEDKIT)->defaultStartingAmmo, GetAmmoTableData(WP_MEDKIT)->defaultStartingClip, qfalse );
 
 			if (client->sess.sessionTeam == TEAM_AXIS) {
-				AddWeaponToPlayer( client, WP_MP40, 0, GetAmmoTableData(WP_MP40)->defaultStartingClip, qtrue );
+				if(!(medicOptions & 4u))
+					AddWeaponToPlayer( client, WP_MP40, 0, GetAmmoTableData(WP_MP40)->defaultStartingClip, qtrue );
 				AddWeaponToPlayer( client, WP_GRENADE_LAUNCHER, 0, 1, qfalse );
 			} else {
-				AddWeaponToPlayer( client, WP_THOMPSON, 0, GetAmmoTableData(WP_THOMPSON)->defaultStartingClip, qtrue );
+				if(!(medicOptions & 4u))
+					AddWeaponToPlayer( client, WP_THOMPSON, 0, GetAmmoTableData(WP_THOMPSON)->defaultStartingClip, qtrue );
 				AddWeaponToPlayer( client, WP_GRENADE_PINEAPPLE, 0, 1, qfalse );
 			}
 		} else if ( pc == PC_SOLDIER ) {
@@ -1124,6 +1132,24 @@ void SetWolfSpawnWeapons( gclient_t *client )
 
 		}
 		// End Knifeonly stuff -- Ensure that medics get their basic stuff
+	}
+	/* Original G_AddClassWeapons: opposite SMG for an SMG primary,
+	 * otherwise the team's SMG. Covert ops are explicitly excluded. */
+	if(pc == PC_MEDIC && (medicOptions & 4u) && g_knifeonly.integer != 1) {
+		weapon_t pistol = client->sess.sessionTeam == TEAM_AXIS ? WP_LUGER : WP_COLT;
+		weapon_t akimbo = client->sess.sessionTeam == TEAM_AXIS ? WP_AKIMBO_LUGER : WP_AKIMBO_COLT;
+		client->ps.weapon = COM_BitCheck(client->ps.weapons, akimbo) ? akimbo : pistol;
+	}
+	if(g_dualSMG.integer && g_knifeonly.integer != 1 && pc != PC_COVERTOPS &&
+		(unsigned int)G_NITMOD_ConfiguredWarMode() - 1u >= 4u) {
+		weapon_t primary = pc == PC_MEDIC && (medicOptions & 4u) ?
+			(client->sess.sessionTeam == TEAM_AXIS ? WP_MP40 : WP_THOMPSON) : client->ps.weapon;
+		weapon_t extra = primary == WP_MP40 ? WP_THOMPSON :
+			primary == WP_THOMPSON ? WP_MP40 :
+			client->sess.sessionTeam == TEAM_AXIS ? WP_MP40 : WP_THOMPSON;
+		AddWeaponToPlayer(client, extra,
+			pc == PC_MEDIC ? 0 : GetAmmoTableData(extra)->defaultStartingAmmo,
+			GetAmmoTableData(extra)->defaultStartingClip, qfalse);
 	}
 }
 

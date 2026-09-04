@@ -1,5 +1,9 @@
 # Recovered clip reload transfer
 
+Current integration: the transfer now runs in the shared production movement
+path; see [active reload completion](active-reload-completion.md). The inventory
+request predicate below does not imply a complete reload-initiation port.
+
 ## Inventory-side reload request check
 
 `NITMOD_ReloadInventoryReady` reconstructs only the inventory predicate from
@@ -59,7 +63,7 @@ comparisons protect unrelated fields and the independent adrenaline/syringe
 inventories. Additional checks cover atomic second-hand failure, negative
 values, null arguments, unsupported IDs, short tables and INT_MAX boundaries.
 
-Compiled in cgame and qagame by CMake/SCons, but not connected to active
-PM_ReloadClip. Reload initiation, events, timing, animation, prediction and
-ammo pickup remain separate unfinished work. Evidence is disassembly plus
+Compiled in cgame and qagame by CMake/SCons and connected to active
+PM_ReloadClip. Partial request/start integration is documented in
+active-reload-start.md; ammo pickup remains separate work. Evidence is disassembly plus
 deterministic host tests, not an original-engine replay or release ABI proof.

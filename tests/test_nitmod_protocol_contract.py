@@ -9,6 +9,8 @@ from __future__ import annotations
 import pathlib
 import re
 import sys
+import hashlib
+import struct
 
 
 def read(root: pathlib.Path, relative: str) -> str:
@@ -35,6 +37,7 @@ def main() -> None:
     client_helpers = read(root, "cgame/cg_nitmod.c")
     dispatch = read(root, "cgame/cg_servercmds.c")
     ui = read(root, "ui/ui_main.c")
+    browser = read(root, "ui/ui_nitmod_browser.c")
 
     for name, value in {
         "NITMOD_MAX_CONFIGSTRINGS": "655",
@@ -103,8 +106,36 @@ def main() -> None:
             r'void nitmod_Announce\(.*?actor < 0.*?type < 1.*?NITMOD_FEATURE_SPREE_EVENTS.*?"nsp %i %i %i"',
             "server no longer validates and capability-gates the recovered announcement tuple")
     require(client,
-            r'void NITMOD_SpreeEventCommand\(.*?NITMOD_HasArgumentCount\( "nsp", 4 \).*?case 1:.*?case 5:.*?CG_AddPMItem',
-            "client no longer validates and presents all recovered announcement categories")
+            r'void NITMOD_SpreeEventCommand\(.*?NITMOD_HasArgumentCount\( "nsp", 4 \).*?CG_NitmodSpreeStart\(actor, detail, type\)',
+            "client no longer validates and routes the announcement tuple")
+    # Independently compare all message strings with hash-pinned ELF tables.
+    data = (root.parent / "original_nitmod_shared_objects_32bit/cgame.mp.i386.so").read_bytes()
+    assert hashlib.sha256(data).hexdigest() == "45db79d57b58d3a530c6fc7abbc39613accdb8d1804a2e3cb15324cee5fece7f"
+    start = struct.unpack_from("<I", data, 32)[0]
+    size, count = struct.unpack_from("<HH", data, 46)
+    sections = [struct.unpack_from("<10I", data, start + i * size) for i in range(count)]
+    def file_offset(address):
+        section = next(s for s in sections if s[1] != 8 and s[3] <= address < s[3] + s[5])
+        return section[4] + address - section[3]
+    hud = read(root, "cgame/cg_nitmod_hud.c")
+    # CG_DrawUpperRight's so-called average is stateless, not an EMA.
+    assert struct.unpack_from("<f", data, file_offset(0x1000b0))[0] == 0.0
+    assert struct.unpack_from("<f", data, file_offset(0xff348))[0] == 0.5
+    offset = file_offset(0x1034d4)
+    formats = b"Ping %d\0Avg Ping %0.2f\0"
+    assert data[offset:offset + len(formats)] == formats
+    offset = file_offset(0x44e25)
+    assert data[offset:offset + 16] == bytes.fromhex("db442434d8836c24fdffd88b0417fdff")
+    require(hud, r'if\(cg_drawPing.integer\).*?CG_NitmodHudPingText\(text, sizeof\(text\), cg.snap->ping, cg_drawPing.integer\).*?DrawLine\(y, text\)',
+            "all nonzero ping modes must reach the actual HUD renderer")
+    for name, address, count in (("kills", 0x13b2f0, 6), ("losses", 0x13b2e4, 3),
+                                 ("multi", 0x13b2d0, 5), ("revives", 0x13b2c0, 4)):
+        expected = []
+        for pointer in struct.unpack_from(f"<{count}I", data, file_offset(address)):
+            offset = file_offset(pointer)
+            expected.append(data[offset:data.index(b"\0", offset)].decode("ascii"))
+        body = re.search(rf'\*{name}\[\]\s*=\s*\{{(.*?)\}};', hud, re.S)[1]
+        assert re.findall(r'"([^"]*)"', body) == expected, name
     require(server,
             r'void NITMOD_SendHitSound\(.*?NITMOD_HIT_SOUND_TEAM.*?NITMOD_HIT_SOUND_HEAD.*?NITMOD_FEATURE_HIT_SOUNDS.*?"nhs %i"',
             "server no longer capability-gates recovered hit-sound classifications")
@@ -155,9 +186,9 @@ def main() -> None:
             "UI no longer registers the Nitmod browser filter")
     require(ui, r'"ui_browserNxAConly"',
             "UI no longer registers the NxAC browser filter")
-    require(ui, r'Info_ValueForKey\(\s*status\s*,\s*"sv_NxAC"\s*\)',
+    require(browser, r'Info_ValueForKey\(\s*status\s*,\s*"sv_NxAC"\s*\)',
             "NxAC filter no longer uses the authoritative server-status field")
-    require(ui, r'nxacStatus\s*<\s*0\s*\).*?numPlayersOnServers\s*-=\s*clients',
+    require(browser, r'nxacStatus\s*<\s*0\s*\).*?numPlayersOnServers\s*-=\s*clients',
             "pending NxAC queries no longer compensate the repeated player total")
     require(server, r'void G_NITMOD_ResyncEngineConfigStrings\( void \).*?trap_GetConfigstring.*?G_NITMOD_MirrorEngineConfigString',
             "NCS map-start resync no longer mirrors native configstrings")
@@ -192,6 +223,13 @@ def main() -> None:
     require(game_client, r'client->airOutTime = NITMOD_AirDeadline\( level.time, 0u \);',
             "spawn must share the air deadline calculation without enabling new skills")
     active = read(root, "game/g_active.c")
+    for assignment in ('cg_pmove.nitmodWarMode = NITMOD_SimpleConfig()->war;',
+                       'cg_pmove.nitmodNoReload = (unsigned int)NITMOD_SimpleConfig()->noReload;'):
+        assert read(root, "cgame/cg_predict.c").count(assignment) == 2, "both prediction paths need refill settings"
+    for assignment in ('pm.nitmodWarMode = G_NITMOD_ConfiguredWarMode();',
+                       'pm.nitmodNoReload = (unsigned int)G_NITMOD_ConfiguredNoReload();'):
+        assert active.count(assignment) == 2, "both server paths need refill settings"
+    assert 'simple.noReload = G_NITMOD_ConfiguredNoReload();' in server
     require(active, r'client->pmext.airleft = NITMOD_AirRemaining\( ent->client->airOutTime, level.time \);',
             "movement must use checked signed remaining air")
     require(active, r'if\(level.match_pause != PAUSE_NONE\).*?NITMOD_ShiftAirDeadline\( ent->client->airOutTime, time_delta \)',
@@ -200,8 +238,11 @@ def main() -> None:
             r'drowningDamage = G_NITMOD_UpdateClientAir\( ent, level.time, 0u \);.*?if\( ent->client->noclip \).*?return;.*?MOD_WATER',
             "air adapter must preserve noclip return and keep unreconstructed skill activation off")
     players = read(root, "cgame/cg_players.c")
-    require(players, r'NITMOD_ParseSkillDigits\( v, NUM_SKILL_LEVELS - 1, newInfo.skill \)',
-            "client skill input must respect the supported native level range")
+    require(players, r'NITMOD_DecodeClientSkills\(v, newInfo.skill, newInfo.nitmodSkillLevels\)',
+            "original display skills must be separated from native ability indices")
+    require(read(root, "cgame/cg_nitmod_config.c"),
+            r'nativeLevels\[i\] = levels\[i\] < NUM_SKILL_LEVELS \? levels\[i\] : NUM_SKILL_LEVELS - 1',
+            "native skill consumers must retain their supported index bounds")
     require(players, r'if\( newInfo.skill\[i\] > 0 && newInfo.skill\[i\] < NUM_SKILL_LEVELS \).*?cg_skillRewards\[ i \]\[ newInfo.skill\[i\]-1 \]',
             "skill rewards must check both table bounds")
     commands = read(root, "cgame/cg_servercmds.c")
@@ -239,8 +280,10 @@ def main() -> None:
             "secondary reload preference must default off and persist")
     require(client_main, r'cv->vmCvar == &cg_weapAltReloads',
             "preference changes must trigger userinfo publication")
-    require(client_main, r'void CG_setClientFlags\(void\).*?if\(cg.demoPlayback\) return;.*?NITMOD_EncodeReloadPreferences.*?NITMOD_ServerSupports\(NITMOD_FEATURE_RELOAD_PREFS\) \? cg_weapAltReloads.integer : 0',
-            "secondary reload preference must be demo-safe and capability-gated")
+    require(client_main, r'void CG_setClientFlags\(void\).*?if\(cg.demoPlayback\) return;.*?NITMOD_EncodeReloadPreferences.*?\(NITMOD_UsesOriginalProtocol\(\) \|\| NITMOD_ServerSupports\(NITMOD_FEATURE_RELOAD_PREFS\)\) \? cg_weapAltReloads.integer : 0',
+            "secondary reload requires the original protocol or a capability and must be demo-safe")
+    require(client_main, r'CG_ParseWolfinfo\(\);.*?CG_setClientFlags\(\);',
+            "initial preferences must be republished once the server protocol is known")
     require(client, r'nitmodServerCapabilities = capabilities & NITMOD_FEATURES_CLIENT;\s*CG_setClientFlags\(\);',
             "capability acknowledgement/revocation must republish preferences")
     require(client, r'protocolVersion != NITMOD_PROTOCOL_VERSION.*?nitmodServerCapabilities = 0;\s*CG_setClientFlags\(\);',
@@ -312,7 +355,7 @@ def main() -> None:
         raise AssertionError("both client Pmove setup paths must refresh preferences")
     if active.count('pm.nitmodReloadPreferenceFlags = NITMOD_EncodeReloadPreferences(0,') != 2:
         raise AssertionError("both server Pmove setup paths must refresh preferences")
-    require(client_main, r'unsigned int CG_NITMOD_ReloadPreferenceFlags\( void \).*?NITMOD_ServerSupports\(NITMOD_FEATURE_RELOAD_PREFS\) \? cg_weapAltReloads.integer : 0',
+    require(client_main, r'unsigned int CG_NITMOD_ReloadPreferenceFlags\( void \).*?\(NITMOD_UsesOriginalProtocol\(\) \|\| NITMOD_ServerSupports\(NITMOD_FEATURE_RELOAD_PREFS\)\) \? cg_weapAltReloads.integer : 0',
             "prediction preferences must match userinfo capability gating")
     capability_handler = server.split("void G_NITMOD_ClientCapabilities(", 1)[1].split("const char *G_NITMOD_ConfigString", 1)[0]
     if "G_NITMOD_ResetClient(" in capability_handler:

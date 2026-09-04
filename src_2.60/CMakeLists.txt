@@ -92,20 +92,24 @@ endfunction()
 
 if(NITMOD_BUILD_CGAME)
     set(NITMOD_CGAME_SRC
+        game/nitmod_weapon_paths.c
         cgame/cg_atmospheric.c cgame/cg_character.c cgame/cg_commandmap.c
         cgame/cg_consolecmds.c cgame/cg_debriefing.c cgame/cg_draw.c
         cgame/cg_drawtools.c cgame/cg_effects.c cgame/cg_ents.c cgame/cg_event.c
         cgame/cg_fireteamoverlay.c cgame/cg_fireteams.c cgame/cg_flamethrower.c
         cgame/cg_info.c cgame/cg_limbopanel.c cgame/cg_loadpanel.c
         cgame/cg_localents.c cgame/cg_main.c cgame/cg_nitmod.c
-        cgame/cg_nitmod_config.c cgame/cg_marks.c cgame/cg_missionbriefing.c
+        cgame/cg_nitmod_config.c cgame/cg_nitmod_key.c cgame/cg_nitmod_debug.c cgame/cg_nitmod_autoexec.c cgame/cg_nitmod_animation.c cgame/cg_nitmod_lean.c cgame/cg_nitmod_ammo.c cgame/cg_nitmod_hud.c cgame/cg_nitmod_log.c cgame/cg_nitmod_locations.c cgame/cg_nitmod_hints.c cgame/cg_nitmod_names.c cgame/cg_nitmod_events.c cgame/cg_nitmod_obituary.c cgame/cg_nitmod_stats.c cgame/cg_nitmod_mapvote.c cgame/cg_marks.c cgame/cg_missionbriefing.c
         cgame/cg_multiview.c cgame/cg_newDraw.c cgame/cg_particles.c
         cgame/cg_nitmod_skill_rewards.c
+        cgame/cg_nitmod_weapon_pose.c
+        cgame/cg_nitmod_view.c
         cgame/cg_players.c cgame/cg_playerstate.c cgame/cg_polybus.c
-        cgame/cg_popupmessages.c cgame/cg_predict.c cgame/cg_scoreboard.c
+        cgame/cg_popupmessages.c cgame/cg_predict.c cgame/cg_scoreboard.c cgame/cg_nitmod_scoreboard.c cgame/cg_nitmod_projectiles.c
         cgame/cg_servercmds.c cgame/cg_snapshot.c cgame/cg_sound.c
         cgame/cg_spawn.c cgame/cg_statsranksmedals.c cgame/cg_syscalls.c
         cgame/cg_trails.c cgame/cg_view.c cgame/cg_weapons.c cgame/cg_window.c)
+    list(APPEND NITMOD_CGAME_SRC cgame/cg_nitmod_coronas.c)
     nitmod_module(cgame cgame CGAMEDLL ${NITMOD_CGAME_SRC} ${NITMOD_SHARED_GAME} ui/ui_shared.c)
 endif()
 
@@ -151,7 +155,11 @@ endif()
 
 if(NITMOD_BUILD_UI)
     set(NITMOD_UI_SRC
-        ui/ui_atoms.c ui/ui_gameinfo.c ui/ui_loadpanel.c ui/ui_main.c
+        ui/ui_atoms.c ui/ui_gameinfo.c ui/ui_loadpanel.c ui/ui_main.c ui/ui_nitmod_actions.c ui/ui_nitmod_catalog.c ui/ui_nitmod_campaign.c ui/ui_nitmod_settings.c
+        ui/ui_nitmod_status.c
+        ui/ui_nitmod_search.c
+        ui/ui_nitmod_browser.c
+        ui/ui_nitmod_description.c
         ui/ui_players.c ui/ui_shared.c ui/ui_syscalls.c ui/ui_util.c)
     nitmod_module(ui ui UIDLL ${NITMOD_UI_SRC}
         game/bg_campaign.c game/bg_classes.c game/bg_misc.c game/q_math.c game/q_shared.c
@@ -168,7 +176,8 @@ if(BUILD_TESTING)
             target_link_libraries(nitmod_original_charge_dispatch_test PRIVATE m)
         endif()
         add_test(NAME nitmod_original_charge_dispatch COMMAND nitmod_original_charge_dispatch_test
-            "${CMAKE_CURRENT_SOURCE_DIR}/../pak/animations/scripts/human_base.script")
+            "${CMAKE_CURRENT_SOURCE_DIR}/../pak/animations/scripts/human_base.script"
+            "${CMAKE_CURRENT_SOURCE_DIR}/../pak")
     endif()
     if(TARGET ui AND NOT CMAKE_CROSSCOMPILING)
         get_target_property(nitmod_ui_test_sources ui SOURCES)
@@ -518,6 +527,20 @@ if(BUILD_TESTING)
     endif()
     find_package(Python3 COMPONENTS Interpreter QUIET)
     if(Python3_Interpreter_FOUND)
+        add_test(NAME nitmod_original_event_map COMMAND ${Python3_EXECUTABLE} -B
+            "${CMAKE_CURRENT_SOURCE_DIR}/../tests/test_original_event_map.py")
+        add_test(NAME nitmod_global_stats_labels COMMAND ${Python3_EXECUTABLE} -B
+            "${CMAKE_CURRENT_SOURCE_DIR}/../tests/test_global_stats_labels.py")
+        add_test(NAME nitmod_client_stats_protocol COMMAND ${Python3_EXECUTABLE} -B
+            "${CMAKE_CURRENT_SOURCE_DIR}/../tests/test_client_stats_protocol.py")
+        add_test(NAME nitmod_debrief_protocol COMMAND ${Python3_EXECUTABLE} -B
+            "${CMAKE_CURRENT_SOURCE_DIR}/../tests/test_debrief_protocol.py")
+        add_test(NAME nitmod_original_ui_actions COMMAND ${Python3_EXECUTABLE} -B
+            "${CMAKE_CURRENT_SOURCE_DIR}/../tests/test_original_ui_actions.py")
+        add_test(NAME nitmod_loadpanel_contract COMMAND ${Python3_EXECUTABLE} -B
+            "${CMAKE_CURRENT_SOURCE_DIR}/../tests/test_nitmod_loadpanel.py")
+        add_test(NAME nitmod_mapvote_contract COMMAND ${Python3_EXECUTABLE} -B
+            "${CMAKE_CURRENT_SOURCE_DIR}/../tests/test_nitmod_mapvote.py")
         add_test(NAME nitmod_pak_readonly COMMAND ${Python3_EXECUTABLE} -B
             "${CMAKE_CURRENT_SOURCE_DIR}/../tests/test_pak_readonly.py")
         if(TARGET nitmod_native_weapon_aliases)
@@ -529,6 +552,8 @@ if(BUILD_TESTING)
             add_executable(nitmod_weapon_change_test ../tests/test_nitmod_weapon_change.c
                 "${switch_test_bodies}" ../tests/dump_native_weapon_aliases.c
                 game/nitmod_weapon_reload.c game/nitmod_weapon_inventory.c
+                game/nitmod_weapon_reload_feedback.c
+                game/nitmod_weapon_clip.c game/nitmod_weapon_consumption.c
                 game/nitmod_weapon_akimbo.c game/bg_misc.c game/q_shared.c game/q_math.c)
             target_compile_definitions(nitmod_weapon_change_test PRIVATE GAMEDLL=1 NITMOD_SWITCH_HARNESS=1)
             target_include_directories(nitmod_weapon_change_test PRIVATE game "${CMAKE_CURRENT_BINARY_DIR}")
@@ -565,6 +590,10 @@ if(BUILD_TESTING)
         add_test(NAME nitmod_weapon_paths_reference
             COMMAND ${Python3_EXECUTABLE} -B
                 "${CMAKE_CURRENT_SOURCE_DIR}/../tests/test_weapon_paths_reference.py"
+                "${CMAKE_CURRENT_SOURCE_DIR}/..")
+        add_test(NAME nitmod_weapon_banks_reference
+            COMMAND ${Python3_EXECUTABLE} -B
+                "${CMAKE_CURRENT_SOURCE_DIR}/../tests/test_weapon_banks_reference.py"
                 "${CMAKE_CURRENT_SOURCE_DIR}/..")
         add_test(NAME nitmod_weapon_ammo_reference
             COMMAND ${Python3_EXECUTABLE} -B
@@ -608,6 +637,9 @@ if(BUILD_TESTING)
             COMMAND ${Python3_EXECUTABLE}
                 "${CMAKE_CURRENT_SOURCE_DIR}/../tests/test_reference_artifacts.py"
                 "${CMAKE_CURRENT_SOURCE_DIR}/..")
+        add_test(NAME nitmod_original_death_causes
+            COMMAND ${Python3_EXECUTABLE}
+                "${CMAKE_CURRENT_SOURCE_DIR}/../tests/test_original_death_causes.py")
         add_test(NAME nitmod_port_inventory
             COMMAND ${Python3_EXECUTABLE}
                 "${CMAKE_CURRENT_SOURCE_DIR}/../tests/test_port_inventory.py"

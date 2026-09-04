@@ -165,5 +165,16 @@ int main( void ) {
     missing = 1;
     CHECK( G_NITMOD_CanPickupWeapon(&g_entities[0], WP_PANZERFAUST, 31) == -1 && sendCount == 1 );
     CHECK( G_NITMOD_CanPickupWeapon(NULL, WP_STEN, 0) == -1 );
+    CHECK( G_NITMOD_PickupPrecheck(&g_entities[0], WP_PANZERFAUST) == -1 );
+    missing = 0; sendCount = 0;
+    CHECK( G_NITMOD_PickupPrecheck(&g_entities[0], WP_PANZERFAUST) == 0 );
+    CHECK( sendCount == 1 && sentSlot == 0 && sentReason == 19 && !memcmp(before, clients, sizeof(clients)) );
+    heavyZero = 0; pickAny = 0;
+    CHECK( G_NITMOD_PickupPrecheck(&g_entities[0], WP_MP40) == -1 );
+    pickAny = 1;
+    CHECK( G_NITMOD_PickupPrecheck(&g_entities[0], WP_MP40) == 1 );
+    war = 1;
+    CHECK( G_NITMOD_PickupPrecheck(&g_entities[0], WP_MP40) == 0 );
+    CHECK( G_NITMOD_PickupPrecheck(&g_entities[0], WP_PANZERFAUST) == 1 );
     return 0;
 }

@@ -2,8 +2,13 @@
 
 #include <string.h>
 #include <stdlib.h>
+#include <limits.h>
 
 #include "cg_local.h"
+#include "../game/nitmod_skills.h"
+#include "cg_nitmod_hud.h"
+#include "cg_nitmod_events.h"
+#include "cg_nitmod_stats.h"
 #include "cg_nitmod_config.h"
 #include "../game/nitmod_announcements.h"
 
@@ -12,6 +17,334 @@ static unsigned int nitmodServerCapabilities;
 static nitmodSimpleConfig_t nitmodSimpleConfig;
 static nitmodGameState_t nitmodGameState;
 static qboolean nitmodClassLimitsReceived;
+vmCvar_t n_forceSinglePistol, cg_FTAutoSelect;
+vmCvar_t cg_markDistance, cg_projectileNudge, nitmod_sv_fps;
+vmCvar_t cg_countryflags, cg_optimizePrediction, cg_locations;
+vmCvar_t cg_logFile, cg_clientLog, cg_drawCam, cg_locationMaxChars;
+vmCvar_t cg_TDMScorePos, cg_earlyTransition;
+
+qboolean CG_NitmodBulletImpactVisible(int weapon, const vec3_t origin) {
+    int distance = NITMOD_UsesOriginalProtocol() ? cg_markDistance.integer : 384;
+    return weapon == WP_FG42SCOPE || weapon == WP_GARAND_SCOPE || weapon == WP_K43_SCOPE ||
+        Distance(cg.refdef_current->vieworg, origin) < distance;
+}
+
+/* Original CG_CalcEntityLerpPositions, ELF 0x5b2e0..0x5b537.
+ * Only visual trajectories are shifted, never the network state or prediction. */
+int CG_NitmodProjectileTime(const entityState_t *state) {
+    int frame, extra;
+    if(!state || !cg.snap || !NITMOD_UsesOriginalProtocol() ||
+       state->eType != ET_MISSILE || cg_projectileNudge.integer <= 0) return cg.time;
+    /* Invalid server values must not divide by zero or overflow timestamps. */
+    if(nitmod_sv_fps.integer <= 0) return cg.time;
+    frame = 1000 / nitmod_sv_fps.integer;
+    extra = state->clientNum == cg.clientNum ? 0 :
+        (cg_projectileNudge.integer == 1 ? cg.snap->ping : cg_projectileNudge.integer);
+    if(extra < 0 || extra > INT_MAX - frame) return cg.time;
+    frame += extra;
+    if(cg.time > INT_MAX - frame) return cg.time;
+    return cg.time + frame;
+}
+
+qboolean CG_NitmodProjectileLerp(centity_t *cent) {
+    int time;
+    vec3_t start, delta;
+    trace_t trace;
+    if(!cent || !cg.snap || !NITMOD_UsesOriginalProtocol() ||
+       cent->currentState.eType != ET_MISSILE || cg_projectileNudge.integer <= 0) return qfalse;
+    time = CG_NitmodProjectileTime(&cent->currentState);
+    BG_EvaluateTrajectory(&cent->currentState.pos, time, cent->lerpOrigin, qfalse, cent->currentState.effect2Time);
+    BG_EvaluateTrajectory(&cent->currentState.apos, time, cent->lerpAngles, qtrue, cent->currentState.effect2Time);
+    if(time != cg.time) {
+        /* The original evaluates BOTH endpoints at the shifted time (0x5b3a8).
+         * Preserve that behavior; do not invent a different collision sweep. */
+        BG_EvaluateTrajectory(&cent->currentState.pos, time, start, qfalse, cent->currentState.effect2Time);
+        CG_Trace(&trace, start, vec3_origin, vec3_origin, cent->lerpOrigin, cent->currentState.number, MASK_SHOT);
+        if(trace.fraction < 1.0f) {
+            VectorSubtract(cent->lerpOrigin, start, delta);
+            VectorMA(start, trace.fraction, delta, cent->lerpOrigin);
+        }
+    }
+    return qtrue;
+}
+
+unsigned int NITMOD_ClientPreferenceFlags(unsigned int flags, int fixedMove, int singlePistol) {
+    if(!NITMOD_UsesOriginalProtocol()) return flags;
+    flags &= ~0x60u;
+    if(fixedMove > 0) flags |= 0x20u;
+    if(singlePistol > 0) flags |= 0x40u;
+    return flags;
+}
+
+/* Wire-only counters cannot share native PERS_TEAM/PERS_SPAWN_COUNT slots.
+ * Keep one owned copy for each engine snapshot buffer, never a global latest
+ * snapshot (which would expose future counters while interpolating). */
+static struct {
+    qboolean valid;
+    int serverTime;
+    int values[MAX_PERSISTANT];
+} wirePersistant[2];
+
+void NITMOD_ResetSnapshotPersistant(void) {
+    memset(wirePersistant, 0, sizeof(wirePersistant));
+}
+
+const int *NITMOD_WirePersistant(const playerState_t *state) {
+    int i;
+    if(!state) return NULL;
+    for(i = 0; i < 2; ++i) {
+        if(state == &cg.activeSnapshots[i].ps && wirePersistant[i].valid &&
+           wirePersistant[i].serverTime == cg.activeSnapshots[i].serverTime)
+            return wirePersistant[i].values;
+    }
+    return state->persistant;
+}
+
+void NITMOD_TranslateSnapshotPersistant(snapshot_t *snapshot) {
+    int wire[MAX_PERSISTANT], i;
+    if(!snapshot) return;
+    for(i = 0; i < 2; ++i) {
+        if(snapshot == &cg.activeSnapshots[i]) {
+            wirePersistant[i].valid = NITMOD_UsesOriginalProtocol();
+            wirePersistant[i].serverTime = snapshot->serverTime;
+            memcpy(wirePersistant[i].values, snapshot->ps.persistant, sizeof(wire));
+        }
+    }
+    if(!NITMOD_UsesOriginalProtocol()) return;
+    memcpy(wire, snapshot->ps.persistant, sizeof(wire));
+    memset(snapshot->ps.persistant, 0, sizeof(snapshot->ps.persistant));
+    snapshot->ps.persistant[PERS_SCORE] = wire[NITMOD_WIRE_PERS_SCORE];
+    snapshot->ps.persistant[PERS_HITS] = wire[NITMOD_WIRE_PERS_HITS];
+    snapshot->ps.persistant[PERS_TEAM] = wire[NITMOD_WIRE_PERS_TEAM];
+    snapshot->ps.persistant[PERS_SPAWN_COUNT] = wire[NITMOD_WIRE_PERS_SPAWN_COUNT];
+    snapshot->ps.persistant[PERS_KILLED] = wire[NITMOD_WIRE_PERS_DEATHS];
+    snapshot->ps.persistant[PERS_RESPAWNS_LEFT] = wire[NITMOD_WIRE_PERS_RESPAWNS_LEFT];
+    snapshot->ps.persistant[PERS_RESPAWNS_PENALTY] = wire[NITMOD_WIRE_PERS_RESPAWNS_PENALTY];
+    snapshot->ps.persistant[PERS_REVIVE_COUNT] = wire[NITMOD_WIRE_PERS_REVIVE_COUNT];
+    snapshot->ps.persistant[PERS_HWEAPON_USE] = wire[NITMOD_WIRE_PERS_HWEAPON_USE];
+    /* No attacker index exists in this original array: slot 2 counts
+     * body hits. Do not expose headshot counts as client numbers. */
+    snapshot->ps.persistant[PERS_ATTACKER] = -1;
+}
+
+/* Original Nitmod weapon_t, distinct from ET's enum. The four new weapons
+ * without typed gameplay implementations deliberately have no alias. */
+static const int nitmodWireWeapons[52] = {
+	WP_NONE, WP_KNIFE, WP_LUGER, WP_MP40, WP_GRENADE_LAUNCHER,
+	WP_PANZERFAUST, WP_FLAMETHROWER, WP_COLT, WP_THOMPSON, WP_GRENADE_PINEAPPLE,
+	WP_STEN, WP_MEDIC_SYRINGE, WP_AMMO, WP_ARTY, WP_SILENCER, WP_DYNAMITE,
+	WP_SMOKETRAIL, VERYBIGEXPLOSION, WP_MEDKIT, WP_BINOCULARS, WP_PLIERS,
+	WP_SMOKE_MARKER, WP_KAR98, WP_CARBINE, WP_GARAND, WP_LANDMINE,
+	WP_SATCHEL, WP_SATCHEL_DET, WP_SMOKE_BOMB, WP_MOBILE_MG42, WP_K43,
+	WP_FG42, WP_DUMMY_MG42, WP_MORTAR, WP_AKIMBO_COLT, WP_AKIMBO_LUGER,
+	WP_GPG40, WP_M7, WP_SILENCED_COLT, WP_GARAND_SCOPE, WP_K43_SCOPE,
+	WP_FG42SCOPE, WP_MORTAR_SET, WP_MEDIC_ADRENALINE, WP_AKIMBO_SILENCEDCOLT,
+	WP_AKIMBO_SILENCEDLUGER, WP_MOBILE_MG42_SET, -1, -1, WP_TRIPMINE, -1, -1
+};
+
+int NITMOD_WeaponFromWire(int weapon) {
+	return weapon >= 0 && weapon < 52 && nitmodWireWeapons[weapon] >= 0
+		? nitmodWireWeapons[weapon] : WP_NONE;
+}
+
+/* Original CG_DrawCursorhint switch; not the ET 2.60 hintType_t layout. */
+int NITMOD_HintFromWire(int hint) {
+	static const int hints[] = {
+		HINT_NONE, HINT_FORCENONE, HINT_PLAYER, HINT_ACTIVATE,
+		HINT_DOOR, HINT_DOOR_ROTATING, HINT_DOOR_LOCKED, HINT_DOOR_ROTATING_LOCKED,
+		HINT_MG42, HINT_BREAKABLE, HINT_BREAKABLE_DYNAMITE, HINT_CHAIR,
+		HINT_ALARM, HINT_HEALTH, HINT_KNIFE, HINT_LADDER, HINT_BUTTON, HINT_WATER,
+		HINT_WEAPON, HINT_AMMO, HINT_POWERUP, HINT_INVENTORY,
+		HINT_ACTIVATE, HINT_ACTIVATE, HINT_ACTIVATE, HINT_FORCENONE, HINT_FORCENONE,
+		HINT_ACTIVATE, HINT_FORCENONE, HINT_BUILD, HINT_DISARM, HINT_REVIVE,
+		HINT_DYNAMITE, HINT_CONSTRUCTIBLE, HINT_UNIFORM, HINT_LANDMINE,
+		HINT_TANK, HINT_SATCHELCHARGE, HINT_PLYR_FRIEND
+	};
+	return hint >= 0 && hint < (int)(sizeof(hints) / sizeof(hints[0])) ? hints[hint] : HINT_ACTIVATE;
+}
+int NITMOD_WeaponToWire(int weapon) {
+	int i;
+	if(weapon < 0) return 0;
+	for(i = 0; i < 52; ++i) if(nitmodWireWeapons[i] == weapon) return i;
+	return 0;
+}
+
+const char *NITMOD_PlayerConfigString(int clientNum) {
+	if(clientNum < 0 || clientNum >= MAX_CLIENTS) return "";
+	/* Original CG_RegisterGraphics starts at 0x2b1 and CG_ServerCommand
+	 * subtracts 0x2b1 for player updates: 689, the same as this ET tree.
+	 * 64 is NOT CS_PLAYERS in the supplied original binary. */
+	return CG_ConfigString(CS_PLAYERS + clientNum);
+}
+
+/* Only normalize the predictable ring. External events remain wire IDs. */
+int NITMOD_PredictedEventId(int event) {
+	int id = event & ~EV_EVENT_BITS;
+	int mapped = CG_NitmodEventDispatch(id);
+	return mapped >= 0 ? mapped | (event & EV_EVENT_BITS) : event;
+}
+void NITMOD_NormalizePredictedEvents(playerState_t *state) {
+	int i;
+	if(!NITMOD_UsesOriginalProtocol()) return;
+	for(i = 0; i < MAX_EVENTS; ++i) state->events[i] = NITMOD_PredictedEventId(state->events[i]);
+}
+
+/* Original CG_AddEntity/CG_CheckEvents: no spotlight, waypoint, bot-goal
+ * or AA-gun slot. Wire 59 is the event base, not ET 2.60's 61. */
+/* Original bg_itemlist ELF 0x12ed00, 73 records of 56 bytes. Resolve
+ * class names against typed items rather than treating wire IDs as indices. */
+int NITMOD_ItemFromWire(int item) {
+	static const char *names[] = {
+		NULL, "item_health_small", "item_health", "item_health_large", "item_health_cabinet",
+		"item_health_turkey", "item_health_breadandmeat", "item_health_wall",
+		"weapon_knife", "weapon_luger", "weapon_akimboluger", "weapon_akimbosilencedluger",
+		"weapon_thompson", "weapon_dummy", "weapon_sten", "weapon_colt", "weapon_akimbocolt",
+		"weapon_akimbosilencedcolt", "weapon_mp40", "weapon_panzerfaust", "weapon_grenadelauncher",
+		"weapon_grenadepineapple", "weapon_grenadesmoke", "weapon_smoketrail", "weapon_medic_heal",
+		"weapon_dynamite", "weapon_flamethrower", "weapon_class_special", "weapon_arty",
+		"weapon_medic_syringe", NULL, "weapon_medic_adrenaline", "weapon_magicammo",
+		"weapon_magicammo2", "weapon_magicammo2", "weapon_binoculars", "weapon_kar43",
+		"weapon_kar43_scope", "weapon_kar98Rifle", "weapon_gpg40", "weapon_gpg40_allied",
+		"weapon_M1CarbineRifle", "weapon_garandRifle", "weapon_garandRifleScope", "weapon_fg42",
+		"weapon_fg42scope", "weapon_mortar", "weapon_mortar_set", "weapon_landmine", NULL,
+		"weapon_satchel", "weapon_satchelDetonator", "weapon_smokebomb", NULL, NULL,
+		"weapon_tripmine", "weapon_mobile_mg42", "weapon_mobile_mg42_set", "weapon_silencer",
+		"weapon_silencedcolt", "weapon_medic_heal", "ammo_syringe", "ammo_smoke_grenade",
+		"ammo_smoke_grenade", "ammo_dynamite", "ammo_disguise", "ammo_airstrike",
+		"ammo_landmine", NULL, "ammo_satchel_charge", "team_CTF_redflag", "team_CTF_blueflag", NULL
+	};
+	int i;
+	if(item < 1 || item >= sizeof(names)/sizeof(names[0]) || !names[item]) return 0;
+	for(i = 1; i < bg_numItems; ++i)
+		if(bg_itemlist[i].classname && !strcmp(names[item], bg_itemlist[i].classname)) return i;
+	return 0;
+}
+
+int NITMOD_EntityTypeFromWire(int type) {
+	static const int types[] = {
+		ET_GENERAL, ET_PLAYER, ET_ITEM, ET_MISSILE, ET_MOVER, ET_BEAM,
+		ET_PORTAL, ET_SPEAKER, ET_PUSH_TRIGGER, ET_TELEPORT_TRIGGER,
+		ET_INVISIBLE, ET_CONCUSSIVE_TRIGGER, ET_OID_TRIGGER, ET_EXPLOSIVE_INDICATOR,
+		ET_EXPLOSIVE, ET_ALARMBOX, ET_CORONA, ET_TRAP, ET_GAMEMODEL, ET_FOOTLOCKER,
+		ET_FLAMEBARREL, ET_FP_PARTS, ET_FIRE_COLUMN, ET_FIRE_COLUMN_SMOKE,
+		ET_RAMJET, ET_FLAMETHROWER_CHUNK, ET_EXPLO_PART, ET_PROP, ET_AI_EFFECT,
+		ET_CAMERA, ET_MOVERSCALED, ET_CONSTRUCTIBLE_INDICATOR, ET_CONSTRUCTIBLE,
+		ET_CONSTRUCTIBLE_MARKER, ET_BOMB, ET_BEAM_2, ET_TANK_INDICATOR,
+		ET_TANK_INDICATOR_DEAD, ET_CORPSE, ET_SMOKER, ET_TEMPHEAD, ET_MG42_BARREL,
+		ET_TEMPLEGS, ET_TRIGGER_MULTIPLE, ET_TRIGGER_FLAGONLY, ET_TRIGGER_FLAGONLY_MULTIPLE,
+		ET_GAMEMANAGER, ET_CABINET_H, ET_CABINET_A, ET_HEALER, ET_SUPPLIER,
+		ET_LANDMINE_HINT, ET_ATTRACTOR_HINT, ET_SNIPER_HINT, ET_LANDMINESPOT_HINT,
+		ET_COMMANDMAP_MARKER
+	};
+	if(type >= 59 && type <= 59 + 255) return ET_EVENTS + type - 59;
+	return type >= 0 && type < sizeof(types)/sizeof(types[0]) ? types[type] : ET_INVISIBLE;
+}
+
+void NITMOD_TranslateSnapshotWeapons(snapshot_t *snapshot) {
+	playerState_t *ps = &snapshot->ps;
+	int ammo[MAX_WEAPONS], clip[MAX_WEAPONS], heat[MAX_WEAPONS];
+	int owned[MAX_WEAPONS / 32], i, target;
+	memcpy(ammo, ps->ammo, sizeof(ammo));
+	memcpy(clip, ps->ammoclip, sizeof(clip));
+	memcpy(heat, ps->weapHeat, sizeof(heat));
+	memcpy(owned, ps->weapons, sizeof(owned));
+	memset(ps->ammo, 0, sizeof(ps->ammo));
+	memset(ps->ammoclip, 0, sizeof(ps->ammoclip));
+	memset(ps->weapHeat, 0, sizeof(ps->weapHeat));
+	memset(ps->weapons, 0, sizeof(ps->weapons));
+	for(i = 0; i < 52; ++i) {
+		target = nitmodWireWeapons[i];
+		if(target < 0) continue;
+		ps->ammo[target] = ammo[i]; ps->ammoclip[target] = clip[i]; ps->weapHeat[target] = heat[i];
+		if((unsigned int)owned[i / 32] & (1u << (i % 32)))
+			ps->weapons[target / 32] |= (int)(1u << (target % 32));
+	}
+	ps->weapon = NITMOD_WeaponFromWire(ps->weapon);
+	ps->nextWeapon = NITMOD_WeaponFromWire(ps->nextWeapon);
+	/* Original PM_Weapon uses 5/6 for fire/alternate fire; PM_BeginWeaponReload
+	 * writes 7. ET 2.60 inserts READYING/RELAXING before these three states. */
+	switch(ps->weaponstate) {
+	case 5: ps->weaponstate = WEAPON_FIRING; break;
+	case 6: ps->weaponstate = WEAPON_FIRINGALT; break;
+	case 7: ps->weaponstate = WEAPON_RELOADING; break;
+	}
+	/* Pickup hints carry a weapon ID instead of a progress value. Convert
+	 * it exactly once alongside the snapshot's other weapon fields. */
+	if(ps->serverCursorHint == 18 || ps->serverCursorHint == 19)
+		ps->serverCursorHintVal = NITMOD_WeaponFromWire(ps->serverCursorHintVal);
+	ps->serverCursorHint = NITMOD_HintFromWire(ps->serverCursorHint);
+	for(i = 0; i < snapshot->numEntities && i < MAX_ENTITIES_IN_SNAPSHOT; ++i) {
+		entityState_t *es = &snapshot->entities[i];
+		int event;
+		es->eType = NITMOD_EntityTypeFromWire(es->eType);
+		if(es->eType == ET_ITEM) es->modelindex = NITMOD_ItemFromWire(es->modelindex);
+		event = es->eType >= ET_EVENTS ? es->eType - ET_EVENTS : es->event & ~EV_EVENT_BITS;
+		/* Effects such as rubble overload weapon with gravity flags. */
+		if(es->eType == ET_PLAYER || es->eType == ET_CORPSE || es->eType == ET_MISSILE ||
+			(event >= 25 && event <= 39) || event == 48 || event == 49 || (event >= 52 && event <= 55) ||
+			event == 67 || event == 70 || event == 71 || event == 95) {
+			es->weapon = NITMOD_WeaponFromWire(es->weapon);
+			es->nextWeapon = NITMOD_WeaponFromWire(es->nextWeapon);
+		}
+	}
+}
+
+/* nitrox_ReadNKey 0xf8e30: base64, 32 decoded characters, checksum % 100.
+ * Unlike the original unbounded read, reject malformed input atomically. */
+qboolean NITMOD_DecodeNKey(const char *encoded, int length, char guid[33]) {
+	static const char alphabet[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+	char decoded[33];
+	unsigned int accumulator = 0;
+	int i, bits = 0, count = 0, checksum = 0;
+	if(!encoded || !guid || length != 44 || encoded[43] != '=') return qfalse;
+	for(i = 0; i < 43; ++i) {
+		const char *digit;
+		if(!encoded[i] || !(digit = strchr(alphabet, encoded[i]))) return qfalse;
+		accumulator = (accumulator << 6) | (unsigned int)(digit - alphabet);
+		bits += 6;
+		if(bits >= 8) {
+			int value;
+			bits -= 8;
+			value = (accumulator >> bits) & 255;
+			/* Generated original keys are alphanumeric; also exclude every
+			 * character unsafe in userinfo before exposing the key. */
+			if(!((value >= 'A' && value <= 'Z') || (value >= 'a' && value <= 'z') ||
+				(value >= '0' && value <= '9')) || count >= 32) return qfalse;
+			decoded[count++] = (char)value;
+			checksum += value;
+		}
+	}
+	if(count != 32 || (accumulator & 3) || checksum % 100) return qfalse;
+	decoded[32] = 0;
+	memcpy(guid, decoded, sizeof(decoded));
+	return qtrue;
+}
+
+void NITMOD_ReadNKey(void) {
+	static qboolean warned;
+	fileHandle_t file = 0;
+	char encoded[44], guid[33];
+	int length;
+	trap_Cvar_Set("n_guid", "");
+	length = trap_FS_FOpenFile("nkey.dat", &file, FS_READ);
+	if(file && length == sizeof(encoded)) {
+		trap_FS_Read(encoded, sizeof(encoded), file);
+		trap_FS_FCloseFile(file);
+		if(NITMOD_DecodeNKey(encoded, sizeof(encoded), guid)) {
+			trap_Cvar_Set("n_guid", guid);
+			return;
+		}
+	} else if(file) {
+		trap_FS_FCloseFile(file);
+	} else if(length < 0 && NITMOD_GenerateMissingNKey(guid)) {
+		trap_Cvar_Set("n_guid", guid);
+		return;
+	}
+	if(!warned) {
+		CG_Printf("^3Nitmod: nkey.dat could not be loaded or created; no GUID supplied. Existing files are preserved.\n");
+		warned = qtrue;
+	}
+}
 
 int NITMOD_ParseLatchedClass(const char *info, int currentClass) {
 	int value;
@@ -19,6 +352,61 @@ int NITMOD_ParseLatchedClass(const char *info, int currentClass) {
 	if(!NITMOD_ParseProtocolSigned(text, &value) || value < PC_SOLDIER || value > PC_COVERTOPS)
 		return currentClass;
 	return value;
+}
+
+/* Original player tokens sc=0x59, tv=0x5a, xp=0x70. Malformed fields
+ * cannot retain roles or partially overwrite a previous XP vector. */
+qboolean NITMOD_DecodeClientSkills(const char *text, int *nativeLevels, int *displayLevels) {
+    int levels[SK_NUM_SKILLS], i;
+    int maximum = NITMOD_UsesOriginalProtocol() ? NITMOD_SKILL_LEVEL_COUNT - 1 : NUM_SKILL_LEVELS - 1;
+    if(!nativeLevels || !displayLevels || !NITMOD_ParseSkillDigits(text, maximum, levels)) return qfalse;
+    for(i = 0; i < SK_NUM_SKILLS; ++i) {
+        displayLevels[i] = levels[i];
+        nativeLevels[i] = levels[i] < NUM_SKILL_LEVELS ? levels[i] : NUM_SKILL_LEVELS - 1;
+    }
+    return qtrue;
+}
+
+void NITMOD_ParseClientExtras(const char *info, clientInfo_t *client) {
+    const char *cursor;
+    int value, values[SK_NUM_SKILLS] = {0}, count = 0;
+    if(!client) return;
+    client->nitmodTV = client->nitmodShoutcaster = qfalse;
+    if(!info || !NITMOD_UsesOriginalProtocol()) return;
+    if(NITMOD_ParseProtocolSigned(Info_ValueForKey(info, "sc"), &value))
+        client->nitmodShoutcaster = value != 0;
+    if(NITMOD_ParseProtocolSigned(Info_ValueForKey(info, "tv"), &value))
+        client->nitmodTV = value != 0;
+    memset(client->skillpoints, 0, sizeof(client->skillpoints));
+    cursor = Info_ValueForKey(info, "xp");
+    while(*cursor) {
+        char number[16];
+        int length = 0;
+        while(*cursor == ' ') ++cursor;
+        if(!*cursor) break;
+        if(count == SK_NUM_SKILLS) return;
+        while(*cursor && *cursor != ' ') {
+            if(length >= sizeof(number) - 1) return;
+            number[length++] = *cursor++;
+        }
+        number[length] = 0;
+        if(!NITMOD_ParseProtocolSigned(number, &values[count])) return;
+        ++count;
+    }
+    memcpy(client->skillpoints, values, sizeof(values));
+}
+
+const char *CG_NitmodSpectatorLabel(const clientInfo_t *client, int ping) {
+    if(ping == -1) return "^3CONNECTING";
+    if(!client || !NITMOD_UsesOriginalProtocol()) return "^3SPECTATOR";
+    if(client->nitmodTV) return client->nitmodShoutcaster ? "^5TV^7|^3SHOUTCASTER" : "^5TV^7|^3SPECTATOR";
+    return client->nitmodShoutcaster ? "^3SHOUTCASTER" : "^3SPECTATOR";
+}
+
+int NITMOD_ParseCountryCode(const char *value) {
+    int country;
+    if(!NITMOD_ParseProtocolInteger(value, &country) || country < 0 || country >= 255) return 255;
+    return country;
 }
 
 qboolean NITMOD_ClassIsDisabled(int team, int playerClass) {
@@ -37,6 +425,25 @@ qboolean NITMOD_ClassIsDisabled(int team, int playerClass) {
 	}
 	return count >= maximum;
 }
+qboolean NITMOD_WeaponQuotaDisabled(int weapon, int playerClass, int teamCount, int weaponCount) {
+	int maximum;
+	if(!NITMOD_UsesOriginalProtocol() || !nitmodClassLimitsReceived) return qfalse;
+	switch(weapon) {
+		case WP_MP40: case WP_THOMPSON: return qfalse;
+		case WP_STEN: return playerClass != PC_COVERTOPS && !(nitmodGameState.weapons & 512);
+		case WP_PANZERFAUST:
+			if(cgs.maxclients > 0 && (float)teamCount / ((float)cgs.maxclients * .5f) <=
+				(float)nitmodGameState.panzerRestriction * .01f) return qtrue;
+			maximum = nitmodGameState.maxPanzers; break;
+		case WP_MOBILE_MG42: maximum = nitmodGameState.maxMG42s; break;
+		case WP_FLAMETHROWER: maximum = nitmodGameState.maxFlamers; break;
+		case WP_MORTAR: maximum = nitmodGameState.maxMortars; break;
+		case WP_GPG40: case WP_M7: maximum = nitmodGameState.maxRifleGrenades; break;
+		default: return qfalse;
+	}
+	return maximum != -1 && weaponCount >= maximum;
+}
+
 static nitmodMapEndStats_t nitmodMapEndStats;
 static nitmodObjectiveEvent_t nitmodLastObjectiveEvent;
 vmCvar_t nitmodHitSounds;
@@ -46,6 +453,37 @@ vmCvar_t cg_noGreetingSounds;
 vmCvar_t cg_drawBanners;
 static char nitmodBanner[MAX_STRING_CHARS];
 static int nitmodBannerTime;
+
+/* Original CG_BannerPrint: escaped newlines, soft wrap at 55 visible
+ * characters and a hard word break at 65. Color escapes have zero width. */
+void NITMOD_FormatBanner(const char *text, char *out, int size) {
+	int used = 0, visible = 0;
+	if(!out || size <= 0) return;
+	if(!text) text = "";
+	while(*text && used < size - 1) {
+		if(*text == '\n' || (text[0] == '\\' && text[1] == 'n')) {
+			text += *text == '\n' ? 1 : 2;
+			out[used++] = '\n'; visible = 0;
+			continue;
+		}
+		if(Q_IsColorString(text)) {
+			if(size - used < 3) break;
+			out[used++] = *text++; out[used++] = *text++;
+			continue;
+		}
+		if(visible >= 55 && *text == ' ') {
+			out[used++] = '\n'; ++text; visible = 0;
+			continue;
+		}
+		if(visible >= 65) {
+			/* Keep room for the character as well as the inserted break. */
+			if(size - used < 3) break;
+			out[used++] = '\n'; visible = 0;
+		}
+		out[used++] = *text++; ++visible;
+	}
+	out[used] = 0;
+}
 static int nitmodKDCursor;
 typedef struct {
 	char name[256];
@@ -94,6 +532,24 @@ void NITMOD_ApplyForcedCvars(void) {
 
 qboolean NITMOD_DisplayCommand(const char *command) {
 	int kind, count, start, i, kills[MAX_CLIENTS], deaths[MAX_CLIENTS];
+	if(!strcmp(command, "cvs")) {
+		char name[MAX_CVAR_VALUE_STRING], value[MAX_CVAR_VALUE_STRING];
+		int request;
+		if(cg.demoPlayback || trap_Argc() != 3 || !NITMOD_ParseProtocolInteger(CG_Argv(1), &request) ||
+		   !*CG_Argv(2) || strlen(CG_Argv(2)) >= sizeof(name)) return qtrue;
+		Q_strncpyz(name, CG_Argv(2), sizeof(name));
+		for(i = 0; name[i]; ++i) {
+			unsigned char c = name[i];
+			if(!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+				(c >= '0' && c <= '9') || c == '_')) return qtrue;
+		}
+		trap_Cvar_VariableStringBuffer(name, value, sizeof(value));
+		/* Do not turn an unrepresentable value into a false empty-cvar report.
+		 * The original wire protocol has no escaping for quoted fields. */
+		if(strpbrk(value, "\"\\\r\n")) return qtrue;
+		trap_SendClientCommand(va("cvs %i %s \"%s\"\n", request, name, value));
+		return qtrue;
+	}
 	if(!strcmp(command, "fc")) {
 		NITMOD_ForceCvarCommand();
 		return qtrue;
@@ -112,12 +568,20 @@ qboolean NITMOD_DisplayCommand(const char *command) {
 		if(sound > 0) trap_S_StartSound(NULL, cg.snap->ps.clientNum, CHAN_VOICE, sound);
 		return qtrue;
 	}
+	if(!strcmp(command, "pop")) {
+		if(trap_Argc() == 2) {
+			CG_NitmodGlobalAwardClear();
+			CG_NitmodNotificationStart(CG_LocalizeServerCommand(CG_Argv(1)), cg.time);
+			CG_Printf("%s^7\n", CG_NitmodNotificationText());
+		}
+		return qtrue;
+	}
 	if(!strcmp(command, "bp")) {
 		if(trap_Argc() != 3 || !NITMOD_ParseProtocolInteger(CG_Argv(1), &kind) || kind < 0 || kind > 2) return qtrue;
 		trap_Cvar_Update(&cg_drawBanners);
 		if(!cg_drawBanners.integer) return qtrue;
 		if(kind == 2) {
-			Q_strncpyz(nitmodBanner, CG_LocalizeServerCommand(CG_Argv(2)), sizeof(nitmodBanner));
+			NITMOD_FormatBanner(CG_LocalizeServerCommand(CG_Argv(2)), nitmodBanner, sizeof(nitmodBanner));
 			nitmodBannerTime = cg.time;
 		} else if(kind == 0) {
 			CG_AddToTeamChat(CG_LocalizeServerCommand(CG_Argv(2)), -1);
@@ -140,6 +604,8 @@ qboolean NITMOD_DisplayCommand(const char *command) {
 	}
 	for(i = 0; i < count; ++i) {
 		clientInfo_t *client = &cgs.clientinfo[cg.scores[start + i].client];
+		cg.scores[start + i].kills = kills[i];
+		cg.scores[start + i].deaths = deaths[i];
 		client->kills = kills[i]; client->deaths = deaths[i];
 	}
 	nitmodKDCursor = start + count;
@@ -147,21 +613,28 @@ qboolean NITMOD_DisplayCommand(const char *command) {
 }
 
 void NITMOD_DrawBanner(void) {
-	char line[MAX_STRING_CHARS];
+	char line[MAX_STRING_CHARS + 2];
 	const char *cursor = nitmodBanner;
+	char lastColor = '7';
 	float *color;
-	float y = 16;
+	int y = 0;
+	int rowHeight = (int)(CG_Text_Height_Ext("A", .2f, 1, &cgs.media.limboFont1) * 1.5f);
+	if(rowHeight < 1) rowHeight = 1;
 	if(!cg_drawBanners.integer || !*cursor) return;
 	color = CG_FadeColor(nitmodBannerTime, 10000);
 	if(!color) { nitmodBanner[0] = 0; return; }
 	while(*cursor && y < SCREEN_HEIGHT) {
-		int n = 0;
-		while(*cursor && *cursor != '\n' && n < sizeof(line) - 1) line[n++] = *cursor++;
+		int n = 2;
+		line[0] = '^'; line[1] = lastColor;
+		while(*cursor && *cursor != '\n' && n < sizeof(line) - 1) {
+			if(Q_IsColorString(cursor)) lastColor = cursor[1];
+			line[n++] = *cursor++;
+		}
 		line[n] = 0;
 		if(*cursor == '\n') ++cursor;
-		CG_Text_Paint_Ext((SCREEN_WIDTH - CG_Text_Width_Ext(line, 0.2f, 0, &cgDC.Assets.fonts[0])) * 0.5f,
-			y, 0.2f, 0.2f, color, line, 0, 0, ITEM_TEXTSTYLE_SHADOWED, &cgDC.Assets.fonts[0]);
-		y += 16;
+		y += rowHeight;
+		CG_Text_Paint_Ext((int)((SCREEN_WIDTH - CG_Text_Width_Ext(line, 0.2f, 0, &cgs.media.limboFont1)) * 0.5f),
+			y, 0.2f, 0.2f, color, line, 0, 0, ITEM_TEXTSTYLE_SHADOWED, &cgs.media.limboFont1);
 	}
 }
 static sfxHandle_t nitmodPrivateMessageSound;
@@ -193,11 +666,70 @@ qboolean NITMOD_UsesOriginalProtocol(void) {
 	return !Q_stricmp(Info_ValueForKey(info, "gamename"), "nitmod") &&
 		Q_stricmp(Info_ValueForKey(info, "nitmod_csLayout"), "et260");
 }
+int NITMOD_CoreConfigToWire(int index) {
+	switch(index) {
+	case CS_MUSIC_QUEUE: return 25;
+	case CS_SCRIPT_MOVER_NAMES: return 26;
+	case CS_CONSTRUCTION_NAMES: return 27;
+	case CS_VERSIONINFO: return -1;
+	case CS_REINFSEEDS: return 28;
+	case CS_SERVERTOGGLES: return 29;
+	case CS_GLOBALFOGVARS: return 30;
+	case CS_AXIS_MAPS_XP: return 31;
+	case CS_ALLIED_MAPS_XP: return 32;
+	case CS_INTERMISSION_START_TIME: return 33;
+	default: return index;
+	}
+}
+int NITMOD_CoreConfigFromWire(int index) {
+	switch(index) {
+	case 25: return CS_MUSIC_QUEUE;
+	case 26: return CS_SCRIPT_MOVER_NAMES;
+	case 27: return CS_CONSTRUCTION_NAMES;
+	case 28: return CS_REINFSEEDS;
+	case 29: return CS_SERVERTOGGLES;
+	case 30: return CS_GLOBALFOGVARS;
+	case 31: return CS_AXIS_MAPS_XP;
+	case 32: return CS_ALLIED_MAPS_XP;
+	case 33: return CS_INTERMISSION_START_TIME;
+	/* These original slots must not trigger unrelated ET callbacks. */
+	case 34: case 35: case 36: case 37: case 38: case 39: return -1;
+	default: return index;
+	}
+}
 int NITMOD_TagConnectBase(void) {
 	return NITMOD_UsesOriginalProtocol() ? 0x309 : CS_TAGCONNECTS;
 }
 static sfxHandle_t nitmodHeadHitSound;
 static sfxHandle_t nitmodTeamHitSound;
+static sfxHandle_t nitmodSnapshotHeadSound, nitmodSnapshotBodySound;
+static qboolean nitmodSnapshotSoundsRegistered;
+
+/* Original CG_CheckLocalSounds: body first, then head, once per snapshot
+ * counter increase (not once per bullet/count delta). Keep separate from
+ * explicit nhs/event sounds and their separate sample selection. */
+void NITMOD_SnapshotHitSounds(const playerState_t *oldState, const playerState_t *newState) {
+    const int *oldValues, *newValues;
+    qboolean body, head;
+    if(!oldState || !newState || !NITMOD_UsesOriginalProtocol() || !nitmodHitSounds.integer ||
+       newState->clientNum < 0 || newState->clientNum >= MAX_CLIENTS ||
+       oldState->clientNum != newState->clientNum || newState->persistant[PERS_TEAM] == TEAM_SPECTATOR)
+        return;
+    oldValues = NITMOD_WirePersistant(oldState);
+    newValues = NITMOD_WirePersistant(newState);
+    body = newValues[NITMOD_WIRE_PERS_BODYHITS] > oldValues[NITMOD_WIRE_PERS_BODYHITS];
+    head = newValues[NITMOD_WIRE_PERS_HITS] > oldValues[NITMOD_WIRE_PERS_HITS];
+    if(!body && !head) return;
+    if(!nitmodSnapshotSoundsRegistered) {
+        nitmodSnapshotBodySound = trap_S_RegisterSound("sound/hitsounds/body.wav", qfalse);
+        nitmodSnapshotHeadSound = trap_S_RegisterSound("sound/hitsounds/head.wav", qfalse);
+        nitmodSnapshotSoundsRegistered = qtrue;
+    }
+    if(body && nitmodSnapshotBodySound > 0)
+        trap_S_StartSound(NULL, newState->clientNum, CHAN_VOICE, nitmodSnapshotBodySound);
+    if(head && nitmodSnapshotHeadSound > 0)
+        trap_S_StartSound(NULL, newState->clientNum, CHAN_VOICE, nitmodSnapshotHeadSound);
+}
 
 static qboolean NITMOD_HasArgumentCount( const char *command, int expected ) {
 	if( trap_Argc() == expected ) {
@@ -208,11 +740,16 @@ static qboolean NITMOD_HasArgumentCount( const char *command, int expected ) {
 }
 
 void NITMOD_ClearConfigStrings( void ) {
+	CG_NitmodObituaryReset();
+	CG_NitmodHudReset();
+	CG_NitmodGlobalStatsReset();
 	nitmodClassLimitsReceived = qfalse;
 	nitmodForcedCvarCount = 0;
 	memset(nitmodForcedCvars, 0, sizeof(nitmodForcedCvars));
 	nitmodHitSoundsRegistered = qfalse;
 	nitmodHeadHitSound = nitmodTeamHitSound = 0;
+	nitmodSnapshotHeadSound = nitmodSnapshotBodySound = 0;
+	nitmodSnapshotSoundsRegistered = qfalse;
 	nitmodBanner[0] = 0;
 	nitmodBannerTime = nitmodKDCursor = 0;
 	nitmodPrivateMessageSound = 0;
@@ -220,6 +757,7 @@ void NITMOD_ClearConfigStrings( void ) {
 	nitmodServerCapabilities = 0;
 	memset( &nitmodSimpleConfig, 0, sizeof( nitmodSimpleConfig ) );
 	memset( &nitmodGameState, 0, sizeof( nitmodGameState ) );
+	nitmodGameState.dmWinnerClient = -1;
 	memset( &nitmodMapEndStats, 0, sizeof( nitmodMapEndStats ) );
 	memset( &nitmodLastObjectiveEvent, 0, sizeof( nitmodLastObjectiveEvent ) );
 }
@@ -232,6 +770,33 @@ void NITMOD_AdvertiseCapabilities( void ) {
 		trap_SendClientCommand( va( NITMOD_CAPABILITIES_COMMAND " %i %u",
 			NITMOD_PROTOCOL_VERSION, NITMOD_FEATURES_CLIENT ) );
 	}
+}
+
+/* Original nitmod_ClientCheck / CG_ServerCommand. This requests mod state;
+ * it is not an integrity attestation and grants no reconstructed features. */
+void NITMOD_BeginOriginalSession(void) {
+	char game[MAX_QPATH];
+	if(cg.demoPlayback || !NITMOD_UsesOriginalProtocol()) return;
+	trap_Cvar_VariableStringBuffer("fs_game", game, sizeof(game));
+	if(Q_stricmp(game, "nitmod")) {
+		/* The original disconnects here. Keep the session intact and explain
+		 * the mismatch instead of silently accepting a different mod folder. */
+		CG_Printf("^3Nitmod: original session synchronization requires fs_game nitmod.\n");
+		return;
+	}
+	NITMOD_ReadNKey();
+	trap_SendClientCommand("imhere");
+}
+
+qboolean NITMOD_OriginalSessionCommand(const char *command) {
+	if(!command || strcmp(command, "handshake") || !NITMOD_UsesOriginalProtocol()) return qfalse;
+	if(cg.demoPlayback || trap_Argc() != 1) return qtrue;
+	/* The first literal is pinned from original cgame ELF VA 0x10dad8
+	 * (Ghidra 0x11dad8). rhs clears the server's per-client handshake latch. */
+	trap_SendClientCommand("rhs");
+	trap_SendClientCommand("handshake");
+	trap_SendClientCommand("getdata");
+	return qtrue;
 }
 
 qboolean NITMOD_ServerSupports( unsigned int feature ) {
@@ -325,8 +890,52 @@ void NITMOD_TeamScoresCommand( void ) {
 	if( !NITMOD_ParseTeamScoreSnapshot( trap_Argc(), CG_Argv, &next ) ) {
 		return;
 	}
+	CG_NitmodTDMScoreChanged( next.axis, next.allies, cg.time );
 	nitmodGameState.teamScoreAxis = next.axis;
 	nitmodGameState.teamScoreAllies = next.allies;
+}
+
+void NITMOD_TDMScoreLimitCommand( void ) {
+	int limit;
+
+	if( !NITMOD_HasArgumentCount( "z1", 2 ) ||
+		!NITMOD_ParseProtocolSigned( CG_Argv( 1 ), &limit ) ) {
+		return;
+	}
+	/* A non-positive value disables the widget, matching Nit_TDMInfo. */
+	nitmodGameState.tdmScoreLimit = limit;
+}
+
+void NITMOD_TDMInfo_f( void ) {
+	if( cgs.gametype != 7 || nitmodGameState.tdmScoreLimit <= 0 ) {
+		return;
+	}
+	CG_Printf( "^7N^1!^7tmod: ^3Team Death Match Informations.\n"
+		"^5> ^3Score to reach:\n"
+		"- To win the match, your team has to reach %d points.\n"
+		"^5> ^3Timelimit rules:\n", nitmodGameState.tdmScoreLimit );
+	if( !(nitmodGameState.tdmOptions & 16) ) {
+		CG_Printf( "- The map will ^1NOT ^7end as long as the score is not reached.\n" );
+	} else {
+		CG_Printf( "- If the timelimit is over, the map will end and the team with most points will win the round.\n"
+			"- Reaching the score limit before timelimit hits will end the map.\n" );
+	}
+	CG_Printf( "^5> ^3Server TDM Options:\n" );
+	if( nitmodGameState.tdmOptions & 1 ) {
+		CG_Printf( "- Using 'Kill Based Scoring'. The only way to get points is by killing an enemy (1 point for your team per enemy killed).\n" );
+	} else {
+		CG_Printf( "- Every earned XP counts in the team score.\n" );
+	}
+	if( nitmodGameState.tdmOptions & 4 ) CG_Printf( "- Artillery support is disabled.\n" );
+	if( nitmodGameState.tdmOptions & 8 ) CG_Printf( "- Intermission map voting is enabled.\n" );
+	CG_Printf( "- Objective: Completing the final objective will ^1NOT ^7end the match. Depending on server settings, the winning team will earn ^2Bonus Points!^7.\n" );
+}
+
+void NITMOD_DMWinnerCommand( void ) {
+	int client;
+	if( trap_Argc() != 2 || !NITMOD_ParseProtocolInteger( CG_Argv( 1 ), &client ) ||
+		client < 0 || client >= MAX_CLIENTS ) return;
+	nitmodGameState.dmWinnerClient = client;
 }
 
 static const char *NITMOD_ObjectiveName( int objective ) {
@@ -386,17 +995,11 @@ void NITMOD_ObjectiveEventCommand( void ) {
 	CG_Printf( "%s\n", message );
 }
 
-/* nsp preserves nitmod_Announce's actor/detail/type tuple.  The original
- * client chose its wording and sound from private message tables; those
- * tables are not yet typed, so retain the observable notification categories
- * without inventing asset indices. */
+/* Negotiated transport uses the same typed receiver as original event 101. */
 void NITMOD_SpreeEventCommand( void ) {
 	int actor;
 	int detail;
 	int type;
-	int count;
-	const char *name;
-	char message[MAX_STRING_CHARS];
 
 	if( !NITMOD_HasArgumentCount( "nsp", 4 ) ) {
 		return;
@@ -406,25 +1009,7 @@ void NITMOD_SpreeEventCommand( void ) {
 		!NITMOD_ParseAnnouncementInteger( CG_Argv( 3 ), &type ) || actor >= MAX_CLIENTS ) {
 		return;
 	}
-	count = NITMOD_AnnouncementCount( type, detail );
-	if( count < 0 ) {
-		return;
-	}
-	name = cgs.clientinfo[actor].name;
-	if( !name[0] ) {
-		return;
-	}
-
-	switch( type ) {
-	case 1: Com_sprintf( message, sizeof( message ), "^2>>> ^7%s ^gis on a killing spree (%i kills)^2 <<<", name, count ); break;
-	case 2: Com_sprintf( message, sizeof( message ), "^1>>> ^7%s ^gis on a death spree (%i deaths)^1 <<<", name, count ); break;
-	case 3: Com_sprintf( message, sizeof( message ), "^f>>> ^7%s ^gscored a multi-kill (tier %i)^f <<<", name, count ); break;
-	case 4: Com_sprintf( message, sizeof( message ), "^f>>> ^7%s ^gis on a revive spree! (^8%i^g) ^f<<<", name, count ); break;
-	case 5: Com_sprintf( message, sizeof( message ), "^f>>> ^7%s ^gscored a multi-revive (%i revives)^f <<<", name, count ); break;
-	default: return;
-	}
-	CG_AddPMItem( PM_MESSAGE, message, cgs.media.voiceChatShader );
-	CG_Printf( "%s\n", message );
+	CG_NitmodSpreeStart(actor, detail, type);
 }
 
 static void NITMOD_PlayHitSound(int hitType, int channel) {
@@ -481,7 +1066,8 @@ void nitrox_ProcessNewCS( int index ) {
 
 	if ( index >= NITMOD_NCS_SOUNDS && index < NITMOD_NCS_SHADERS ) {
 		assetIndex = index - NITMOD_NCS_SOUNDS;
-		if ( value[0] != '*' ) {
+		cgs.gameSounds[assetIndex] = 0;
+		if ( value[0] && value[0] != '*' ) {
 			if ( strstr( value, ".wav" ) ) {
 				cgs.gameSounds[assetIndex] = trap_S_RegisterSound( value, qfalse );
 			} else {

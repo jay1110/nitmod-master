@@ -14,6 +14,14 @@ ui_atoms.c
 ui_gameinfo.c
 ui_loadpanel.c
 ui_main.c
+ui_nitmod_actions.c
+ui_nitmod_catalog.c
+ui_nitmod_campaign.c
+ui_nitmod_status.c
+ui_nitmod_search.c
+ui_nitmod_browser.c
+ui_nitmod_description.c
+ui_nitmod_settings.c
 ui_players.c
 ui_shared.c
 ui_syscalls.c

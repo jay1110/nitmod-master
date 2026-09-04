@@ -3,6 +3,8 @@
 
 #include "cg_local.h"
 
+vmCvar_t cg_smokeparticles, cg_trailparticles, cg_impactparticles;
+
 #define MUSTARD		1
 #define BLOODRED	2
 #define EMISIVEFADE	3
@@ -1103,6 +1105,7 @@ void CG_ParticleBubble (qhandle_t pshader, vec3_t origin, vec3_t origin2, int tu
 {
 	cparticle_t	*p;
 	float		randsize;
+	if (!cg_trailparticles.integer) return;
 
 	if (!pshader)
 		CG_Printf ("CG_ParticleSnow pshader == ZERO!\n");
@@ -1167,6 +1170,7 @@ void CG_ParticleSmoke (qhandle_t pshader, centity_t *cent)
 	//		 cent->frame = startfade
 	cparticle_t	*p;
 	vec3_t dir;
+	if (!cg_smokeparticles.integer) return;
 
 	if (!pshader)
 		CG_Printf ("CG_ParticleSmoke == ZERO!\n");
@@ -1439,7 +1443,7 @@ CG_ParticleExplosion
 ======================
 */
 
-void CG_ParticleExplosion (char *animStr, vec3_t origin, vec3_t vel, int duration, int sizeStart, int sizeEnd, qboolean dlight )
+static void CG_AnimatedParticle (char *animStr, vec3_t origin, vec3_t vel, int duration, int sizeStart, int sizeEnd, qboolean dlight )
 {
 	cparticle_t	*p;
 	int anim;
@@ -1500,6 +1504,22 @@ void CG_ParticleExplosion (char *animStr, vec3_t origin, vec3_t vel, int duratio
 }
 
 // Rafael Shrapnel
+/* Nitmod has independent explosion and projectile-trail creation switches.
+ * Keep the gate before animation lookup, RNG and pool allocation. */
+void CG_ParticleExplosion(char *animStr, vec3_t origin, vec3_t vel,
+                         int duration, int sizeStart, int sizeEnd, qboolean dlight)
+{
+	if (!cg_wolfparticles.integer) return;
+	CG_AnimatedParticle(animStr, origin, vel, duration, sizeStart, sizeEnd, dlight);
+}
+
+void CG_ParticleExplosionTrail(char *animStr, vec3_t origin, vec3_t vel,
+                              int duration, int sizeStart, int sizeEnd, qboolean dlight)
+{
+	if (!cg_trailparticles.integer) return;
+	CG_AnimatedParticle(animStr, origin, vel, duration, sizeStart, sizeEnd, dlight);
+}
+
 void CG_AddParticleShrapnel (localEntity_t *le)
 {
 	return;
@@ -1604,6 +1624,7 @@ void	CG_SnowLink (centity_t *cent, qboolean particleOn)
 
 void CG_ParticleImpactSmokePuffExtended (qhandle_t pshader, vec3_t origin, int lifetime, int vel, int acc, int maxroll, float alpha, float size) {
 	cparticle_t	*p;
+	if (!cg_smokeparticles.integer) return;
 
 	if (!pshader)
 		CG_Printf ("CG_ParticleImpactSmokePuff pshader == ZERO!\n");
@@ -2118,6 +2139,7 @@ void CG_ParticleBloodCloudZombie (centity_t *cent, vec3_t origin, vec3_t dir)
 void CG_ParticleSparks (vec3_t org, vec3_t vel, int duration, float x, float y, float speed)
 {
 	cparticle_t	*p;
+	if (!cg_impactparticles.integer) return;
 
 	if (!free_particles)
 		return;
@@ -2172,6 +2194,7 @@ void CG_ParticleDust (centity_t *cent, vec3_t origin, vec3_t dir)
 	vec3_t	point;
 	cparticle_t	*p;
 	int		i;
+	if (!cg_smokeparticles.integer) return;
 	
 	dist = 0;
 

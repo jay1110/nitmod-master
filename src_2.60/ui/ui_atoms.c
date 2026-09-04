@@ -249,9 +249,9 @@ void UI_AdjustFrom640( float *x, float *y, float *w, float *h ) {
 	*h *= uiInfo.uiDC.scale;
 #endif
 
-	*x *= uiInfo.uiDC.xscale;
+	*x *= UI_NitmodXScale(&uiInfo.uiDC);
 	*y *= uiInfo.uiDC.yscale;
-	*w *= uiInfo.uiDC.xscale;
+	*w *= UI_NitmodXScale(&uiInfo.uiDC);
 	*h *= uiInfo.uiDC.yscale;
 
 }

@@ -1,5 +1,9 @@
 # Weapon restriction precedence
 
+Update: ordinary selection/spawn restrictions and setclass dispatch are now
+active; see active-loadout-restrictions.md. Historical integration-pending
+statements below describe the earlier recovery stages.
+
 ## Numeric limit reconstruction
 
 nitmod_weapon_limits.c now implements the ordered numeric subset: heavy

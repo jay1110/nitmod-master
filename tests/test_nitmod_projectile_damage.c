@@ -5,8 +5,40 @@
 #include <stddef.h>
 #include <limits.h>
 #include "check_doublejump.h"
+#include "check_lean.h"
+#include "check_reload_runtime.h"
 #include "g_nitmod_entities.h"
+static int CheckWarEntryRuntime(void) {
+    static gclient_t client;
+    gentity_t entity;
+    int team, connection, health, follow, war, expected, errors=0, sequence;
+    for(team=TEAM_FREE;team<=TEAM_SPECTATOR;++team)
+    for(connection=CON_DISCONNECTED;connection<=CON_CONNECTED;++connection)
+    for(health=0;health<2;++health) for(follow=0;follow<2;++follow)
+    for(war=0;war<=4;++war) {
+        memset(&client,0,sizeof(client)); memset(&entity,0,sizeof(entity));
+        entity.client=&client; entity.health=health;
+        client.pers.connected=connection; client.sess.sessionTeam=team;
+        client.ps.pm_flags=follow ? PMF_FOLLOW : 0;
+        COM_BitSet(client.ps.weapons,WP_KNIFE); COM_BitSet(client.ps.weapons,WP_MP40);
+        client.ps.weapon=WP_MP40; client.ps.ammo[WP_MP40]=77;
+        expected=(team==TEAM_AXIS || team==TEAM_ALLIES) && connection==CON_CONNECTED && health && !follow && war==4;
+        if(G_NITMOD_CheckWarEntry(&entity,war)!=expected) ++errors;
+        if(client.nitmodWarState.stripped!=expected || client.ps.weapon!=(expected ? WP_KNIFE : WP_MP40) ||
+           !!COM_BitCheck(client.ps.weapons,WP_MP40)==expected || client.ps.ammo[WP_MP40]!=77) ++errors;
+        sequence=client.ps.eventSequence;
+        if(G_NITMOD_CheckWarEntry(&entity,war) || sequence!=client.ps.eventSequence) ++errors;
+        if(expected) {
+            if(client.ps.events[(sequence-1)&(MAX_EVENTS-1)]!=EV_NOAMMO) ++errors;
+            G_NITMOD_ResetWarState(&client.nitmodWarState);
+            if(!G_NITMOD_CheckWarEntry(&entity,war)) ++errors;
+        }
+    }
+    if(G_NITMOD_CheckWarEntry(NULL,4)) ++errors;
+    return errors;
+}
 extern void dllEntry(int (QDECL *callback)(int, ...));
+#include "check_weapon_policy_runtime.h"
 extern void LandMineTrigger(gentity_t *self);
 extern void LandMinePostTrigger(gentity_t *self);
 extern void LandminePostThink(gentity_t *self);
@@ -1745,7 +1777,12 @@ int main(void) {
     int kind, enabled, gate, bypass, splash, i, admitted, damageFlags, profiles = 0, errors = 0;
     if(strcmp(GAMEVERSION, "nitmod")) ++errors;
     dllEntry(EngineCallback);
+    errors += CheckWeaponPolicyRuntime();
+    dllEntry(EngineCallback);
     errors += CheckDoubleJump();
+    errors += CheckLeanMovement();
+    errors += CheckReloadRuntime();
+    errors += CheckWarEntryRuntime();
     errors += CheckSupplyAndSpawnCvars();
     errors += CheckLandmineLimitCvar();
     errors += CheckClassLimits();

@@ -14,7 +14,23 @@ assert {key: tokens[key] for key in ('rn', 'w', 'lw', 'sw', 'lc')} == {
     'rn': 0x89, 'w': 0x49, 'lw': 0x86, 'sw': 0x88, 'lc': 0x87
 }
 assert tokens['B'] != tokens['b']  # Preserve dictionary case, no case-folding.
+assert {key: tokens[key] for key in ('sc', 'tv', 'xp')} == {'sc': 0x59, 'tv': 0x5a, 'xp': 0x70}
 source = (root / 'src_2.60/cgame/cg_players.c').read_text()
+assert 'NITMOD_ParseClientExtras(configstring, &newInfo);' in source
+assert 'NITMOD_DecodeClientSkills(v, newInfo.skill, newInfo.nitmodSkillLevels);' in source
+assert 'CG_NITMOD_SkillRewardText(i, shownLevel)' in source
+assert source.count('nativeUpgrade && newInfo.skill[i] == 4') == 2
+debrief = (root / 'src_2.60/cgame/cg_debriefing.c').read_text()
+stars = debrief.split('void CG_Debriefing_PlayerSkills_Draw', 1)[1].split('void CG_Debriefing_PlayerACC_Draw', 1)[0]
+assert 'ci->nitmodSkillLevels[button->data[0]]' in stars
+assert 'for(i = 0; i < 5; ++i)' in stars
+assert 'button->rect.w * .8f' in stars
+assert 'i < SK_NUM_SKILLS && *v' in source
+board = (root / 'src_2.60/cgame/cg_scoreboard.c').read_text()
+assert board.count('CG_NitmodSpectatorLabel(ci, score->ping)') == 2
+rows = (root / 'src_2.60/cgame/cg_nitmod_scoreboard.c').read_text()
+assert 'CG_NitmodDrawDMScoreRow(x, y, score, fade)' in board
+assert rows.count('CG_NitmodSpectatorLabel(client, score->ping)') == 2
 assert re.search(r'memset\( &newInfo, 0, sizeof\( newInfo \) \);.*?'
                  r'Info_ValueForKey\( configstring, "rn" \);\s*'
                  r'NITMOD_ParseProtocolSigned\( v, &newInfo.rifleGrenadeStatus \);', source, re.S)

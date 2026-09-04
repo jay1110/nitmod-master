@@ -3,13 +3,63 @@
 ****/
 
 #include "cg_local.h"
+#include "cg_nitmod_locations.h"
+#include "cg_nitmod_hud.h"
 #include "cg_nitmod_config.h"
+#include "../game/nitmod_protocol.h"
 
 /******************************************************************************
 ***** Defines, constants, etc 
 ****/
 
 static int sortedFireTeamClients[MAX_CLIENTS];
+
+fireteamData_t *CG_IsOnFireteam(int clientNum) {
+    if(clientNum < 0 || clientNum >= MAX_CLIENTS) return NULL;
+    if(NITMOD_UsesOriginalProtocol() &&
+       (cgs.gametype == 8 || cgs.clientinfo[clientNum].team == TEAM_SPECTATOR)) return NULL;
+    return cgs.clientinfo[clientNum].fireteamData;
+}
+
+/* Decode into a temporary: malformed masks must never publish half a roster. */
+qboolean CG_DecodeFireteam(const char *text, qboolean original, fireteamData_t *out) {
+    fireteamData_t decoded;
+    const char *mask;
+    int i, bit, value;
+    if(!out || !text || !*text) return qfalse;
+    memset(&decoded, 0, sizeof(decoded));
+    if(!NITMOD_ParseProtocolInteger(Info_ValueForKey(text, original ? "n" : "id"), &decoded.ident) ||
+       decoded.ident < 0 || decoded.ident >= MAX_FIRETEAMS / 2 ||
+       !NITMOD_ParseProtocolInteger(Info_ValueForKey(text, "l"), &decoded.leader) ||
+       decoded.leader < 0 || decoded.leader >= MAX_CLIENTS) return qfalse;
+    mask = Info_ValueForKey(text, "c");
+    if(strlen(mask) != 16) return qfalse;
+    for(i = 0; i < 16; ++i) {
+        if(mask[i] >= '0' && mask[i] <= '9') value = mask[i] - '0';
+        else if(mask[i] >= 'a' && mask[i] <= 'f') value = mask[i] - 'a' + 10;
+        else if(mask[i] >= 'A' && mask[i] <= 'F') value = mask[i] - 'A' + 10;
+        else return qfalse;
+        for(bit = 0; bit < 4; ++bit) decoded.joinOrder[(15 - i) * 4 + bit] = !!(value & (1 << bit));
+    }
+    if(!decoded.joinOrder[decoded.leader]) return qfalse;
+    decoded.inuse = qtrue;
+    *out = decoded;
+    return qtrue;
+}
+
+/* Original CG_DrawActiveFrame reselects the six displayed members each
+ * frame. Disabled mode leaves manual selections alone; it does not clear. */
+int CG_NitmodAutoSelectFireteam(void) {
+    int i;
+    if(!NITMOD_UsesOriginalProtocol() || !cg_FTAutoSelect.integer || cg.clientNum < 0 ||
+       cg.clientNum >= MAX_CLIENTS || !CG_IsOnFireteam(cg.clientNum)) return 0;
+    for(i = 0; i < 6; ++i) {
+        clientInfo_t *ci = CG_SortedFireTeamPlayerForPosition(i, 6);
+        if(!ci) break;
+        ci->selected = qtrue;
+    }
+    return i;
+}
 
 /******************************************************************************
 ***** Support Routines
@@ -21,6 +71,14 @@ int QDECL CG_SortFireTeam( const void *a, const void *b ) {
 
 	cna = *(int*)a;
 	cnb = *(int*)b;
+
+	if(cna == cnb) return 0;
+	{
+		qboolean aMember = CG_IsOnSameFireteam(cna, cg.clientNum) != NULL;
+		qboolean bMember = CG_IsOnSameFireteam(cnb, cg.clientNum) != NULL;
+		if(aMember != bMember) return aMember ? -1 : 1;
+		if(!aMember) return cna < cnb ? -1 : 1;
+	}
 
 	ca = &cgs.clientinfo[cna];
 	cb = &cgs.clientinfo[cnb];
@@ -78,73 +136,18 @@ void CG_SortClientFireteam() {
 }
 
 // Parses fireteam servercommand
-void CG_ParseFireteams() {
-	int i, j;
-	char* s;
-	const char* p;
-	int clnts[2];
-
-	qboolean onFireteam2;
-	qboolean isLeader2;
-
-//	qboolean onFireteam =	CG_IsOnFireteam( cg.clientNum ) ? qtrue : qfalse;
-//	qboolean isLeader =		CG_IsFireTeamLeader( cg.clientNum ) ? qtrue : qfalse;
-
-	for(i = 0; i < MAX_CLIENTS; i++) {
-		cgs.clientinfo[i].fireteamData = NULL;
-	}
-
-	for(i = 0; i < MAX_FIRETEAMS; i++) {
-		char hexbuffer[11] = "0x00000000";
-		p = NITMOD_AssetConfigString(CS_FIRETEAMS + i);
-		if(!*p) { cg.fireTeams[i].inuse = qfalse; continue; }
-		
-/*		s = Info_ValueForKey(p, "n");
-		if(!s || !*s) {
-			cg.fireTeams[i].inuse = qfalse;
-			continue;
-		} else {
-			cg.fireTeams[i].inuse = qtrue;
-		}*/
-
-//		Q_strncpyz(cg.fireTeams[i].name, s, 32);
-//		CG_Printf("Fireteam: %s\n", cg.fireTeams[i].name);
-
-		j = atoi(Info_ValueForKey(p, NITMOD_UsesOriginalProtocol() ? "n" : "id"));
-		if(j == -1) {
-			cg.fireTeams[i].inuse = qfalse;
-			continue;
-		} else {
-			cg.fireTeams[i].inuse = qtrue;
-			cg.fireTeams[i].ident = j;
-		}
-
-		s = Info_ValueForKey(p, "l");
-		cg.fireTeams[i].leader = atoi(s);
-
-		s = Info_ValueForKey(p, "c");
-		if(strlen(s) != 16) { cg.fireTeams[i].inuse = qfalse; continue; }
-		clnts[0] = clnts[1] = 0;
-		Q_strncpyz(hexbuffer+2, s, 9);
-		sscanf(hexbuffer, "%x", &clnts[1]);
-		Q_strncpyz(hexbuffer+2, s+8, 9);
-		sscanf(hexbuffer, "%x", &clnts[0]);
-
-		for(j = 0; j < MAX_CLIENTS; j++) {
-			if(COM_BitCheck(clnts, j)) {
-				cg.fireTeams[i].joinOrder[j] = qtrue;
-				cgs.clientinfo[j].fireteamData = &cg.fireTeams[i];
-//				CG_Printf("%s\n", cgs.clientinfo[j].name);
-			} else {
-				cg.fireTeams[i].joinOrder[j] = qfalse;
-			}
-		}
-	}
-
-	CG_SortClientFireteam();
-
-	onFireteam2 =	CG_IsOnFireteam( cg.clientNum ) ? qtrue : qfalse;
-	isLeader2 =		CG_IsFireTeamLeader( cg.clientNum ) ? qtrue : qfalse;
+void CG_ParseFireteams(void) {
+    int i, j;
+    for(i = 0; i < MAX_CLIENTS; ++i) cgs.clientinfo[i].fireteamData = NULL;
+    memset(cg.fireTeams, 0, sizeof(cg.fireTeams));
+    for(i = 0; i < MAX_FIRETEAMS; ++i) {
+        if(!CG_DecodeFireteam(NITMOD_AssetConfigString(CS_FIRETEAMS + i),
+            NITMOD_UsesOriginalProtocol(), &cg.fireTeams[i])) continue;
+        for(j = 0; j < MAX_CLIENTS; ++j) {
+            if(cg.fireTeams[i].joinOrder[j]) cgs.clientinfo[j].fireteamData = &cg.fireTeams[i];
+        }
+    }
+    CG_SortClientFireteam();
 }
 
 // Fireteam that both specified clients are on, if they both are on the same team
@@ -174,6 +177,7 @@ fireteamData_t* CG_IsFireTeamLeader( int clientNum ) {
 // Client, not on a fireteam, not sorted, but on your team
 clientInfo_t* CG_ClientInfoForPosition(int pos, int max) {
 	int i, cnt = 0;
+	if(pos < 0 || pos >= max || cg.clientNum < 0 || cg.clientNum >= MAX_CLIENTS) return NULL;
 
 	for(i = 0; i < MAX_CLIENTS && cnt < max; i++) {
 		if(cg.clientNum != i && cgs.clientinfo[i].infoValid && !CG_IsOnFireteam( i ) && cgs.clientinfo[cg.clientNum].team == cgs.clientinfo[i].team ) {
@@ -190,9 +194,10 @@ clientInfo_t* CG_ClientInfoForPosition(int pos, int max) {
 // Fireteam, that's on your same team
 fireteamData_t* CG_FireTeamForPosition( int pos, int max ) {
 	int i, cnt = 0;
+	if(pos < 0 || pos >= max || cg.clientNum < 0 || cg.clientNum >= MAX_CLIENTS) return NULL;
 
 	for(i = 0; i < MAX_FIRETEAMS && cnt < max; i++) {
-		if(cg.fireTeams[i].inuse && cgs.clientinfo[cg.fireTeams[i].leader].team == cgs.clientinfo[cg.clientNum].team) {
+		if(cg.fireTeams[i].inuse && cg.fireTeams[i].leader >= 0 && cg.fireTeams[i].leader < MAX_CLIENTS && cgs.clientinfo[cg.fireTeams[i].leader].team == cgs.clientinfo[cg.clientNum].team) {
 			if(cnt == pos) {				
 				return &cg.fireTeams[i];
 			}
@@ -208,7 +213,7 @@ clientInfo_t* CG_FireTeamPlayerForPosition(int pos, int max) {
 	int i, cnt = 0;
 	fireteamData_t* f = CG_IsOnFireteam(cg.clientNum);
 
-	if(!f) {
+	if(!f || pos < 0 || pos >= max) {
 		return NULL;
 	}
 
@@ -233,7 +238,7 @@ clientInfo_t* CG_SortedFireTeamPlayerForPosition(int pos, int max) {
 	int i, cnt = 0;
 	fireteamData_t* f = CG_IsOnFireteam(cg.clientNum);
 
-	if(!f) {
+	if(!f || pos < 0 || pos >= max) {
 		return NULL;
 	}
 
@@ -257,6 +262,66 @@ clientInfo_t* CG_SortedFireTeamPlayerForPosition(int pos, int max) {
 
 #define FT_BAR_YSPACING 2.f
 #define FT_BAR_HEIGHT 10.f
+/* Original CG_DrawFireTeamOverlay: compact class icons, fourteen-character
+ * names, health and a measured location column. No rank/weapon columns. */
+static void CG_DrawOriginalFireTeamOverlay(const rectDef_t *rect) {
+    clientInfo_t *members[6];
+    char locations[6][128], text[64];
+    fireteamData_t *team = CG_IsOnFireteam(cg.clientNum);
+    vec4_t background, border, header = {0, 0, 0, .8f}, rowColor = {0, 0, 0, .2f};
+    nitmodHudAnchor_t previous;
+    int i, count = 0, limit = cg_locationMaxChars.integer;
+    float x, y, width = 0, candidate, healthX;
+    vec3_t location;
+    vec_t *healthColor;
+    if(!rect || !team || team->ident < 0 || team->ident >= MAX_FIRETEAMS / 2) return;
+    if(limit < 0) limit = 0;
+    if(limit > 127) limit = 127;
+    for(i = 0; i < 6; ++i) {
+        members[i] = CG_SortedFireTeamPlayerForPosition(i, 6);
+        if(!members[i]) break;
+        VectorCopy(members[i]->location, location);
+        CG_NitmodLocationText(locations[i], sizeof(locations[i]), location, 1);
+        candidate = 82 + (members[i]->health == 0 ? 7 : 0) +
+            CG_Text_Width_Ext(locations[i], .2f, limit, &cgs.media.limboFont2);
+        if(candidate > width) width = candidate;
+        ++count;
+    }
+    if(!count) return;
+    width += 40;
+    previous = CG_NitmodHudAnchor(NITMOD_HUD_LEFT);
+    x = (int)rect->x; y = (int)(rect->y + 1);
+    CG_NitmodHudColors(background, border);
+    CG_DrawRect(x, y, width, 16 + 12 * count, 1, border);
+    CG_FillRect(x + 1, y + 1, width - 2, 14 + 12 * count, background);
+    CG_FillRect(x + 2, y + 2, width - 4, 12, header);
+    Com_sprintf(text, sizeof(text), "Fireteam: %s", bg_fireteamNames[team->ident]);
+    Q_strupr(text);
+    CG_Text_Paint_Ext(x + 5, y + 12, .18f, .18f, colorWhite, text, 0, 0, 0, &cgs.media.limboFont1);
+    for(i = 0; i < count; ++i) {
+        clientInfo_t *ci = members[i];
+        int skill = ci->cls >= PC_SOLDIER && ci->cls <= PC_COVERTOPS ? BG_ClassSkillForClass(ci->cls) : -1;
+        float rowY = y + 14 + 12 * i;
+        CG_FillRect(x + 2, rowY + 2, width - 4, 10, rowColor);
+        if(skill >= 0 && skill < SK_NUM_SKILLS)
+            CG_DrawPic(x + 4, rowY + 2, 10, 10, cgs.media.skillPics[skill]);
+        CG_Text_Paint_Ext(x + 14, rowY + 10, .17f, .17f, colorWhite, ci->name, 0, 14, 3, &cgs.media.limboFont2);
+        healthX = x + 94;
+        healthColor = ci->health > 80 ? colorWhite : ci->health > 0 ? colorYellow : colorRed;
+        if(ci->health == 0) {
+            CG_Text_Paint_Ext(healthX, rowY + 10, .17f, .17f,
+                cg.time % 500 < 251 ? colorRed : colorWhite, "*", 0, 0, 3, &cgs.media.limboFont2);
+            healthX += 7;
+            healthColor = cg.time % 500 < 251 ? colorWhite : colorRed;
+        }
+        Com_sprintf(text, sizeof(text), "%i", ci->health > 0 ? ci->health : 0);
+        CG_Text_Paint_Ext(healthX, rowY + 10, .17f, .17f, healthColor, text, 0, 0, 3, &cgs.media.limboFont2);
+        CG_Text_Paint_Ext(healthX + 24, rowY + 10, .17f, .17f, colorWhite, locations[i], 0, limit, 3, &cgs.media.limboFont2);
+    }
+    trap_R_SetColor(NULL);
+    CG_NitmodHudAnchor(previous);
+}
+
 void CG_DrawFireTeamOverlay( rectDef_t* rect ) {
 	int x = rect->x;
 	int y = rect->y + 1;	// +1, jitter it into place in 1024 :)
@@ -272,6 +337,8 @@ void CG_DrawFireTeamOverlay( rectDef_t* rect ) {
 	vec4_t bgColor		= { 0.0f, 0.0f, 0.0f, 0.6f };		// window
 	vec4_t borderColor	= { 0.5f, 0.5f, 0.5f, 0.5f };	// window
 
+	if(NITMOD_UsesOriginalProtocol()) { CG_DrawOriginalFireTeamOverlay(rect); return; }
+
 	if(!(f = CG_IsOnFireteam( cg.clientNum ))) {
 		return;
 	}
@@ -286,6 +353,7 @@ void CG_DrawFireTeamOverlay( rectDef_t* rect ) {
 		h += FT_BAR_HEIGHT + FT_BAR_YSPACING;
 	}
 
+	CG_NitmodHudColors(bgColor, borderColor);
 	CG_DrawRect( x, y, 204, h, 1, borderColor);
 	CG_FillRect( x + 1, y + 1, 204 - 2, h - 2, bgColor);
 
@@ -349,38 +417,42 @@ void CG_DrawFireTeamOverlay( rectDef_t* rect ) {
 		//x += 20;
 
 		{
-			vec2_t loc;
+			vec3_t loc;
+			char location[128];
 			char *s;
 
 			loc[0] = ci->location[0];
 			loc[1] = ci->location[1];
+			loc[2] = ci->location[2];
 
-			s = va( "^3(%s)", BG_GetLocationString( loc ) );
+			CG_NitmodLocationText(location, sizeof(location), loc, 1);
+			s = va( "^3(%s)", location );
 
 			x = rect->x + ( 204 - 4 - CG_Text_Width_Ext( s, .2f, 0, &cgs.media.limboFont2 ) );
 
-			CG_Text_Paint_Ext( x, y + FT_BAR_HEIGHT,  .2f, .2f, tclr, va( "^3(%s)", BG_GetLocationString( loc ) ), 0, 0, ITEM_TEXTSTYLE_SHADOWED, &cgs.media.limboFont2 );
+			CG_Text_Paint_Ext( x, y + FT_BAR_HEIGHT,  .2f, .2f, tclr, s, 0, cg_locationMaxChars.integer, ITEM_TEXTSTYLE_SHADOWED, &cgs.media.limboFont2 );
 		}
 	}
 }
 
 qboolean CG_FireteamGetBoxNeedsButtons() {
 	if ( cgs.applicationEndTime > cg.time ) {
-		if( cgs.applicationClient < 0 ) {
+		if( cgs.applicationClient < 0 || cgs.applicationClient >= MAX_CLIENTS ) {
 			return qfalse;
 		}
 		return qtrue;
 	}
 
 	if ( cgs.invitationEndTime > cg.time ) {
-		if( cgs.invitationClient < 0 ) {
+		if( cgs.invitationClient < 0 || cgs.invitationClient >= MAX_CLIENTS ) {
 			return qfalse;
 		}
 		return qtrue;
 	}
 
 	if ( cgs.propositionEndTime > cg.time ) {
-		if( cgs.propositionClient < 0 ) {
+		if( cgs.propositionClient < 0 || cgs.propositionClient >= MAX_CLIENTS ||
+		    cgs.propositionClient2 < 0 || cgs.propositionClient2 >= MAX_CLIENTS ) {
 			return qfalse;
 		}
 		return qtrue;
@@ -407,7 +479,7 @@ const char* CG_FireteamGetBoxText() {
 			return "Sent";
 		}
 
-		if( cgs.applicationClient < 0 ) {
+		if( cgs.applicationClient < 0 || cgs.applicationClient >= MAX_CLIENTS ) {
 			return NULL;
 		}
 
@@ -431,7 +503,7 @@ const char* CG_FireteamGetBoxText() {
 			return "Sent";
 		}
 
-		if( cgs.invitationClient < 0 ) {
+		if( cgs.invitationClient < 0 || cgs.invitationClient >= MAX_CLIENTS ) {
 			return NULL;
 		}
 
@@ -455,7 +527,8 @@ const char* CG_FireteamGetBoxText() {
 			return "Sent";
 		}
 
-		if( cgs.propositionClient < 0 ) {
+		if( cgs.propositionClient < 0 || cgs.propositionClient >= MAX_CLIENTS ||
+		    cgs.propositionClient2 < 0 || cgs.propositionClient2 >= MAX_CLIENTS ) {
 			return NULL;
 		}
 

@@ -20,3 +20,10 @@ assert client.count('G_NITMOD_RefreshTeamPopulation();') == 3
 init = main.split('void G_InitGame( int levelTime, int randomSeed, int restart ) {', 1)[1]
 assert init.count('G_NITMOD_ResetTeamPopulation();') == 1
 assert init.index('G_NITMOD_ResetTeamPopulation();') < init.index('G_NITMOD_ResetEntityLists();')
+disabled = cmds.split('qboolean G_IsWeaponDisabled(', 1)[1].split('void G_SetClientWeapons(', 1)[0]
+assert 'G_NITMOD_EvaluateServerWeaponPolicy(ent, weapon, 0, 1)' in disabled
+assert 'policy.limit != NITMOD_LIMIT_INVALID' in disabled
+setter = cmds.split('void G_SetClientWeapons(', 1)[1].split('Cmd_Team_f', 1)[0]
+assert 'G_NITMOD_SetClientWeapons(ent, w1, w2, updateclient) >= 0' in setter
+extensions = (root / 'src_2.60/game/g_cmds_ext.c').read_text()
+assert re.search(r'^\s*\{ "setclass",.*Cmd_SetClass_f', extensions, re.M)

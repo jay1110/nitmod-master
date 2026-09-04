@@ -7,6 +7,10 @@
 
 
 #include "cg_local.h"
+#include "cg_nitmod_config.h"
+#include "cg_nitmod_hints.h"
+#include "cg_nitmod_names.h"
+#include "cg_nitmod_projectiles.h"
 
 /*
 ======================
@@ -84,10 +88,12 @@ Also called by event processing code
 ======================
 */
 void CG_SetEntitySoundPosition( centity_t *cent ) {
+	if ( !cent || cent->currentState.number < 0 || cent->currentState.number >= MAX_GENTITIES ) return;
 	if ( cent->currentState.solid == SOLID_BMODEL ) {
 		vec3_t	origin;
 		float	*v;
 
+		if ( cent->currentState.modelindex < 0 || cent->currentState.modelindex >= MAX_MODELS ) return;
 		v = cgs.inlineModelMidpoints[ cent->currentState.modelindex ];
 		VectorAdd( cent->lerpOrigin, v, origin );
 		trap_S_UpdateEntityPosition( cent->currentState.number, origin );
@@ -148,7 +154,9 @@ void CG_AddLightstyle(centity_t *cent)
 			cent->dl_oldframe = (cent->dl_oldframe)%stringlength;
 			if(cent->dl_oldframe < 3 && cent->dl_sound)	// < 3 so if an alarm comes back into the pvs it will only start a sound if it's going to be closely synced with the light, otherwise wait till the next cycle
 			{
-				trap_S_StartSound (NULL, cent->currentState.number, CHAN_AUTO, cgs.gameSounds[cent->dl_sound] );
+				sfxHandle_t sound = CG_GetGameSound( cent->dl_sound );
+				if ( sound && cent->currentState.number >= 0 && cent->currentState.number < MAX_GENTITIES )
+					trap_S_StartSound (NULL, cent->currentState.number, CHAN_AUTO, sound );
 			}
 		}
 
@@ -211,10 +219,22 @@ CG_EntityEffects
 Add continuous entity effects, like local entity emission and lighting
 ==================
 */
-static void CG_EntityEffects( centity_t *cent ) {
-	static vec3_t dir;
-	// update sound origins
-	CG_SetEntitySoundPosition( cent );
+sfxHandle_t CG_GetGameSound( int index ) {
+	/* NCS slots 0..83 are already registered in the typed sound table. */
+	if ( index <= 0 || index >= MAX_SOUNDS || cgs.gameSounds[index] <= 0 ) return 0;
+	return cgs.gameSounds[index];
+}
+
+void CG_EntityLoopSound( centity_t *cent ) {
+	sfxHandle_t sound;
+	if ( !cent ) return;
+	sound = CG_GetGameSound( cent->currentState.loopSound );
+	if ( !sound || (cent->currentState.solid == SOLID_BMODEL &&
+		cent->currentState.eType != ET_SPEAKER && cent->currentState.eType != ET_MOVER &&
+		(cent->currentState.modelindex < 0 || cent->currentState.modelindex >= MAX_MODELS)) ) {
+		cent->soundTime = 0;
+		return;
+	}
 
 	// add loop sound
 	if ( cent->currentState.loopSound )
@@ -227,28 +247,35 @@ static void CG_EntityEffects( centity_t *cent ) {
 			int volume = cent->currentState.onFireStart;
 
 			if(cent->currentState.dmgFlags ) {	// range is set
-				trap_S_AddRealLoopingSound( cent->lerpOrigin, vec3_origin, cgs.gameSounds[ cent->currentState.loopSound ], cent->currentState.dmgFlags, volume, cent->soundTime );
+				trap_S_AddRealLoopingSound( cent->lerpOrigin, vec3_origin, sound, cent->currentState.dmgFlags, volume, cent->soundTime );
 			} else {
-				trap_S_AddRealLoopingSound( cent->lerpOrigin, vec3_origin, cgs.gameSounds[ cent->currentState.loopSound ], 1250, volume, cent->soundTime );
+				trap_S_AddRealLoopingSound( cent->lerpOrigin, vec3_origin, sound, 1250, volume, cent->soundTime );
 			}
 		} else if( cent->currentState.eType == ET_MOVER ) {
-			trap_S_AddLoopingSound( cent->lerpOrigin, vec3_origin, cgs.gameSounds[ cent->currentState.loopSound ], cent->currentState.onFireStart, cent->soundTime );
+			trap_S_AddLoopingSound( cent->lerpOrigin, vec3_origin, sound, cent->currentState.onFireStart, cent->soundTime );
 		} else if ( cent->currentState.solid == SOLID_BMODEL ) {
 			vec3_t	origin;
 			float	*v;
 
 			v = cgs.inlineModelMidpoints[ cent->currentState.modelindex ];
 			VectorAdd( cent->lerpOrigin, v, origin );
-			trap_S_AddLoopingSound( origin, vec3_origin, cgs.gameSounds[ cent->currentState.loopSound ], cent->currentState.onFireStart, cent->soundTime );
+			trap_S_AddLoopingSound( origin, vec3_origin, sound, cent->currentState.onFireStart, cent->soundTime );
 		} else {
-			trap_S_AddLoopingSound( cent->lerpOrigin, vec3_origin, cgs.gameSounds[ cent->currentState.loopSound ], 255, cent->soundTime );
+			trap_S_AddLoopingSound( cent->lerpOrigin, vec3_origin, sound, 255, cent->soundTime );
 		}
 	}
 	else if( cent->soundTime )
 		cent->soundTime = 0;
 	
+}
+
+static void CG_EntityEffects( centity_t *cent ) {
+	static vec3_t dir;
+	CG_SetEntitySoundPosition( cent );
+	CG_EntityLoopSound( cent );
 	// constant light glow
-	if ( cent->currentState.constantLight ) {
+	if ( cent->currentState.constantLight &&
+		!(NITMOD_UsesOriginalProtocol() && cent->currentState.eType == ET_PLAYER) ) {
 		int		cl;
 		int		i, r, g, b;
 
@@ -536,7 +563,9 @@ CG_Speaker
 Speaker entities can automatically play sounds
 ==================
 */
-static void CG_Speaker( centity_t *cent ) {
+void CG_Speaker( centity_t *cent ) {
+	sfxHandle_t sound;
+	if ( !cent ) return;
 	if ( ! cent->currentState.clientNum ) {	// FIXME: use something other than clientNum...
 		return;		// not auto triggering
 	}
@@ -545,7 +574,9 @@ static void CG_Speaker( centity_t *cent ) {
 		return;
 	}
 
-	trap_S_StartSound (NULL, cent->currentState.number, CHAN_ITEM, cgs.gameSounds[cent->currentState.eventParm] );
+	sound = CG_GetGameSound( cent->currentState.eventParm );
+	if ( sound && cent->currentState.number >= 0 && cent->currentState.number < MAX_GENTITIES )
+		trap_S_StartSound (NULL, cent->currentState.number, CHAN_ITEM, sound );
 
 	//	ent->s.frame = ent->wait * 10;
 	//	ent->s.clientNum = ent->random * 10;
@@ -633,6 +664,10 @@ static void CG_Item( centity_t *cent ) {
 	}
 
 	item = &bg_itemlist[ es->modelindex ];
+	/* Original item masks use a different table order. Register the mapped
+	 * item when first seen as well as during the level's eager preload. */
+	CG_RegisterItemVisuals(es->modelindex);
+	if(item->giType == IT_WEAPON) CG_RegisterWeapon(item->giTag, qfalse);
 
 //	scale = 0.005 + cent->currentState.number * 0.00001;
 
@@ -724,8 +759,8 @@ static void CG_Item( centity_t *cent ) {
 	} else {
 		//if( item->giType == IT_WEAPON && cg_items[es->modelindex].models[2])	// check if there's a specific model for weapon pickup placement
 		//	ent.hModel = cg_items[es->modelindex].models[2];
-		if( item->giType == IT_WEAPON ) {
-			ent.hModel = cg_weapons[item->giTag].weaponModel[W_PU_MODEL].model;
+		if( item->giType == IT_WEAPON || item->giTag == WP_MEDKIT ) {
+			CG_NitmodPickupMedia(&cg_weapons[item->giTag], es->teamNum, &ent);
 
 			if( item->giTag == WP_AMMO ) {
 				if( cent->currentState.density == 2 ) {
@@ -954,15 +989,17 @@ static void CG_DrawMineMarkerFlag( centity_t *cent, refEntity_t *ent, const weap
 
 extern void CG_RocketTrail( centity_t *ent, const weaponInfo_t *wi );
 
-static void CG_Missile( centity_t *cent ) {
+void CG_Missile( centity_t *cent ) {
 	refEntity_t			ent;
 	entityState_t		*s1;
 	const weaponInfo_t		*weapon;
 
+	if(!cent || !cg.snap) return;
 	s1 = &cent->currentState;
-	if ( s1->weapon > WP_NUM_WEAPONS ) {
-		s1->weapon = 0;
-	}
+	if(s1->weapon < 0 || s1->weapon >= WP_NUM_WEAPONS) return;
+	if(s1->number < 0 || s1->number >= MAX_GENTITIES ||
+	   cg.clientNum < 0 || cg.clientNum >= MAX_CLIENTS ||
+	   cg.snap->ps.clientNum < 0 || cg.snap->ps.clientNum >= MAX_CLIENTS) return;
 	weapon = &cg_weapons[s1->weapon];
 
 	// calculate the axis
@@ -976,7 +1013,10 @@ static void CG_Missile( centity_t *cent ) {
 		// right when spectating (#218)
 
 		cg.satchelCharge = cent;
-	} else if( s1->weapon == WP_ARTY && s1->otherEntityNum2 && s1->teamNum == cgs.clientinfo[ cg.clientNum ].team ) {
+	} else if( s1->weapon == WP_ARTY && s1->otherEntityNum2 &&
+	    cg.clientNum >= 0 && cg.clientNum < MAX_CLIENTS &&
+	    s1->clientNum >= 0 && s1->clientNum < MAX_CLIENTS &&
+	    s1->teamNum == cgs.clientinfo[ cg.clientNum ].team ) {
 		VectorCopy( cent->lerpOrigin, cg.artilleryRequestPos[s1->clientNum] );
 		cg.artilleryRequestTime[s1->clientNum] = cg.time;
 	}
@@ -1002,7 +1042,7 @@ static void CG_Missile( centity_t *cent ) {
 //----(SA)	whoops, didn't mean to check it in with the missile flare
 
 	// add missile sound
-	if ( weapon->missileSound ) {
+	if ( weapon->missileSound > 0 ) {
 		if( cent->currentState.weapon == WP_GPG40 || cent->currentState.weapon == WP_M7 ) {
 			if( !cent->currentState.effect1Time ) {
 				int flytime = cg.time - cent->currentState.pos.trTime;
@@ -1026,7 +1066,9 @@ static void CG_Missile( centity_t *cent ) {
 
 	// DHM - Nerve :: Don't tick until armed
 	if ( cent->currentState.weapon == WP_DYNAMITE ) {
-		if ( cent->currentState.teamNum < 4 ) {
+		CG_NitmodQueueDynamiteName(cent);
+		CG_NitmodScanDynamite(cent);
+		if ( cent->currentState.teamNum < 4 && weapon->spindownSound > 0 ) {
 			vec3_t	velocity;
 
 			BG_EvaluateTrajectoryDelta( &cent->currentState.pos, cg.time, velocity, qfalse, -1 );
@@ -1043,9 +1085,11 @@ static void CG_Missile( centity_t *cent ) {
 	ent.skinNum = cg.clientFrame & 1;
 	
 	if (cent->currentState.eType == ET_FP_PARTS) {
-		ent.hModel = cgs.gameModels[cent->currentState.modelindex];
+		if(s1->modelindex >= 0 && s1->modelindex < sizeof(cgs.gameModels) / sizeof(cgs.gameModels[0]))
+			ent.hModel = cgs.gameModels[s1->modelindex];
 	} else if (cent->currentState.eType == ET_EXPLO_PART) {
-		ent.hModel = cgs.gameModels[cent->currentState.modelindex];
+		if(s1->modelindex >= 0 && s1->modelindex < sizeof(cgs.gameModels) / sizeof(cgs.gameModels[0]))
+			ent.hModel = cgs.gameModels[s1->modelindex];
 	} else if (cent->currentState.eType == ET_FLAMEBARREL) {
 		ent.hModel = cgs.media.flamebarrel;
 	} else if (cent->currentState.eType == ET_FIRE_COLUMN || cent->currentState.eType == ET_FIRE_COLUMN_SMOKE) {
@@ -1055,19 +1099,16 @@ static void CG_Missile( centity_t *cent ) {
 		ent.hModel = 0;
 		// ent.hModel = cgs.gameModels[cent->currentState.modelindex];
 	} else {
-		team_t missileTeam = cent->currentState.weapon == WP_LANDMINE ? cent->currentState.teamNum % 4 : cent->currentState.teamNum;
-
-		ent.hModel = weapon->missileModel;
-
-		if( missileTeam == TEAM_ALLIES ) {
-			ent.customSkin = weapon->missileAlliedSkin;
-		} else if( missileTeam == TEAM_AXIS ) {
-			ent.customSkin = weapon->missileAxisSkin;
-		}
+		CG_NitmodMissileMedia(weapon, cent->currentState.weapon, cent->currentState.teamNum, &ent);
 	}
 	ent.renderfx = weapon->missileRenderfx | RF_NOSHADOW;
 
 	if( cent->currentState.weapon == WP_LANDMINE ) {
+		if(NITMOD_UsesOriginalProtocol()) {
+			qboolean marker;
+			if(!CG_NitmodPrepareMine(cent, &ent, &marker)) return;
+			if(marker) CG_DrawMineMarkerFlag(cent, &ent, weapon);
+		} else {
 		if( cgs.clientinfo[ cg.clientNum ].team == TEAM_SPECTATOR ) {
 			return;
 		}
@@ -1114,34 +1155,10 @@ static void CG_Missile( centity_t *cent ) {
 			ent.origin[2] -= 8;
 			ent.oldorigin[2] -= 8;			
 		}
-	}
-
-	// convert direction of travel into axis
-	if( cent->currentState.weapon == WP_MORTAR_SET ) {
-        vec3_t delta;
-
-		if( VectorCompare( cent->rawOrigin, vec3_origin ) ) {
-			VectorSubtract( cent->lerpOrigin, s1->pos.trBase, delta );
-			VectorCopy( cent->lerpOrigin, cent->rawOrigin );
-		} else {
-			VectorSubtract( cent->lerpOrigin, cent->rawOrigin, delta );
-			if( !VectorCompare( cent->lerpOrigin, cent->rawOrigin ) ) {
-				VectorCopy( cent->lerpOrigin, cent->rawOrigin );
-			}
 		}
-		if ( VectorNormalize2( delta, ent.axis[0] ) == 0 ) {
-			ent.axis[0][2] = 1;
-		}
-	} else if ( VectorNormalize2( s1->pos.trDelta, ent.axis[0] ) == 0 ) {
-		ent.axis[0][2] = 1;
 	}
 
-	// spin as it moves
-	if ( s1->pos.trType != TR_STATIONARY ) {
-		RotateAroundDirection( ent.axis, cg.time / 4 );
-	} else {
-		RotateAroundDirection( ent.axis, s1->time );
-	}
+	if(!CG_NitmodMissileAxis(cent, ent.axis, cg.time, NITMOD_UsesOriginalProtocol())) return;
 
 	// Rafael
 	// Added this since it may be a propExlosion
@@ -2237,6 +2254,7 @@ void CG_CalcEntityLerpPositions( centity_t *cent ) {
 	VectorCopy( cent->lerpOrigin, cent->lastLerpOrigin );
 
 	// just use the current frame and evaluate as best we can
+	if ( CG_NitmodProjectileLerp( cent ) ) return;
 	BG_EvaluateTrajectory( &cent->currentState.pos, cg.time, cent->lerpOrigin, qfalse, cent->currentState.effect2Time );
 	BG_EvaluateTrajectory( &cent->currentState.apos, cg.time, cent->lerpAngles, qtrue, cent->currentState.effect2Time );
 
@@ -2253,6 +2271,7 @@ CG_ProcessEntity
 ===============
 */
 static void CG_ProcessEntity( centity_t *cent ) {
+	if(CG_NitmodHintEntity(cent)) return;
 	switch ( cent->currentState.eType ) {
 	default:
 		// ydnar: test for actual bad entity type
@@ -2641,6 +2660,8 @@ void CG_AddPacketEntities( void ) {
 	//int					clcount;
 
 	// set cg.frameInterpolation
+	CG_NitmodHintsReset();
+	CG_NitmodNamesBeginFrame();
 	if ( cg.nextSnap ) {
 		int		delta;
 
@@ -2675,12 +2696,25 @@ void CG_AddPacketEntities( void ) {
 	// generate and add the entity from the playerstate
 	ps = &cg.predictedPlayerState;
 	BG_PlayerStateToEntityState( ps, &cg.predictedPlayerEntity.currentState, qfalse );
+	if(NITMOD_UsesOriginalProtocol())
+		BG_NITMOD_CopyLeanState(ps, &cg.predictedPlayerEntity.currentState);
 	CG_AddCEntity( &cg.predictedPlayerEntity );
 
 	// lerp the non-predicted value for lightning gun origins
 	CG_CalcEntityLerpPositions( &cg_entities[ cg.snap->ps.clientNum ] );
 
 	cg.satchelCharge = NULL;
+
+	/* Nitmod's next-snapshot presentation for general entities/projectiles.
+	 * CG_AddCEntity marks processedFrame, so the current-snapshot pass and
+	 * recursive parent traversal cannot submit these entities twice. */
+	if (CG_NitmodEarlyTransitionEnabled()) {
+		for (num = 0; num < cg.nextSnap->numEntities; ++num) {
+			if (CG_NitmodTransitionEarlyEntity(num)) {
+				CG_AddCEntity(&cg_entities[cg.nextSnap->entities[num].number]);
+			}
+		}
+	}
 
 	// Gordon: changing to a single loop, child will request that their parents are added first anyway
 	for ( num = 0; num < cg.snap->numEntities ; num++ ) {

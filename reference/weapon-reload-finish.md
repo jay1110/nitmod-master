@@ -1,5 +1,9 @@
 # Reload completion and idle animation
 
+Current integration: this helper now runs in the shared production movement
+path; activation, tests and remaining limits are documented in
+[active reload completion](active-reload-completion.md).
+
 NITMOD_FinishWeaponReload composes the existing atomic clip transfer with
 the native READY transition and the idle-animation effect. It requires native
 WEAPON_RELOADING and expired weaponTime/weaponDelay. Invalid input or transfer
@@ -27,8 +31,8 @@ no-op. Additional checks cover both pending timers, failed transfer and null
 inputs. Entire player state, pmove context and pmoveExt are compared.
 
 There is no completion event in this original branch. EV_FILL_CLIP belongs
-to reload START, not finish. Its emission and start-animation integration are
-still pending. The new completion adapter is compiled but not invoked by
-active PM_Weapon; outer gameplay/death checks remain the caller's job. Testing
+to reload START, not finish. Its partial start integration is documented in
+active-reload-start.md. The completion adapter is now invoked by active
+PM_Weapon; outer gameplay/death checks remain the caller's job. Testing
 the animation gate for dead/frozen movement types does not claim that live
 gameplay should initiate or continue a reload in those states.

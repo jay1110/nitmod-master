@@ -8,8 +8,7 @@ struct gentity_s;
  * Ordinary active G_TeamCount still retains ET behavior for these queries. */
 int G_NITMOD_CountRifleGrenades( const struct gentity_s *requester,
     int nativeWeapon, const unsigned char *granted, int slotCount );
-/* Read the reconstructed spawn/session/rn status, never infer it from ammo.
- * Not yet used by the native G_IsWeaponDisabled path. */
+/* Read the reconstructed spawn/session/rn status, never infer it from ammo. */
 int G_NITMOD_CountSessionRifleGrenades( const struct gentity_s *requester,
     int nativeWeapon );
 /* Atomically read teamSize/weaponCount/oppositeRifleCount. Recalculates the

@@ -1,4 +1,6 @@
 #include "cg_local.h"
+#include "cg_nitmod_config.h"
+#include "cg_nitmod_mapvote.h"
 
 team_t CG_Debriefing_FindWinningTeam( void );
 team_t CG_Debriefing_FindOveralWinningTeam( void );
@@ -664,6 +666,54 @@ PLAYERHEADER_SKILLS( 4 );
 PLAYERHEADER_SKILLS( 5 );
 PLAYERHEADER_SKILLS( 6 );
 
+/* Presentation adapted to the ET panel footprint. Wire order remains
+ * HEAD, ARMS, BODY, LEGS; original labels display torso before arms. */
+static void CG_Debriefing_PlayerHitReg_Draw( panel_button_t *button ) {
+	static const int layers[5] = { HR_HEAD, HR_ARMS, HR_ARMS, HR_BODY, HR_LEGS };
+	static const int rows[4] = { HR_HEAD, HR_BODY, HR_ARMS, HR_LEGS };
+	static const char *labels[4] = { "Head", "Torso", "Arms", "Legs" };
+	vec4_t background = { 0.08f, 0.08f, 0.08f, 1.f };
+	vec4_t base = { 0.6f, 0.6f, 0.6f, 0.5f };
+	vec4_t tint = { 1.f, 0.f, 0.f, 0.f };
+	int i, region;
+	if( cgs.dbShowHitRegions ) {
+		CG_FillRect( 14, 234, 185, 112, background );
+		CG_Text_Paint_Ext( 18, 248, 0.2f, 0.2f, colorWhite, "Hit Regions", 0, 0, 0, button->font->font );
+		if( cgs.dbHitRegionsRecieved ) {
+			trap_R_SetColor( base );
+			CG_DrawPic( 18, 270, 50, 50, cgs.media.nitmodHitRegionShaders[0] );
+			for( i = 0; i < 5; i++ ) {
+				tint[3] = cgs.dbHitRegionPercent[layers[i]] / 100.f;
+				trap_R_SetColor( tint );
+				CG_DrawPic( 18, 270, 50, 50, cgs.media.nitmodHitRegionShaders[i + 1] );
+			}
+			trap_R_SetColor( NULL );
+			for( i = 0; i < 4; i++ ) {
+				region = rows[i];
+				CG_Text_Paint_Ext( 70, 278 + i * 13, 0.16f, 0.16f, colorWhite,
+					va( "%s: %.1f%% (%i)", labels[i], cgs.dbHitRegionPercent[region],
+						cgs.dbHitRegionHits[region] ), 0, 0, 0, button->font->font );
+			}
+		} else {
+			CG_Text_Paint_Ext( 18, 280, 0.16f, 0.16f, colorWhite,
+				"No hit-region data", 0, 0, 0, button->font->font );
+		}
+	}
+	CG_Text_Paint_Ext( button->rect.x, 248, 0.16f, 0.16f, colorWhite,
+		cgs.dbShowHitRegions ? "Weapons" : "Regions", 0, 0, 0, button->font->font );
+}
+
+static qboolean CG_Debriefing_HitReg_KeyDown( panel_button_t *button, int key ) {
+	if( key != K_MOUSE1 ) return qfalse;
+	cgs.dbShowHitRegions = !cgs.dbShowHitRegions;
+	return qtrue;
+}
+
+static panel_button_t debriefHitRegionToggle = {
+	NULL, NULL, { 155, 235, 44, 15 }, { 0 }, &debriefPlayerInfoFont,
+	CG_Debriefing_HitReg_KeyDown, NULL, CG_Debriefing_PlayerHitReg_Draw, NULL
+};
+
 panel_button_t* debriefPanelButtons[] = {
 	&debriefTitleWindow,
 
@@ -687,6 +737,7 @@ panel_button_t* debriefPanelButtons[] = {
 
 	&debriefPlayerWeaponStatsHeader, &debriefPlayerWeaponStatsNameHeader, &debriefPlayerWeaponStatsShotsHeader, &debriefPlayerWeaponStatsHitsHeader, &debriefPlayerWeaponStatsKillsHeader,
 	&debriefPlayerWeaponStatsList, &debriefPlayerWeaponStatsListScroll,
+	&debriefHitRegionToggle,
 
 	NULL
 };
@@ -1123,7 +1174,7 @@ void CG_Debriefing_ChatEdit_Draw( panel_button_t* button ) {
 
 	do {
 		offset++;
-		if( buffer + offset  == '\0' ) {
+		if( buffer[offset] == '\0' ) {
 			break;
 		}
 	} while( CG_Text_Width_Ext( buffer + offset, button->font->scalex, 0, button->font->font ) > button->rect.w );
@@ -1227,11 +1278,14 @@ void CG_Debriefing_Startup( void ) {
 	cgs.dbAccuraciesRecieved = qfalse;
 	cgs.dbWeaponStatsRecieved = qfalse;
 	cgs.dbPlayerKillsDeathsRecieved = qfalse;
+	cgs.dbHitRegionsRecieved = qfalse;
+	cgs.dbShowHitRegions = qfalse;
 
 	cgs.dbLastRequestTime = 0;
 	cgs.dbSelectedClient = cg.clientNum;
 
 	cgs.dbAwardsParsed = qfalse;
+	CG_NitmodMapVoteReset();
 
 	s = CG_ConfigString( CS_MULTI_MAPWINNER );
 	buf = Info_ValueForKey( s, "winner" );
@@ -1253,10 +1307,15 @@ void CG_Debriefing_Shutdown( void ) {
 }
 
 void CG_Debriefing_InfoRequests( void ) {
-	if( cgs.dbLastRequestTime && (cg.time - cgs.dbLastRequestTime) < 1000 ) {
+	if( cgs.dbLastRequestTime && cg.time >= cgs.dbLastRequestTime &&
+		(double)cg.time - cgs.dbLastRequestTime < 1000 ) {
 		return;
 	}
 	cgs.dbLastRequestTime = cg.time;
+	if(CG_NitmodMapVoteEnabled() && !cgs.nitmodMapVoteListReceived) {
+		CG_NitmodMapVoteRequest();
+		return;
+	}
 
 	if( !cgs.dbPlayerKillsDeathsRecieved ) {
 		trap_SendClientCommand( "impkd" );
@@ -1269,12 +1328,19 @@ void CG_Debriefing_InfoRequests( void ) {
 	}
 
 	if( !cgs.dbWeaponStatsRecieved ) {
+		if(cgs.dbSelectedClient < 0 || cgs.dbSelectedClient >= MAX_CLIENTS) return;
 		trap_SendClientCommand( va( "imws %i", cgs.dbSelectedClient ) );
+		/* Original servers omit imhr when the player has no region hits.
+		 * Request alongside imws, never make scores depend on its reply. */
+		if( !cgs.dbHitRegionsRecieved && NITMOD_UsesOriginalProtocol() ) {
+			trap_SendClientCommand( va( "imhr %i", cgs.dbSelectedClient ) );
+		}
 		return;
 	}
 
 	// if nothing else is pending, ask for scores
-	if( !cgs.dbLastScoreRequest || (cg.time - cgs.dbLastScoreRequest) > 1000 ) {
+	if( !cgs.dbLastScoreRequest || cg.time < cgs.dbLastScoreRequest ||
+		(double)cg.time - cgs.dbLastScoreRequest > 1000 ) {
 		cgs.dbLastScoreRequest = cg.time;
 		trap_SendClientCommand( "score" );
 	}
@@ -1298,6 +1364,8 @@ qboolean CG_Debriefing_Draw( void ) {
 	if( !trap_Key_GetCatcher() ) {
 		trap_Key_SetCatcher( KEYCATCH_CGAME );
 	}
+	if(cgs.dbMode == 0 && CG_NitmodMapVoteEnabled() && cgs.nitmodMapVoteListReceived)
+		CG_NitmodMapVoteRequest();
 
 	switch( cgs.dbMode ) {
 		case 1:
@@ -1307,8 +1375,13 @@ qboolean CG_Debriefing_Draw( void ) {
 			CG_DrawPic( cgDC.cursorx, cgDC.cursory, 32, 32, cgs.media.cursorIcon );
 
 			break;
+		case 3: // separate original Nitmod scoreboard
 		case 0:
-			CG_DrawScoreboard();
+			if( cgs.dbMode == 0 && CG_NitmodMapVoteEnabled() ) {
+				CG_NitmodMapVoteDraw();
+			} else {
+				CG_DrawScoreboard();
+			}
 
 			BG_PanelButtonsRender( chatPanelButtons );
 
@@ -1576,6 +1649,7 @@ const char* CG_Debriefing_FullRankNameForClientInfo( clientInfo_t* ci ) {
 	if( ci->team != TEAM_AXIS && ci->team != TEAM_ALLIES ) {
 		return "Spectator";
 	}
+	if( ci->rank < 0 || ci->rank >= NUM_EXPERIENCE_LEVELS ) return "Unknown";
 
 	return ci->team == TEAM_AXIS ? rankNames_Axis[ci->rank] : rankNames_Allies[ci->rank];
 }
@@ -1584,36 +1658,84 @@ const char* CG_Debriefing_RankNameForClientInfo( clientInfo_t* ci ) {
 	if( ci->team != TEAM_AXIS && ci->team != TEAM_ALLIES ) {
 		return "Spc";
 	}
+	if( ci->rank < 0 || ci->rank >= NUM_EXPERIENCE_LEVELS ) return "Unk";
 
 	return ci->team == TEAM_AXIS ? miniRankNames_Axis[ci->rank] : miniRankNames_Allies[ci->rank];
 }
 
-void CG_Debriefing_ParseWeaponAccuracies( void ) {
-	int i;
-	for( i = 0; i < MAX_CLIENTS; i++ ) {
-		cgs.clientinfo[i].totalWeapAcc = atoi( CG_Argv( i + 1 ) );
-	}
-	cgs.dbAccuraciesRecieved = qtrue;
+static qboolean CG_Debriefing_ParseIntArg( int index, int *value ) {
+	return index > 0 && index < trap_Argc() &&
+		NITMOD_ParseProtocolSigned( CG_Argv( index ), value );
 }
 
-void CG_Debriefing_ParsePlayerKillsDeaths( void ) {
-	int i;
+static qboolean CG_Debriefing_ParseFloatArg( int index, float *value ) {
+	return index > 0 && index < trap_Argc() &&
+		NITMOD_ParseProtocolFloat( CG_Argv( index ), value );
+}
+
+static qboolean CG_Debriefing_ParseWeaponAccuracies( void ) {
+	int i, next[MAX_CLIENTS] = { 0 };
+	int count = NITMOD_UsesOriginalProtocol() ? cgs.maxclients : MAX_CLIENTS;
+
+	if( count < 1 || count > MAX_CLIENTS || trap_Argc() != count + 1 ) return qfalse;
+	for( i = 0; i < count; i++ ) {
+		if( !CG_Debriefing_ParseIntArg( i + 1, &next[i] ) || next[i] < 0 ) {
+			return qfalse;
+		}
+	}
+	for( i = 0; i < MAX_CLIENTS; i++ ) cgs.clientinfo[i].totalWeapAcc = next[i];
+	cgs.dbAccuraciesRecieved = qtrue;
+	return qtrue;
+}
+
+static qboolean CG_Debriefing_ParsePlayerKillsDeaths( void ) {
+	int i, kills[MAX_CLIENTS] = { 0 }, deaths[MAX_CLIENTS] = { 0 };
+	int count = NITMOD_UsesOriginalProtocol() ? cgs.maxclients : MAX_CLIENTS;
+
+	if( count < 1 || count > MAX_CLIENTS || trap_Argc() != count * 2 + 1 ) return qfalse;
+	for( i = 0; i < count; i++ ) {
+		if( !CG_Debriefing_ParseIntArg( i * 2 + 1, &kills[i] ) ||
+			!CG_Debriefing_ParseIntArg( i * 2 + 2, &deaths[i] ) ||
+			kills[i] < 0 || deaths[i] < 0 ) return qfalse;
+	}
 	for( i = 0; i < MAX_CLIENTS; i++ ) {
-		cgs.clientinfo[i].kills =	atoi( CG_Argv( i*2 + 1 ) );
-		cgs.clientinfo[i].deaths =	atoi( CG_Argv( i*2 + 2 ) );
+		cgs.clientinfo[i].kills = kills[i];
+		cgs.clientinfo[i].deaths = deaths[i];
 	}
 	cgs.dbPlayerKillsDeathsRecieved = qtrue;
+	return qtrue;
 }
 
-void CG_Debriefing_ParseWeaponStats( void ) {
+static qboolean CG_Debriefing_ParseWeaponStats( void ) {
 	int i;
-	for( i = 0; i < WS_MAX; i++ ) {
-		cgs.dbWeaponStats[i].numShots = atoi( CG_Argv( ( i * 3 ) + 1 ) );
-		cgs.dbWeaponStats[i].numHits =	atoi( CG_Argv( ( i * 3 ) + 2 ) );
-		cgs.dbWeaponStats[i].numKills =	atoi( CG_Argv( ( i * 3 ) + 3 ) );
-	}
+	cg_weaponstats_t next[WS_MAX];
 
+	if( trap_Argc() != WS_MAX * 3 + 1 ) return qfalse;
+	for( i = 0; i < WS_MAX; i++ ) {
+		if( !CG_Debriefing_ParseIntArg( i * 3 + 1, &next[i].numShots ) ||
+			!CG_Debriefing_ParseIntArg( i * 3 + 2, &next[i].numHits ) ||
+			!CG_Debriefing_ParseIntArg( i * 3 + 3, &next[i].numKills ) ||
+			next[i].numShots < 0 || next[i].numHits < 0 || next[i].numKills < 0 ) return qfalse;
+	}
+	memcpy( cgs.dbWeaponStats, next, sizeof( next ) );
 	cgs.dbWeaponStatsRecieved = qtrue;
+	return qtrue;
+}
+
+static qboolean CG_Debriefing_ParseHitRegions( void ) {
+	int i, hits[HR_NUM_HITREGIONS];
+	float percent[HR_NUM_HITREGIONS];
+
+	if( trap_Argc() != HR_NUM_HITREGIONS * 2 + 1 ) return qfalse;
+	for( i = 0; i < HR_NUM_HITREGIONS; i++ ) {
+		if( !CG_Debriefing_ParseIntArg( i * 2 + 1, &hits[i] ) ||
+			!CG_Debriefing_ParseFloatArg( i * 2 + 2, &percent[i] ) ||
+			hits[i] < 0 || percent[i] < 0.f || percent[i] > 100.f ) return qfalse;
+	}
+	memcpy( cgs.dbHitRegionHits, hits, sizeof( hits ) );
+	memcpy( cgs.dbHitRegionPercent, percent, sizeof( percent ) );
+	cgs.dbHitRegionsRecieved = qtrue;
+	return qtrue;
 }
 
 qboolean CG_Debriefing_ServerCommand( const char* cmd ) {
@@ -1632,11 +1754,17 @@ qboolean CG_Debriefing_ServerCommand( const char* cmd ) {
 		return qtrue;
 	}
 
+	if( !Q_stricmp( cmd, "imhr" ) ) {
+		CG_Debriefing_ParseHitRegions();
+		return qtrue;
+	}
+
 	return qfalse;
 }
 
 int CG_Debriefing_ScrollGetMax( panel_button_t* button ) {
 	switch( button->data[0] ) {
+		case 3: return 19; // original Nitmod map-vote list
 		case 0: // player list
 			return 24;
 		case 1:
@@ -1651,6 +1779,9 @@ int CG_Debriefing_ScrollGetCount( panel_button_t* button ) {
 	int i, cnt = 0;
 
 	switch( button->data[0] ) {
+		case 3:
+			return cgs.nitmodMapVoteCount < 0 ? 0 :
+				cgs.nitmodMapVoteCount > NITMOD_MAX_MAPVOTE_MAPS ? NITMOD_MAX_MAPVOTE_MAPS : cgs.nitmodMapVoteCount;
 		case 0: // player list
 			for( i = 0; i < MAX_CLIENTS; i++ ) {
 				if( !cgs.clientinfo[cgs.dbSortedClients[i]].infoValid ) {
@@ -1680,6 +1811,7 @@ int CG_Debriefing_ScrollGetCount( panel_button_t* button ) {
 
 int CG_Debriefing_ScrollGetOffset( panel_button_t* button ) {
 	switch( button->data[0] ) {
+		case 3: return cgs.nitmodMapVoteOffset;
 		case 0: // player list
 			return cgs.dbPlayerListOffset;
 		case 1:
@@ -1692,6 +1824,7 @@ int CG_Debriefing_ScrollGetOffset( panel_button_t* button ) {
 
 void CG_Debriefing_ScrollSetOffset( panel_button_t* button, int ofs ) {
 	switch( button->data[0] ) {
+		case 3: cgs.nitmodMapVoteOffset = ofs; return;
 		case 0:
 			cgs.dbPlayerListOffset = ofs;
 			return;
@@ -1738,20 +1871,33 @@ void CG_Debriefing_ScrollCheckOffset( panel_button_t* button ) {
 
 void CG_Debriefing_MouseEvent( int x, int y ) {
 	panel_button_t* button;
+	button = BG_PanelButtons_GetFocusButton();
+	if(button && button->data[0] == 3 && button->onDraw == CG_Debriefing_Scrollbar_Draw &&
+		!(cgs.dbMode == 0 && CG_NitmodMapVoteEnabled()))
+		BG_PanelButtons_SetFocusButton(NULL);
 
 	switch( cgs.dbMode ) {
+		case 0:
+			if(!CG_NitmodMapVoteEnabled()) break;
+			// Map voting uses the same original scrollbar capture/drag mechanism.
 		case 2:
 			button = BG_PanelButtons_GetFocusButton();
 			if( button && button->onDraw == CG_Debriefing_Scrollbar_Draw ) {
 				rectDef_t r;
 				int count, cnt;
+				double accumulated, steps;
 
 				cnt = CG_Debriefing_ScrollGetCount( button );
+				CG_Debriefing_ScrollCheckOffset( button );
 				CG_Debriefing_ScrollGetBarRect( button, &r );
+				if(cnt <= 0 || !(r.h > 0)) { BG_PanelButtons_SetFocusButton(NULL); return; }
 				
-				button->data[1] += y;
-
-				count = (cnt * button->data[1] * 0.5f) / (float)(r.h);	
+				accumulated = (double)button->data[1] + y;
+				if(accumulated > 2147483647.0) accumulated = 2147483647.0;
+				if(accumulated < -2147483647.0) accumulated = -2147483647.0;
+				button->data[1] = (int)accumulated;
+				steps = cnt * accumulated * .5 / r.h;
+				count = steps > cnt ? cnt : steps < -cnt ? -cnt : (int)steps;
 				if( count ) {
 					int ofs = CG_Debriefing_ScrollGetOffset( button );
 					CG_Debriefing_ScrollSetOffset( button, ofs + count );
@@ -1807,6 +1953,15 @@ void CG_Debriefing_Scrollbar_Draw( panel_button_t* button ) {
 }
 
 qboolean CG_Debriefing_Scrollbar_KeyDown( panel_button_t* button, int key ) {
+	if(key == K_MWHEELUP || key == K_MWHEELDOWN) {
+		int offset;
+		CG_Debriefing_ScrollCheckOffset(button);
+		if(CG_Debriefing_ScrollGetCount(button) <= 0) return qfalse;
+		offset = CG_Debriefing_ScrollGetOffset(button);
+		CG_Debriefing_ScrollSetOffset(button, offset + (key == K_MWHEELDOWN ? 1 : -1));
+		CG_Debriefing_ScrollCheckOffset(button);
+		return qfalse;
+	}
 	if( key == K_MOUSE1 ) {
 		rectDef_t r;
 		CG_Debriefing_ScrollGetBarRect( button, &r );
@@ -1830,6 +1985,16 @@ qboolean CG_Debriefing_Scrollbar_KeyUp( panel_button_t* button, int key ) {
 }
 
 void CG_Debriefing_KeyEvent( int key, qboolean down ) {
+	panel_button_t *focus = BG_PanelButtons_GetFocusButton();
+	if(!down && key == K_MOUSE1 && focus && focus->data[0] == 3 &&
+		focus->onDraw == CG_Debriefing_Scrollbar_Draw) {
+		CG_Debriefing_Scrollbar_KeyUp(focus, key);
+		return;
+	}
+	if( cgs.dbMode == 0 && CG_NitmodMapVoteEnabled() &&
+		CG_NitmodMapVoteKeyEvent( key, down ) ) {
+		return;
+	}
 	switch( cgs.dbMode ) {
 		case 1:
 			if( BG_PanelButtonsKeyEvent( key, down, teamDebriefPanelButtons ) ) {
@@ -1860,11 +2025,27 @@ void CG_Debriefing_PlayerSkills_Draw( panel_button_t* button ) {
 	clientInfo_t* ci = CG_Debriefing_GetSelectedClientInfo();
 	int i;
 	float x;
+	if(!button || !button->font || !ci || button->data[0] < 0 || button->data[0] >= SK_NUM_SKILLS) return;
 
 	CG_Text_Paint_Ext( button->rect.x, button->rect.y - 2, button->font->scalex, button->font->scaley, button->font->colour, skillNames[button->data[0]], 0, 0, ITEM_TEXTSTYLE_SHADOWED, button->font->font );
 
 	x = button->rect.x;
 	CG_DrawPic( x, button->rect.y, button->rect.w, button->rect.h, cgs.media.skillPics[ button->data[0] ] );
+	if(NITMOD_UsesOriginalProtocol()) {
+		int level = ci->nitmodSkillLevels[button->data[0]];
+		vec4_t dim = {1, 1, 1, .2f};
+		if(level < 0) level = 0;
+		if(level > 5) level = 5;
+		x += button->rect.w - 4;
+		for(i = 0; i < 5; ++i) {
+			trap_R_SetColor(i < level ? NULL : dim);
+			CG_DrawPicST(x + 4, button->rect.y + 1, button->rect.w * .8f, button->rect.h * .8f,
+				0, 0, 1.f, .5f, cgs.media.limboStar_roll);
+			x += button->rect.w - 4;
+		}
+		trap_R_SetColor(NULL);
+		return;
+	}
 
 	x += button->rect.w + 2;
 	for( i = ci->skill[button->data[0]]; i > 0; i-- ) {
@@ -1967,7 +2148,7 @@ void CG_Debriefing_PlayerName_Draw( panel_button_t* button ) {
 clientInfo_t* CG_Debriefing_GetSelectedClientInfo( void ) {
 	clientInfo_t* ci;
 
-	if( cgs.dbSelectedClient < 0 || cgs.dbSelectedClient > MAX_CLIENTS ) {
+	if( cgs.dbSelectedClient < 0 || cgs.dbSelectedClient >= MAX_CLIENTS ) {
 		CG_Debrieing_SetSelectedClient( cg.clientNum );
 	}
 	
@@ -1988,6 +2169,7 @@ void CG_Debrieing_SetSelectedClient( int clientNum ) {
 	if( clientNum != cgs.dbSelectedClient ) {
 		cgs.dbSelectedClient = clientNum;
 		cgs.dbWeaponStatsRecieved = qfalse;
+		cgs.dbHitRegionsRecieved = qfalse;
 	}
 }
 
@@ -2082,7 +2264,9 @@ qboolean CG_Debriefing_QCButton_KeyDown( panel_button_t* button, int key ) {
 
 qboolean CG_Debriefing_NextButton_KeyDown( panel_button_t* button, int key ) {
 	if( key == K_MOUSE1 ) {
-		cgs.dbMode = (cgs.dbMode + 1)%3;
+		cgs.dbMode = CG_NitmodNextDebriefPage(cgs.dbMode);
+		/* Do not carry an invisible list's mouse capture into another tab. */
+		BG_PanelButtons_SetFocusButton(NULL);
 		return qtrue;
 	}
 
@@ -2096,6 +2280,12 @@ void CG_Debriefing_NextButton_Draw( panel_button_t* button ) {
 void CG_Debriefing_ChatEditFinish( panel_button_t* button ) {
 	char buffer[256];
 	trap_Cvar_VariableStringBuffer( button->text, buffer, 256 );
+	if (NITMOD_UsesOriginalProtocol()) {
+		if (cgs.dbChatMode >= 0 && cgs.dbChatMode <= 2)
+			CG_NitmodSendChat(cgs.dbChatMode == 1 ? "say_team" : cgs.dbChatMode == 2 ? "say_buddy" : "say", buffer);
+		trap_Cvar_Set(button->text, "");
+		return;
+	}
 
 	switch( cgs.dbChatMode ) {
 		case 0:
@@ -2867,4 +3057,3 @@ void CG_Debriefing2TeamSkillXP_Draw( panel_button_t* button ) {
 		CG_Text_Paint_Ext( button->rect.x + 100 + skillPositions[ i ] - (w*0.5f), button->rect.y + 11, scale, scale, clrTxtBck, str, 0, 0, 0, &cgs.media.limboFont2 );
 	}
 }
-

@@ -462,6 +462,9 @@ typedef struct {
 	float		FPS;
 } displayContextDef_t;
 
+float UI_NitmodWideWidth(const displayContextDef_t *context);
+float UI_NitmodXScale(const displayContextDef_t *context);
+
 const char *String_Alloc(const char *p);
 void String_Init();
 void String_Report();

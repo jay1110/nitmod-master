@@ -792,6 +792,7 @@ void CG_PredictPlayerState( void ) {
 	if ( !cg.validPPS ) {
 		cg.validPPS = qtrue;
 		cg.predictedPlayerState = cg.snap->ps;
+		NITMOD_NormalizePredictedEvents(&cg.predictedPlayerState);
 	}
 
 	// demo playback just copies the moves
@@ -810,6 +811,11 @@ void CG_PredictPlayerState( void ) {
 		cg_pmove.pmext = &cg.pmext;
 		cg_pmove.nitmodReloadPreferenceFlags = CG_NITMOD_ReloadPreferenceFlags();
 		cg_pmove.nitmodDoubleJump = NITMOD_SimpleConfig()->doubleJump;
+		cg_pmove.nitmodLeanEnabled = NITMOD_UsesOriginalProtocol();
+		cg_pmove.nitmodReloadEnabled = !Q_stricmp(Info_ValueForKey(CG_ConfigString(CS_SERVERINFO), "gamename"), "nitmod");
+		cg_pmove.nitmodWeaponFlags = NITMOD_GameState()->weapons;
+		cg_pmove.nitmodWarMode = NITMOD_SimpleConfig()->war;
+		cg_pmove.nitmodNoReload = (unsigned int)NITMOD_SimpleConfig()->noReload;
 		cg_pmove.nitmodDoubleJumpHeight = NITMOD_GameState()->doubleJumpHeight;
 
 		cg.pmext.airleft = (cg.waterundertime - cg.time);
@@ -842,6 +848,11 @@ void CG_PredictPlayerState( void ) {
 	cg_pmove.pmext = &pmext; //&cg.pmext;
 	cg_pmove.nitmodReloadPreferenceFlags = CG_NITMOD_ReloadPreferenceFlags();
 	cg_pmove.nitmodDoubleJump = NITMOD_SimpleConfig()->doubleJump;
+	cg_pmove.nitmodLeanEnabled = NITMOD_UsesOriginalProtocol();
+	cg_pmove.nitmodReloadEnabled = !Q_stricmp(Info_ValueForKey(CG_ConfigString(CS_SERVERINFO), "gamename"), "nitmod");
+	cg_pmove.nitmodWeaponFlags = NITMOD_GameState()->weapons;
+	cg_pmove.nitmodWarMode = NITMOD_SimpleConfig()->war;
+	cg_pmove.nitmodNoReload = (unsigned int)NITMOD_SimpleConfig()->noReload;
 	cg_pmove.nitmodDoubleJumpHeight = NITMOD_GameState()->doubleJumpHeight;
 	cg_pmove.character = CG_CharacterForClientinfo( &cgs.clientinfo[cg.snap->ps.clientNum], &cg_entities[cg.snap->ps.clientNum] );
 	cg.pmext.airleft = (cg.waterundertime - cg.time);
@@ -925,6 +936,7 @@ void CG_PredictPlayerState( void ) {
 #endif
 		cg.predictedPlayerState = cg.snap->ps;
 		cg.physicsTime = cg.snap->serverTime;
+		NITMOD_NormalizePredictedEvents(&cg.predictedPlayerState);
 //	}
 
 	if ( pmove_msec.integer < 8 ) {
@@ -1084,7 +1096,7 @@ void CG_PredictPlayerState( void ) {
 	}
 
 	// fire events and other transition triggered things
-	CG_TransitionPlayerState( &cg.predictedPlayerState, &oldPlayerState );
+	CG_TransitionPredictedPlayerState( &cg.predictedPlayerState, &oldPlayerState );
 	
 	
 	// ydnar: shake player view here, rather than fiddle with view angles

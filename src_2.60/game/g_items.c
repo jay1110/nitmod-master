@@ -11,6 +11,7 @@
 */
 
 #include "g_local.h"
+#include "g_nitmod_restrictions.h"
 
 
 
@@ -497,6 +498,10 @@ void G_DropWeapon( gentity_t *ent, weapon_t weapon )
 void BotPickupWeapon(int client, int weaponnum, qboolean alreadyHave);
 
 qboolean G_CanPickupWeapon( weapon_t weapon, gentity_t* ent ) {
+	int decision;
+	if(!ent || !ent->client || weapon < WP_NONE || weapon >= WP_NUM_WEAPONS) return qfalse;
+	decision=G_NITMOD_PickupPrecheck(ent,weapon);
+	if(decision>=0) return decision ? qtrue : qfalse;
 	if( ent->client->sess.sessionTeam == TEAM_AXIS ) {
 		if( weapon == WP_THOMPSON ) {
 			weapon = WP_MP40;

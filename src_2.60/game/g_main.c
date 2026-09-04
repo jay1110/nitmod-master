@@ -49,6 +49,7 @@ vmCvar_t g_inactivityOptions;
 vmCvar_t g_dropHealth, g_dropAmmo, n_medPackSinkDelay, n_ammoPackSinkDelay;
 vmCvar_t g_dragCorpse;
 vmCvar_t g_shove, g_shoveNoZ;
+vmCvar_t g_dualSMG;
 vmCvar_t g_canisterKick, g_canisterKickOwner;
 vmCvar_t team_maxSoldiers, team_maxMedics, team_maxEngineers, team_maxFieldops, team_maxCovertops;
 vmCvar_t	g_cheats;
@@ -309,6 +310,7 @@ cvarTable_t		gameCvarTable[] = {
 	{ &g_dragCorpse, "g_dragCorpse", "1", 0, 0, qfalse, qfalse },
 	{ &g_shove, "g_shove", "80", 0, 0, qfalse, qfalse },
 	{ &g_shoveNoZ, "g_shoveNoZ", "0", 0, 0, qfalse, qfalse },
+	{ &g_dualSMG, "g_dualSMG", "0", 0, 0, qfalse, qfalse },
 	{ &g_canisterKick, "g_canisterKick", "0", 0, 0, qfalse, qfalse },
 	{ &g_canisterKickOwner, "g_canisterKickOwner", "0", 0, 0, qfalse, qfalse },
 	{ &g_dropAmmo, "g_dropAmmo", "0", 0, 0, qfalse, qfalse },
@@ -3859,6 +3861,7 @@ uebrgpiebrpgibqeripgubeqrpigubqifejbgipegbrtibgurepqgbn%i", level.time )
 
 	for( i = 0; i < level.numConnectedClients; i++ ) {
 		ClientEndFrame(&g_entities[level.sortedClients[i]]);
+		G_NITMOD_CheckWarEntry(&g_entities[level.sortedClients[i]], G_NITMOD_ConfiguredWarMode());
 	}
 
 	// NERVE - SMF

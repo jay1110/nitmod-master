@@ -562,8 +562,17 @@ typedef struct {
 	/* Mod-local input only, never serialized in playerState/usercmd. */
 	unsigned int nitmodReloadPreferenceFlags;
 	int nitmodDoubleJump;
+	qboolean nitmodLeanEnabled;
+	qboolean nitmodReloadEnabled;
+	int nitmodWarMode;
+	unsigned int nitmodNoReload;
+	int nitmodWeaponFlags;
 	float nitmodDoubleJumpHeight;
 } pmove_t;
+
+/* Original playerState slot 0x398: holdable[2], signed lean-button state. */
+#define NITMOD_HOLDABLE_LEAN_DIRECTION 2
+void BG_NITMOD_CopyLeanState(const playerState_t *ps, entityState_t *state);
 
 // if a full pmove isn't done on the client, you can just update the angles
 void PM_UpdateViewAngles( playerState_t *ps, pmoveExt_t *pmext, usercmd_t *cmd, void (trace)( trace_t *results, const vec3_t start, const vec3_t mins, const vec3_t maxs, const vec3_t end, int passEntityNum, int contentMask ), int tracemask );
@@ -2226,6 +2235,9 @@ typedef enum {
 
 	// ydnar: say, team say, etc
 	UIMENU_INGAME_MESSAGEMODE,
+	/* Paired reconstruction extension: retain native chat ID 15. */
+	UIMENU_NITMOD_CLASS,
+	UIMENU_NITMOD_CLASSALT,
 } uiMenuCommand_t;
 
 void BG_AdjustAAGunMuzzleForBarrel( vec_t* origin, vec_t* forward, vec_t* right, vec_t* up, int barrel );

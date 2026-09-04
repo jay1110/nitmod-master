@@ -1,9 +1,8 @@
 #include "g_local.h"
 #include "g_nitmod_teamcount.h"
 
-/* Native enum arguments. Dispatch stays disabled until the complete
- * restriction path is active; original binary weapon IDs are not accepted
- * as an alternative numbering scheme. */
+/* Native enum arguments, matching this tree's team/loadout protocol.
+ * Original binary weapon IDs are not an alternative numbering scheme. */
 void Cmd_SetClass_f( gentity_t *ent, unsigned int dwCommand, qboolean fValue ) {
     static const char *classes[] = { "Soldier", "Medic", "Engineer", "Field Ops", "Covert Ops" };
     char classText[MAX_TOKEN_CHARS], weaponText[MAX_TOKEN_CHARS], secondaryText[MAX_TOKEN_CHARS];

@@ -41,6 +41,10 @@ typedef struct {
 	/* Local score cache, not part of the # wire message. */
 	int teamScoreAxis;
 	int teamScoreAllies;
+	/* Original z1 server command, likewise independent from #. */
+	int tdmScoreLimit;
+	/* Original DM command: winning client for gametype 8 intermission. */
+	int dmWinnerClient;
 } nitmodGameState_t;
 
 typedef struct {

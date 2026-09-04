@@ -1,6 +1,7 @@
 
 #include "g_local.h"
 #include "g_nitmod_air.h"
+#include "g_nitmod_restrictions.h"
 #include "nitmod_air.h"
 #include "nitmod_weapon_reload.h"
 
@@ -456,6 +457,11 @@ void SpectatorThink( gentity_t *ent, usercmd_t *ucmd ) {
 		pm.ps = &client->ps;
 		pm.pmext = &client->pmext;
 		pm.nitmodDoubleJump = g_doubleJump.integer;
+		pm.nitmodLeanEnabled = qtrue;
+		pm.nitmodReloadEnabled = qtrue;
+		pm.nitmodWarMode = G_NITMOD_ConfiguredWarMode();
+		pm.nitmodNoReload = (unsigned int)G_NITMOD_ConfiguredNoReload();
+		pm.nitmodWeaponFlags = G_NITMOD_ConfiguredWeaponFlags();
 		pm.nitmodDoubleJumpHeight = g_DJHeight.value;
 		pm.nitmodReloadPreferenceFlags = NITMOD_EncodeReloadPreferences(0,
 			client->pers.bAutoReloadAux, client->pers.bAltReloadAux);
@@ -1044,6 +1050,11 @@ void ClientThink_real( gentity_t *ent ) {
 	pm.ps = &client->ps;
 	pm.pmext = &client->pmext;
 	pm.nitmodDoubleJump = g_doubleJump.integer;
+	pm.nitmodLeanEnabled = qtrue;
+	pm.nitmodReloadEnabled = qtrue;
+	pm.nitmodWarMode = G_NITMOD_ConfiguredWarMode();
+	pm.nitmodNoReload = (unsigned int)G_NITMOD_ConfiguredNoReload();
+	pm.nitmodWeaponFlags = G_NITMOD_ConfiguredWeaponFlags();
 	pm.nitmodDoubleJumpHeight = g_DJHeight.value;
 	pm.nitmodReloadPreferenceFlags = NITMOD_EncodeReloadPreferences(0,
 		client->pers.bAutoReloadAux, client->pers.bAltReloadAux);
@@ -1186,6 +1197,7 @@ void ClientThink_real( gentity_t *ent ) {
 	} else {
 		BG_PlayerStateToEntityState( &ent->client->ps, &ent->s, qfalse );
 	}
+	BG_NITMOD_CopyLeanState(&ent->client->ps, &ent->s);
 
 	if ( !( ent->client->ps.eFlags & EF_FIRING ) ) {
 		client->fireHeld = qfalse;		// for grapple
@@ -1735,6 +1747,7 @@ void ClientEndFrame( gentity_t *ent ) {
 	} else {
 		BG_PlayerStateToEntityState( &ent->client->ps, &ent->s, qfalse );
 	}
+	BG_NITMOD_CopyLeanState(&ent->client->ps, &ent->s);
 
 	//SendPendingPredictableEvents( &ent->client->ps );
 

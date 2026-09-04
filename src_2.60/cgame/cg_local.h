@@ -282,6 +282,7 @@ typedef struct centity_s {
 	int				soundTime;		// ydnar: so looping sounds can start when triggered
 
 	playerEntity_t	pe;
+	struct { int time, direction; float amount; } nitmodLean;
 
 //	int				errorTime;		// decay the error from this time
 //	vec3_t			errorOrigin;
@@ -476,6 +477,8 @@ typedef struct localEntity_s {
 
 	int				breakCount;			// break-up this many times before we can break no more
 	float			sizeScale;
+	/* Private local-effect identity; never serialized into snapshots. */
+	int nitmodRailGroup, nitmodRailSegment;
 	// done.
 
 } localEntity_t;
@@ -492,6 +495,8 @@ typedef struct {
 	int				team;
 	int				playerClass;		// NERVE - SMF
 	int				respawnsLeft;		// NERVE - SMF
+	int				kills, deaths; /* Original kd0/kd1: score-row owned. */
+	int             nitmodFlags; /* Original sc row word 6: status bits, not class. */
 } score_t;
 
 // each client has an associated clientInfo_t
@@ -510,8 +515,9 @@ typedef struct clientInfo_s {
 	team_t			team;
 
 	int				botSkill;		// 0 = not bot, 1-5 = bot
+	int				countryCode;	// Nitmod player configstring "u", 0..254; 255 unavailable
 	int				score;			// updated by score servercmds
-	int				location[2];	// location in 2d for team mode
+	int				location[3];	// Nitmod tinfo carries a typed 3d location
 	int				health;			// you only get this info about your teammates
 	int				curWeapon;
 	int				powerups;		// so can display quad/flag status
@@ -525,6 +531,7 @@ typedef struct clientInfo_s {
 	int				fireteam;
 	int				medals[SK_NUM_SKILLS];
 	int				skill[SK_NUM_SKILLS];
+	int             nitmodSkillLevels[SK_NUM_SKILLS]; /* original display 0..5 */
 	int				skillpoints[SK_NUM_SKILLS];	// filled OOB by +wstats
 
 	char			disguiseName[MAX_QPATH];
@@ -535,6 +542,8 @@ typedef struct clientInfo_s {
 	int				latchedweapon;
 	/* Optional original rn configstring field; not a weapon/ammo inference. */
 	int				rifleGrenadeStatus;
+	qboolean        nitmodTV; /* Original player configstring tv field. */
+	qboolean        nitmodShoutcaster; /* Original sc field, presentation only. */
 
 	int				refStatus;
 
@@ -575,7 +584,7 @@ typedef enum {
 	W_PART_5,
 	W_PART_6,
 	W_PART_7,
-	W_MAX_PARTS
+	W_MAX_PARTS = 16
 } barrelType_t;
 
 typedef enum {
@@ -588,6 +597,7 @@ typedef enum {
 typedef struct partModel_s {
 	char		tagName[MAX_QPATH];
 	qhandle_t	model;
+	qhandle_t teamModel[3];
 	qhandle_t	skin[3];			// 0: neutral, 1: axis, 2: allied
 } partModel_t;
 
@@ -599,17 +609,30 @@ typedef struct weaponModel_s {
 // each WP_* weapon enum has an associated weaponInfo_t
 // that contains media references necessary to present the
 // weapon and its effects
+typedef struct nitmodWeaponSmoke_s {
+	qhandle_t shader;
+	int life;
+	float alpha, size;
+} nitmodWeaponSmoke_t;
+
 typedef struct weaponInfo_s {
 	qboolean		registered;
 
 	animation_t		weapAnimations[MAX_WP_ANIMATIONS];
 
 	qhandle_t		handsModel;			// the hands don't actually draw, they just position the weapon
+	float foreShorten;
+	int weaponIconScale;
+	vec3_t offset;
+	nitmodWeaponSmoke_t flashSmoke;
 
 	qhandle_t		standModel;			// not drawn.  tags used for positioning weapons for pickup
 	qboolean		droppedAnglesHack;
 
 	weaponModel_t	weaponModel[W_NUM_TYPES];
+	qhandle_t viewTeamModel[W_NUM_TYPES][3];
+	int recoilPitchAdd, recoilYawRandom, recoilPitchAddRandom;
+	qhandle_t pickupTeamModel[3]; // TEAM_AXIS / TEAM_ALLIES, zero falls back
 	partModel_t		partModels[W_NUM_TYPES][W_MAX_PARTS];
 	qhandle_t		flashModel[W_NUM_TYPES];
 	qhandle_t		modModels[6];	// like the scope for the rifles
@@ -617,12 +640,17 @@ typedef struct weaponInfo_s {
 	vec3_t			flashDlightColor;
 	sfxHandle_t		flashSound[4];		// fast firing weapons randomly choose
 	sfxHandle_t		flashEchoSound[4];	//----(SA)	added - distant gun firing sound
+	sfxHandle_t deathBySound[4], deathBySoundFar[4];
+	int deathBySoundCount, deathBySoundFarCount;
+	qhandle_t brassModel;
 	sfxHandle_t		lastShotSound[4];	// sound of the last shot can be different (mauser doesn't have bolt action on last shot for example)
 
 	qhandle_t		weaponIcon[2];		//----(SA)	[0] is weap icon, [1] is highlight icon
 	qhandle_t		ammoIcon;
 
 	qhandle_t		missileModel;
+	qhandle_t missileTeamModel[3];
+	qboolean missileTeamModelDefined[3]; // explicit zero model must not fall back
 	qhandle_t		missileAlliedSkin;
 	qhandle_t		missileAxisSkin;
 	sfxHandle_t		missileSound;
@@ -742,6 +770,10 @@ typedef enum {
 } showView_t;
 
 void CG_ParseMapEntityInfo( int axis_number, int allied_number );
+qboolean CG_ParseOriginalMapEntityInfo(void);
+const mapEntityData_t *CG_MapEntityAt(int index);
+qboolean CG_DisguiseMapCheck(const mapEntityData_t *ent);
+float CG_MapReviveAlpha(int time, int interval);
 
 #define MAX_BACKUP_STATES (CMD_BACKUP + 2)
 	
@@ -838,6 +870,10 @@ typedef struct {
 	int			teamPlayers[TEAM_NUM_TEAMS]; // JPW NERVE for scoreboard
 	score_t		scores[MAX_CLIENTS];
 	qboolean	showScores;
+	qboolean	nitmodScoreSortKD;
+	qboolean	nitmodScorePressSeen;
+	int			nitmodScoreLastPress;
+	int			nitmodScoreLastToggle;
 	qboolean	scoreBoardShowing;
 	int			scoreFadeTime;
 	char		killerName[MAX_NAME_LENGTH];
@@ -1191,6 +1227,8 @@ typedef struct {
 	qhandle_t	hudSprintBar;
 	qhandle_t	hudAxisHelmet;
 	qhandle_t	hudAlliedHelmet;
+	qhandle_t	countryFlags;
+	qhandle_t	nitmodHitRegionShaders[6];
 	qhandle_t	redColorBar;
 	qhandle_t	blueColorBar;
 // jpw
@@ -1480,6 +1518,8 @@ typedef struct {
 	sfxHandle_t	noFireUnderwater;
 	sfxHandle_t	selectSound;
 	sfxHandle_t	landHurt;
+	sfxHandle_t nitmodSlapSound;
+	sfxHandle_t nitmodThrowKnifeSound;
 
 	sfxHandle_t	footsteps[FOOTSTEP_TOTAL][4];
 	sfxHandle_t	sfx_rockexp;
@@ -1642,6 +1682,7 @@ typedef struct {
 	qhandle_t		limboWeaponCardSurroundV;
 	qhandle_t		limboWeaponCardSurroundC;
 	qhandle_t		limboWeaponCardOOS;
+	qhandle_t		limboWeaponCardNadesOOS;
 	qhandle_t		limboLight_on;
 	qhandle_t		limboLight_on2;
 	qhandle_t		limboLight_off;
@@ -1983,6 +2024,8 @@ typedef struct {
 	qboolean			dbAccuraciesRecieved;
 	qboolean			dbPlayerKillsDeathsRecieved;
 	qboolean			dbWeaponStatsRecieved;
+	qboolean			dbHitRegionsRecieved;
+	qboolean			dbShowHitRegions;
 	qboolean			dbAwardsParsed;
 	char*				dbAwardNames[NUM_ENDGAME_AWARDS];
 	team_t				dbAwardTeams[NUM_ENDGAME_AWARDS];
@@ -1992,12 +2035,34 @@ typedef struct {
 	int					dbPlayerListOffset;
 	int					dbWeaponListOffset;
 	cg_weaponstats_t	dbWeaponStats[WS_MAX];
+	int				dbHitRegionHits[HR_NUM_HITREGIONS];
+	float				dbHitRegionPercent[HR_NUM_HITREGIONS];
 	int					dbChatMode;
 
 	int					tdbAxisMapsXP[SK_NUM_SKILLS][MAX_MAPS_PER_CAMPAIGN];
 	int					tdbAlliedMapsXP[SK_NUM_SKILLS][MAX_MAPS_PER_CAMPAIGN];
 	int					tdbMapListOffset;
 	int					tdbSelectedMap;
+
+	/* Nitmod map-vote protocol (original immaplist/imvotetally commands). */
+#define NITMOD_MAX_MAPVOTE_MAPS 32
+#define NITMOD_MAX_MAPVOTE_CHOICES 3
+	int					nitmodMapVoteCount;
+	char				nitmodMapVoteNames[NITMOD_MAX_MAPVOTE_MAPS][MAX_QPATH];
+	char				nitmodMapVoteDisplayNames[NITMOD_MAX_MAPVOTE_MAPS][128];
+	int					nitmodMapVoteIds[NITMOD_MAX_MAPVOTE_MAPS];
+	int					nitmodMapVoteVotes[NITMOD_MAX_MAPVOTE_MAPS];
+	int					nitmodMapVoteLastPlayed[NITMOD_MAX_MAPVOTE_MAPS];
+	int					nitmodMapVoteTimesPlayed[NITMOD_MAX_MAPVOTE_MAPS];
+	int					nitmodMapVoteSelections[NITMOD_MAX_MAPVOTE_CHOICES];
+	qboolean				nitmodMapVoteListReceived;
+	qboolean				nitmodMapVoteMulti;
+	int					nitmodMapVoteOffset;
+	int					nitmodMapVoteSelected;
+	int					nitmodMapVoteRequestTime;
+	int					nitmodMapVoteTallyTime;
+	int					nitmodMapVoteSelectedTime;
+	qhandle_t				nitmodMapVoteLevelshot;
 
 	int					ftMenuPos;
 	int					ftMenuMode;
@@ -2268,6 +2333,9 @@ void CG_TestModelNextFrame_f (void);
 void CG_TestModelPrevFrame_f (void);
 void CG_TestModelNextSkin_f (void);
 void CG_TestModelPrevSkin_f (void);
+void CG_NitmodDrawOverlay(float x, float y, float w, float h, qhandle_t shader, qboolean solid);
+void CG_NitmodFillOverlay(float x, float y, float w, float h, const float *color);
+void CG_DrawFlashFade(void);
 void CG_ZoomDown_f( void );
 void CG_ZoomIn_f(void);
 void CG_ZoomOut_f(void);
@@ -2419,6 +2487,7 @@ void CG_PredictPlayerState( void );
 //
 void CG_CheckEvents( centity_t *cent );
 void CG_EntityEvent( centity_t *cent, vec3_t position );
+void CG_NativeEntityEvent(centity_t *cent, vec3_t position);
 void CG_PainEvent( centity_t *cent, int health, qboolean crouching );
 void CG_PrecacheFXSounds( void );
 
@@ -2427,6 +2496,9 @@ void CG_PrecacheFXSounds( void );
 // cg_ents.c
 //
 void CG_SetEntitySoundPosition( centity_t *cent );
+sfxHandle_t CG_GetGameSound( int index );
+void CG_EntityLoopSound( centity_t *cent );
+void CG_Speaker( centity_t *cent );
 void CG_AddPacketEntities( void );
 void CG_Beam( centity_t *cent );
 void CG_AdjustPositionForMover( const vec3_t in, int moverNum, int fromTime, int toTime, vec3_t out, vec3_t outDeltaAngles );
@@ -2455,7 +2527,20 @@ void CG_FinishWeaponChange(int lastweap, int newweap);
 void CG_RegisterWeapon( int weaponNum, qboolean force );
 void CG_RegisterItemVisuals( int itemNum );
 
-void CG_FireWeapon( centity_t *cent);	//----(SA)	modified.
+void CG_FireWeapon(centity_t *cent, int dispatchEvent);
+qboolean CG_MountedTankIsBrowning(const centity_t *cent);
+qhandle_t CG_NitmodBrassModel(int weapon);
+int CG_NitmodWeaponIconScale(int weapon);
+void CG_NitmodShortenWeapon(const weaponInfo_t *weapon, refEntity_t *hand);
+void CG_NitmodWeaponOffset(const weaponInfo_t *weapon, const vec3_t userOffset, vec3_t result);
+qboolean CG_NitmodFlashSmokeParams(const weaponInfo_t *weapon, int weaponNum, int age, nitmodWeaponSmoke_t *smoke);
+void CG_NitmodEmitFlashSmoke(const weaponInfo_t *weapon, int weaponNum, int age, vec3_t origin);
+void CG_NitmodPickupMedia(const weaponInfo_t *weapon, int team, refEntity_t *ent);
+void CG_NitmodViewMedia(const weaponInfo_t *weapon, int view, int team, refEntity_t *ent);
+void CG_NitmodPartMedia(const partModel_t *part, int team, refEntity_t *ent);
+void CG_NitmodDrawMortarBipod(const weaponInfo_t *weapon, const refEntity_t *parent, const refEntity_t *barrel, int team);
+void CG_NitmodMissileMedia(const weaponInfo_t *weapon, int weaponNum, int team, refEntity_t *ent);
+void NITMOD_TranslateSnapshotWeapons(snapshot_t *snapshot);
 //void CG_EndFireWeapon( centity_t *cent, int firemode );	//----(SA)	added
 void CG_MissileHitWall( int weapon, int clientNum, vec3_t origin, vec3_t dir, int surfaceFlags );	//	(SA) modified to send missilehitwall surface parameters
 
@@ -2522,6 +2607,7 @@ void	CG_ParticleMisc (qhandle_t pshader, vec3_t origin, int size, int duration, 
 
 // Ridah
 void CG_ParticleExplosion (char *animStr, vec3_t origin, vec3_t vel, int duration, int sizeStart, int sizeEnd, qboolean dlight );
+void CG_ParticleExplosionTrail(char *animStr, vec3_t origin, vec3_t vel, int duration, int sizeStart, int sizeEnd, qboolean dlight);
 
 // Rafael snow pvs check
 void	CG_SnowLink (centity_t *cent, qboolean particleOn);
@@ -2671,6 +2757,8 @@ qboolean CG_ViewingDraw(void);
 // cg_scoreboard.c
 //
 qboolean CG_DrawScoreboard( void );
+void CG_NitmodScoreKeyDown(void);
+int CG_NitmodScoreOrder(int *order, int capacity);
 //void CG_DrawTourneyScoreboard( void );
 
 void CG_TransformToCommandMapCoord( float *coord_x, float *coord_y );
@@ -2678,6 +2766,7 @@ void CG_TransformToCommandMapCoord( float *coord_x, float *coord_y );
 //qboolean CG_DrawCommandMap( void );
 void CG_CommandCentreClick( int key );
 void CG_DrawAutoMap( void );
+void CG_DrawExpandedAutoMap( void );
 
 qboolean CG_DrawLimboMenu( void );
 qboolean CG_DrawObjectivePanel( void );
@@ -2738,6 +2827,7 @@ oidInfo_t* CG_OIDInfoForEntityNum( int num );
 //
 extern const char *aMonths[12];
 qboolean CG_ConsoleCommand( void );
+void CG_NitmodSendChat( const char *command, const char *text );
 void CG_InitConsoleCommands( void );
 void CG_ScoresDown_f( void );
 void CG_ScoresUp_f( void );
@@ -2752,6 +2842,7 @@ void CG_toggleSwing_f(void);
 // cg_servercmds.c
 //
 void CG_ExecuteNewServerCommands( int latestSequence );
+void CG_AddToTeamChat( const char *str, int clientnum );
 void CG_ParseServerinfo( void );
 void CG_ParseWolfinfo( void );			// NERVE - SMF
 void CG_ParseSpawns( void );
@@ -2776,6 +2867,7 @@ void CG_scores_cmd(void);
 //
 void CG_Respawn( qboolean revived );
 void CG_TransitionPlayerState( playerState_t *ps, playerState_t *ops );
+void CG_TransitionPredictedPlayerState(playerState_t *ps, playerState_t *ops);
 
 //
 // cg_atmospheric.c
@@ -3161,7 +3253,8 @@ qboolean CG_IsSinglePlayer(void);
 // Gordon: Fireteam stuff
 
 //fireteamData_t* CG_IsOnFireteam(		int clientNum );
-#define /*fireteamData_t**/ CG_IsOnFireteam( /*int*/ clientNum ) /*{ return*/ cgs.clientinfo[clientNum].fireteamData /*}*/
+fireteamData_t *CG_IsOnFireteam(int clientNum);
+qboolean CG_DecodeFireteam(const char *text, qboolean original, fireteamData_t *out);
 fireteamData_t* CG_IsOnSameFireteam(	int clientNum, int clientNum2 );
 fireteamData_t* CG_IsFireTeamLeader(	int clientNum );
 
@@ -3245,6 +3338,7 @@ void CG_AttachBitsToTank( centity_t* tank, refEntity_t* mg42base, refEntity_t* m
 //
 
 qboolean CG_RegisterCharacter( const char *characterFile, bg_character_t *character );
+qboolean CG_CheckForExistingAnimModelInfo(const char *animationGroup, const char *animationScript, animModelInfo_t **animModelInfo);
 bg_character_t *CG_CharacterForClientinfo( clientInfo_t *ci, centity_t *cent );
 bg_character_t *CG_CharacterForPlayerstate( playerState_t* ps );
 void CG_RegisterPlayerClasses( void );
@@ -3417,6 +3511,8 @@ qboolean CG_DebriefingPlayerList_KeyDown( panel_button_t* button, int key );
 void CG_Debriefing_ChatEdit_Draw( panel_button_t* button );
 void CG_Debriefing_ChatBox_Draw( panel_button_t* button );
 void CG_Debriefing_Scrollbar_Draw( panel_button_t* button );
+void CG_Debriefing_ScrollGetBarRect( panel_button_t* button, rectDef_t* rect );
+void CG_Debriefing_ScrollCheckOffset( panel_button_t* button );
 qboolean CG_Debriefing_Scrollbar_KeyDown( panel_button_t* button, int key );
 qboolean CG_Debriefing_Scrollbar_KeyUp( panel_button_t* button, int key );
 float CG_Debriefing_CalcCampaignProgress( void );
@@ -3476,3 +3572,24 @@ void CG_Fireteams_Setup( void );
 
 void CG_Fireteams_MenuText_Draw( panel_button_t* button );
 void CG_Fireteams_MenuTitleText_Draw( panel_button_t* button );
+
+extern vmCvar_t cg_smokeparticles, cg_trailparticles, cg_impactparticles;
+extern vmCvar_t cg_tracers, cg_muzzleFlash;
+extern vmCvar_t cg_numPopups, cg_popupFadeTime, cg_HUDFlags;
+extern vmCvar_t cg_pmColor;
+extern vmCvar_t cg_pingColors, cg_automapZoom;
+int CG_NitmodPingColor(int ping);
+const char *CG_NitmodPingText(int ping);
+typedef struct {
+	int axisRows;
+	int alliedRows;
+	qboolean deathmatch;
+} nitmodScoreboardPlan_t;
+nitmodScoreboardPlan_t CG_NitmodScoreboardPlan(int gametype, qboolean intermission);
+qboolean CG_NitmodCountryFlagUV(int code, float *s0, float *t0, float *s1, float *t1);
+float CG_NitmodAutomapZoom(void);
+void CG_AdjustAutomapZoom(int zoomIn);
+void CG_TransformAutomapEntity(void);
+float CG_NitmodPopupAlpha(int start, int now, int fade);
+qboolean CG_NitmodTracerEnabled(int mode, qboolean flesh, int source, int viewedClient);
+qboolean CG_NitmodMuzzleFlashEnabled(int mode, const playerState_t *ps);

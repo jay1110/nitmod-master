@@ -5,6 +5,7 @@
 */
 
 #include "cg_local.h"
+#include "cg_nitmod_coronas.h"
 
 qboolean CG_SpawnString( const char *key, const char *defaultString, char **out ) {
 	int		i;
@@ -220,6 +221,7 @@ typedef struct {
 } spawn_t;
 
 spawn_t	spawns[] = {
+	{"corona", CG_NitmodSpawnCorona},
 	{0, 0},
 	{"path_corner_2",				SP_path_corner_2},
 	{"info_train_spline_main",		SP_info_train_spline_main},
@@ -457,6 +459,7 @@ void CG_ParseEntitiesFromString( void ) {
 	cg.spawning = qtrue;
 	cg.numSpawnVars = 0;
 	cg.numMiscGameModels = 0;
+	CG_NitmodResetCoronas();
 
 	// the worldspawn is not an actual entity, but it still
 	// has a "spawn" function to perform any global setup

@@ -1,6 +1,7 @@
 // cg_syscalls.c -- this file is only included when building a dll
 // cg_syscalls.asm is included instead when building a qvm
 #include "cg_local.h"
+#include "cg_nitmod_config.h"
 
 #include "../game/nitmod_syscall_abi.h"
 static nitmod_syscall_t nitmodSyscall = (nitmod_syscall_t)-1;
@@ -533,10 +534,13 @@ int			trap_GetCurrentCmdNumber( void ) {
 }
 
 qboolean	trap_GetUserCmd( int cmdNumber, usercmd_t *ucmd ) {
-	return syscall( CG_GETUSERCMD, cmdNumber, ucmd );
+	qboolean result = syscall( CG_GETUSERCMD, cmdNumber, ucmd );
+	if(result && NITMOD_UsesOriginalProtocol()) ucmd->weapon = NITMOD_WeaponFromWire(ucmd->weapon);
+	return result;
 }
 
 void		trap_SetUserCmdValue( int stateValue, int flags, float sensitivityScale, int mpIdentClient ) {
+	if(NITMOD_UsesOriginalProtocol()) stateValue = NITMOD_WeaponToWire(stateValue);
 	syscall( CG_SETUSERCMDVALUE, stateValue, flags, PASSFLOAT(sensitivityScale), mpIdentClient );
 }
 

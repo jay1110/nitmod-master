@@ -7,6 +7,17 @@ void G_NITMOD_ResetWarState( nitmodWarState_t *state ) {
     if( state ) state->stripped = 0;
 }
 
+int G_NITMOD_CheckWarEntry( gentity_t *entity, int warMode ) {
+    if( !entity || !entity->client ||
+        entity->client->pers.connected != CON_CONNECTED ||
+        (entity->client->sess.sessionTeam != TEAM_AXIS &&
+         entity->client->sess.sessionTeam != TEAM_ALLIES) ) return 0;
+    /* ET 2.60 has no server demo-client facility. Do not reinterpret a
+     * private original-client offset as part of the native client ABI. */
+    return G_NITMOD_ApplyWarEntry(entity, &entity->client->nitmodWarState,
+        warMode, 0);
+}
+
 int G_NITMOD_ApplyWarEntry( gentity_t *entity, nitmodWarState_t *state,
     int warMode, int isDemoClient ) {
     if( !state || !G_NITMOD_CanCheckWeapons(entity, isDemoClient) ||

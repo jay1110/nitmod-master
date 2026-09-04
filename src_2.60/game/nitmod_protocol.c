@@ -2,7 +2,99 @@
 #include <float.h>
 #include <errno.h>
 #include <stdlib.h>
+#include <string.h>
 #include "nitmod_protocol.h"
+
+const char *NITMOD_ChatCommand( const char *command ) {
+	static const char *names[] = { "say", "say_team", "say_teamnl", "say_buddy", "ma", "m", "pm" };
+	int i;
+	if (!command) return NULL;
+	for (i = 0; i < (int)(sizeof(names) / sizeof(names[0])); ++i) {
+		const unsigned char *p = (const unsigned char *)command;
+		const char *q = names[i];
+		while (*p && *q) {
+			int c = *p >= 'A' && *p <= 'Z' ? *p + ('a' - 'A') : *p;
+			if (c != *q) break;
+			++p; ++q;
+		}
+		if (!*p && !*q) return names[i];
+	}
+	return NULL;
+}
+
+int NITMOD_TextNeedsEncoding( const char *text ) {
+	const unsigned char *p = (const unsigned char *)text;
+	if (!p) return 0;
+	for (; *p; ++p) if (*p == '%' || *p == '=' || *p >= 127) return 1;
+	return 0;
+}
+
+int NITMOD_BuildChatCommand( const char *command, const char *text, char *output, int capacity ) {
+	const char *name = NITMOD_ChatCommand(command);
+	const unsigned char *p;
+	int prefix, needed;
+	if (!name || !text || !*text || !output || text == output || capacity < 1) return 0;
+	prefix = (int)strlen(name) + 2;
+	needed = prefix + 3; /* closing quote, newline, NUL */
+	if (needed > capacity) return 0;
+	for (p = (const unsigned char *)text; *p; ++p) {
+		int width;
+		if (*p < 32 || *p == '"') return 0;
+		width = (*p == '%' || *p == '=' || *p >= 127) ? 3 : 1;
+		if (width > capacity - needed) return 0;
+		needed += width;
+	}
+	memcpy(output, name, prefix - 2);
+	output[prefix - 2] = ' '; output[prefix - 1] = '"';
+	NITMOD_EncodeText(text, output + prefix, capacity - prefix);
+	output[needed - 3] = '"'; output[needed - 2] = '\n'; output[needed - 1] = 0;
+	return 1;
+}
+
+int NITMOD_EncodeText( const char *text, char *output, int capacity ) {
+	static const char hex[] = "0123456789ABCDEF";
+	const unsigned char *p;
+	int needed = 1;
+	if (!text || !output || capacity < 1 || text == output) return 0;
+	for (p = (const unsigned char *)text; *p; ++p) {
+		int width = (*p == '%' || *p == '=' || *p >= 127) ? 3 : 1;
+		if (width > capacity - needed) return 0;
+		needed += width;
+	}
+	for (p = (const unsigned char *)text; *p; ++p) {
+		if (*p == '%' || *p == '=' || *p >= 127) {
+			*output++ = '=';
+			*output++ = hex[*p >> 4];
+			*output++ = hex[*p & 15];
+		} else *output++ = (char)*p;
+	}
+	*output = 0;
+	return 1;
+}
+
+static int NITMOD_TextHex( unsigned char c ) {
+	if (c >= '0' && c <= '9') return c - '0';
+	if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+	return -1;
+}
+
+void NITMOD_DecodeText( char *text ) {
+	char *out = text;
+	if (!text) return;
+	while (*text) {
+		if (*text == '=' && text[1] && text[2]) {
+			int hi = NITMOD_TextHex((unsigned char)text[1]);
+			int lo = NITMOD_TextHex((unsigned char)text[2]);
+			if (hi >= 2 && lo >= 0) {
+				*out++ = (char)((hi << 4) | lo);
+				text += 3;
+				continue;
+			}
+		}
+		*out++ = *text++;
+	}
+	*out = 0;
+}
 
 const char *NITMOD_ServerMessageText( int reason ) {
     static const char *messages[] = {

@@ -2,7 +2,8 @@
 
 Update: native availability/consumption hand selection is now shared and
 covered by executed tests; see `weapon-firing-clip-integration.md`. The refill
-helper described here remains inactive pending settings/fire-admission work.
+helper described here is now active; see active-weapon-refill.md for settings,
+admission boundaries and full-module tests.
 
 Original PM_WeaponUseAmmo: ELF 0x2aa40. Entry selects refill when weapon is
 original panzer ID 5 and g_war.integer==1, otherwise g_noReload.integer bit 0.

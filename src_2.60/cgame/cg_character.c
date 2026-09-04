@@ -256,7 +256,7 @@ CG_CheckForExistingAnimModelInfo
   returns qtrue if existing model found, qfalse otherwise
 ==================
 */
-static qboolean CG_CheckForExistingAnimModelInfo( const char *animationGroup, const char *animationScript, animModelInfo_t **animModelInfo )
+qboolean CG_CheckForExistingAnimModelInfo( const char *animationGroup, const char *animationScript, animModelInfo_t **animModelInfo )
 {
 	int i;
 	animModelInfo_t *trav, *firstFree = NULL;
@@ -278,7 +278,7 @@ static qboolean CG_CheckForExistingAnimModelInfo( const char *animationGroup, co
 	} else {
 		*animModelInfo = firstFree;
 		// clear the structure out ready for use
-		memset( *animModelInfo, 0, sizeof(*animModelInfo) );
+		memset( *animModelInfo, 0, sizeof(**animModelInfo) );
 	}
 
 	// qfalse signifies that we need to parse the information from the script files
@@ -427,13 +427,15 @@ bg_character_t *CG_CharacterForClientinfo( clientInfo_t *ci, centity_t *cent )
 	int		team, cls;
 
 	if( cent && cent->currentState.eType == ET_CORPSE ) {
+		if( cent->currentState.onFireStart >= MAX_CHARACTERS ) return NULL;
 		if( cent->currentState.onFireStart >= 0 )
 			return cgs.gameCharacters[ cent->currentState.onFireStart ];
 		else {
-			if( cent->currentState.modelindex < 4 )
-				return BG_GetCharacter( cent->currentState.modelindex, cent->currentState.modelindex2 );
-			else
-				return BG_GetCharacter( cent->currentState.modelindex - 4, cent->currentState.modelindex2 );
+			team = cent->currentState.modelindex;
+			if(team >= 4) team -= 4;
+			cls = cent->currentState.modelindex2;
+			if((team != TEAM_AXIS && team != TEAM_ALLIES) || cls < 0 || cls >= NUM_PLAYER_CLASSES) return NULL;
+			return BG_GetCharacter(team, cls);
 		}
 	}
 

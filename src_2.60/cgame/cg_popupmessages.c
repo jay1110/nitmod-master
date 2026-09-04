@@ -1,4 +1,18 @@
 #include "cg_local.h"
+#include "cg_nitmod_hud.h"
+
+vmCvar_t cg_numPopups, cg_popupFadeTime, cg_HUDFlags;
+
+float CG_NitmodPopupAlpha(int start, int now, int fade) {
+	double elapsed = (double)now - start - 1500;
+	if (elapsed <= 0) return 1;
+	if (fade <= 0 || elapsed >= fade) return 0;
+	return (float)(1.0 - elapsed / fade);
+}
+
+static double PopupExpiry(int start) {
+	return (double)start + 1500 + (cg_popupFadeTime.integer > 0 ? cg_popupFadeTime.integer : 0);
+}
 
 #define NUM_PM_STACK_ITEMS	32
 #define MAX_VISIBLE_ITEMS	5
@@ -14,6 +28,10 @@ struct pmStackItem_s {
 	int						time;
 	char					message[128];
 	qhandle_t				shader;
+	char                    secondName[128];
+	int                     iconScale;
+	qboolean                graphicObituary;
+	vec3_t                  iconColor;
 
 	pmListItem_t*			next;
 };
@@ -108,7 +126,7 @@ void CG_UpdatePMLists( void ) {
 	pmListItemBig_t* listItem2;
 
 	if ((listItem = cg_pmWaitingList)) {
-		int t = (CG_TimeForPopup( listItem->type ) + listItem->time);
+		int t = listItem->time;
 		if( cg.time > t ) {
 			if( listItem->next ) {
 				// there's another item waiting to come on, so move to old list
@@ -117,7 +135,7 @@ void CG_UpdatePMLists( void ) {
 
 				CG_AddToListFront( &cg_pmOldList, listItem );
 			} else {
-				if( cg.time > t + PM_WAITTIME + PM_FADETIME ) {
+				if( cg.time > PopupExpiry(listItem->time) ) {
 					// we're gone completely
 					cg_pmWaitingList = NULL;
 					listItem->inuse = qfalse;
@@ -132,7 +150,7 @@ void CG_UpdatePMLists( void ) {
 	listItem = cg_pmOldList;
 	lastItem = NULL;
 	while( listItem ) {
-		int t = (CG_TimeForPopup( listItem->type ) + listItem->time + PM_WAITTIME + PM_FADETIME);
+		double t = PopupExpiry(listItem->time);
 		if( cg.time > t ) {
 			// nuke this, and everything below it (though there shouldn't BE anything below us anyway)
 			pmListItem_t* next;
@@ -210,13 +228,14 @@ pmListItem_t* CG_FindFreePMItem( void ) {
 	}
 
 	// no totally free items, so just grab the last item in the oldlist
-	if ((lastItem = listItem = cg_pmOldList)) {
+	lastItem = NULL;
+	if ((listItem = cg_pmOldList)) {
 		while( listItem->next ) {
 			lastItem = listItem;
 			listItem = listItem->next;			
 		}
 
-		if( lastItem == cg_pmOldList ) {
+		if( !lastItem ) {
 			cg_pmOldList = NULL;
 		} else {
 			lastItem->next = NULL;
@@ -248,6 +267,7 @@ void CG_AddPMItem( popupMessageType_t type, const char* message, qhandle_t shade
 	if( !listItem ) {
 		return;
 	}
+	memset(listItem, 0, sizeof(*listItem));
 
 	if( shader ) {
 		listItem->shader = shader;
@@ -287,6 +307,50 @@ void CG_AddPMItem( popupMessageType_t type, const char* message, qhandle_t shade
 
 		loop->next = listItem;
 	}
+}
+
+qboolean CG_NitmodAddGraphicObituary(const char *first, const char *second, qhandle_t shader,
+                                   int scale, const vec3_t color) {
+    pmListItem_t *item, *tail;
+    char *newline;
+    if(!first || !*first || !second || shader <= 0 || scale < 1 || scale > 4) return qfalse;
+    if(*first == '\n' || *second == '\n') return qfalse;
+    item = CG_FindFreePMItem();
+    if(!item) return qfalse;
+    memset(item, 0, sizeof(*item));
+    item->inuse = qtrue; item->type = PM_DEATH; item->shader = shader; item->iconScale = scale;
+    item->graphicObituary = qtrue;
+    Q_strncpyz(item->message, first, sizeof(item->message));
+    Q_strncpyz(item->secondName, second, sizeof(item->secondName));
+    newline = strchr(item->message, '\n'); if(newline) *newline = 0;
+    newline = strchr(item->secondName, '\n'); if(newline) *newline = 0;
+    if(color) VectorCopy(color, item->iconColor);
+    else VectorSet(item->iconColor, 1, 1, 1);
+    if(!cg_pmWaitingList) { cg_pmWaitingList = item; item->time = cg.time; }
+    else {
+        for(tail = cg_pmWaitingList; tail->next; tail = tail->next) {}
+        tail->next = item;
+    }
+    return qtrue;
+}
+
+static qboolean CG_NitmodDrawGraphicObituary(const pmListItem_t *item, float y, float alpha) {
+    vec4_t text = {1,1,1,1}, icon;
+    float width;
+    nitmodHudAnchor_t previous;
+    if(!item->graphicObituary) return qfalse;
+    previous = CG_NitmodHudAnchor(NITMOD_HUD_LEFT);
+    text[3] = alpha;
+    VectorCopy(item->iconColor, icon); icon[3] = alpha;
+    width = CG_Text_Width_Ext(item->message, .2f, 0, &cgs.media.limboFont1);
+    CG_Text_Paint_Ext(18, y + 12, .2f, .2f, text, item->message, 0, 0, 7, &cgs.media.limboFont1);
+    trap_R_SetColor(icon);
+    CG_DrawPic(width + 26, y, item->iconScale * 16, 16, item->shader);
+    trap_R_SetColor(NULL);
+    CG_Text_Paint_Ext(width + 32 + item->iconScale * 16, y + 12, .2f, .2f,
+                      text, item->secondName, 0, 0, 7, &cgs.media.limboFont1);
+    CG_NitmodHudAnchor(previous);
+    return qtrue;
 }
 
 void CG_PMItemBigSound( pmListItemBig_t* item ) {
@@ -343,46 +407,34 @@ void CG_AddPMItemBig( popupMessageBigType_t type, const char* message, qhandle_t
 void CG_DrawPMItems( void ) {
 	vec4_t colour = { 0.f, 0.f, 0.f, 1.f };
 	vec4_t colourText = { 1.f, 1.f, 1.f, 1.f };
-	float t;
-	int i, size;
+	int i, size = PM_ICON_SIZE_SMALL, count;
 	pmListItem_t* listItem = cg_pmOldList;
 	float y = 360;
 
-	if( cg_drawSmallPopupIcons.integer ) {
-		size = PM_ICON_SIZE_SMALL;
-
-		y += 4;
-	} else {
-		size = PM_ICON_SIZE_NORMAL;
-	}
-
-	if( cg.snap->ps.persistant[PERS_RESPAWNS_LEFT] >= 0 ) {
-		y -= 20;
-	}
+	count = cg_numPopups.integer;
+	if(count <= 0) return;
+	if(count > 8) count = 8;
+	if(cg_HUDFlags.integer & 2) { y = 70; count = 5; }
+	else if(cg_HUDFlags.integer & 1) y = 310;
 
 	if( !cg_pmWaitingList ) {
 		return;
 	}
 
-	t = cg_pmWaitingList->time + CG_TimeForPopup( cg_pmWaitingList->type ) + PM_WAITTIME;
-	if( cg.time > t ) {
-		colourText[3] = colour[3] = 1 - ((cg.time - t) / (float)PM_FADETIME);
-	}
+	colourText[3] = colour[3] = CG_NitmodPopupAlpha(cg_pmWaitingList->time, cg.time, cg_popupFadeTime.integer);
 
+	if(!CG_NitmodDrawGraphicObituary(cg_pmWaitingList, y, colourText[3])) {
 	trap_R_SetColor( colourText );
 	CG_DrawPic( 4, y, size, size, cg_pmWaitingList->shader );
 	trap_R_SetColor( NULL );
 	CG_Text_Paint_Ext( 4 + size + 2, y + 12, 0.2f, 0.2f, colourText, cg_pmWaitingList->message, 0, 0, 0, &cgs.media.limboFont2 );
+	}
 
-	for( i = 0; i < 4 && listItem; i++, listItem = listItem->next ) {
+	for( i = 1; i < count && listItem; i++, listItem = listItem->next ) {
 		y -= size + 2;
 
-		t = listItem->time + CG_TimeForPopup( listItem->type ) + PM_WAITTIME;
-		if( cg.time > t ) {
-			colourText[3] = colour[3] = 1 - ((cg.time - t) / (float)PM_FADETIME);
-		} else {
-			colourText[3] = colour[3] = 1.f;
-		}
+		colourText[3] = colour[3] = CG_NitmodPopupAlpha(listItem->time, cg.time, cg_popupFadeTime.integer);
+		if(CG_NitmodDrawGraphicObituary(listItem, y, colourText[3])) continue;
 
 		trap_R_SetColor( colourText );
 		CG_DrawPic( 4, y, size, size, listItem->shader );

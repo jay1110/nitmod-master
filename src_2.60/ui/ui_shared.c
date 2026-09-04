@@ -2,6 +2,7 @@
 // string allocation/managment
 
 #include "ui_shared.h"
+#include <float.h>
 #include "ui_local.h"	// For CS settings/retrieval
 
 
@@ -50,6 +51,7 @@ static qboolean debugMode = qfalse;
 static int lastListBoxClickTime = 0;
 
 void Item_MouseLeave(itemDef_t *item);
+void Item_SetScreenCoords(itemDef_t *item, float x, float y);
 void Item_SetMouseOver(itemDef_t *item, qboolean focus);
 void Item_Paint(itemDef_t *item);
 void Item_RunScript(itemDef_t *item, qboolean *bAbort, const char *s);
@@ -594,6 +596,47 @@ void Window_Paint(Window *w, float fadeAmount, float fadeClamp, float fadeCycle)
 }
 
 
+/* Original Cui_WideX / AdjustFrom640. Keep engine display scales intact:
+ * fullscreen clearing still needs the uncorrected physical width. */
+float UI_NitmodWideWidth(const displayContextDef_t *context) {
+	float width;
+	if(!context || context->glconfig.vidHeight <= 0 || context->glconfig.vidWidth <= 0) return 640;
+	width = (float)context->glconfig.vidWidth / context->glconfig.vidHeight * 480.f;
+	return width > 640 ? width : 640;
+}
+
+float UI_NitmodXScale(const displayContextDef_t *context) {
+	return context ? context->xscale * (640.f / UI_NitmodWideWidth(context)) : 1;
+}
+
+#ifdef UIDLL
+static void UI_NitmodPositionItem(menuDef_t *menu, itemDef_t *item) {
+	float offset = (UI_NitmodWideWidth(DC) - 640) * .5f;
+	float x = menu->window.rect.x;
+	rectDef_t source;
+	qboolean full, backdrop, clouds;
+	if(!item) return;
+	source = item->window.rectClient;
+	full = menu->window.rect.x == 0 && menu->window.rect.y == 0 &&
+		menu->window.rect.w == 640 && menu->window.rect.h == 480;
+	backdrop = source.x == 0 && source.y == 0 && source.w == 640 && source.h == 480;
+	clouds = item->window.name && !Q_stricmp(item->window.name, "clouds");
+	if(clouds) item->window.rectClient.w += 2 * offset;
+	else if(backdrop) {
+		/* Preserve the original Cui_WideRect/r_mode 11 special path.
+		 * Transform a copy so repeated layout cannot compound scaling. */
+		float sx = DC->getCVarValue && DC->getCVarValue("r_mode") == 11 ? DC->xscale : UI_NitmodXScale(DC);
+		item->window.rectClient.x *= sx;
+		item->window.rectClient.w *= sx;
+		item->window.rectClient.y *= DC->yscale;
+		item->window.rectClient.h *= DC->yscale;
+	}
+	if(full && !backdrop) x += offset;
+	Item_SetScreenCoords(item, x, menu->window.rect.y);
+	item->window.rectClient = source;
+}
+#endif
+
 void Item_SetScreenCoords(itemDef_t *item, float x, float y) {
 	
 	if(item == NULL) return;
@@ -638,6 +681,11 @@ void Item_UpdatePosition(itemDef_t *item) {
 	}
 	
 	menu = item->parent;
+
+#ifdef UIDLL
+	UI_NitmodPositionItem(menu, item);
+	return;
+#endif
 	
 	x = menu->window.rect.x;
 	y = menu->window.rect.y;
@@ -663,13 +711,22 @@ void Menu_UpdatePosition(menuDef_t *menu) {
 	x = menu->window.rect.x;
 	y = menu->window.rect.y;
 
+#ifdef UIDLL
+	if(x == 16 && menu->window.rect.w == 608)
+		menu->window.rect.x += (UI_NitmodWideWidth(DC) - 640) * .5f;
+#endif
+
     /*if (menu->window.border != 0) {
 		x += menu->window.borderSize;
 		y += menu->window.borderSize;
 	}*/
 	
 	for (i = 0; i < menu->itemCount; i++) {
+#ifdef UIDLL
+		UI_NitmodPositionItem(menu, menu->items[i]);
+#else
 		Item_SetScreenCoords(menu->items[i], x, y);
+#endif
 	}
 }
 
@@ -729,6 +786,7 @@ int Menu_ItemsMatchingGroup(menuDef_t *menu, const char *name) {
 	int count = 0;
 	char *pdest;
 	int wildcard = -1;	// if wildcard is set, it's value is the number of characters to compare
+	if(!menu || !name || menu->itemCount < 0 || menu->itemCount > MAX_MENUITEMS) return 0;
 
 
 	pdest = strstr( name, "*" );	// allow wildcard strings (ex.  "hide nb_*" would translate to "hide nb_pg1; hide nb_extra" etc)
@@ -736,12 +794,13 @@ int Menu_ItemsMatchingGroup(menuDef_t *menu, const char *name) {
 		wildcard = pdest - name;
 
 	for (i = 0; i < menu->itemCount; i++) {
+		if(!menu->items[i]) continue;
 		if(wildcard != -1) {
-			if (Q_strncmp(menu->items[i]->window.name, name, wildcard) == 0 || (menu->items[i]->window.group && Q_strncmp(menu->items[i]->window.group, name, wildcard) == 0)) {
+			if ((menu->items[i]->window.name && Q_strncmp(menu->items[i]->window.name, name, wildcard) == 0) || (menu->items[i]->window.group && Q_strncmp(menu->items[i]->window.group, name, wildcard) == 0)) {
 				count++;
 			} 
 		} else {
-			if (Q_stricmp(menu->items[i]->window.name, name) == 0 || (menu->items[i]->window.group && Q_stricmp(menu->items[i]->window.group, name) == 0)) {
+			if ((menu->items[i]->window.name && Q_stricmp(menu->items[i]->window.name, name) == 0) || (menu->items[i]->window.group && Q_stricmp(menu->items[i]->window.group, name) == 0)) {
 				count++;
 			} 
 		}
@@ -755,20 +814,22 @@ itemDef_t *Menu_GetMatchingItemByNumber(menuDef_t *menu, int index, const char *
 	int count = 0;
 	char *pdest;
 	int wildcard = -1;	// if wildcard is set, it's value is the number of characters to compare
+	if(!menu || !name || index < 0 || menu->itemCount < 0 || menu->itemCount > MAX_MENUITEMS) return NULL;
 
 	pdest = strstr( name, "*" );	// allow wildcard strings (ex.  "hide nb_*" would translate to "hide nb_pg1; hide nb_extra" etc)
 	if(pdest)
 		wildcard = pdest - name;
 
 	for (i = 0; i < menu->itemCount; i++) {
+		if(!menu->items[i]) continue;
 		if(wildcard != -1) {
-			if (Q_strncmp(menu->items[i]->window.name, name, wildcard) == 0 || (menu->items[i]->window.group && Q_strncmp(menu->items[i]->window.group, name, wildcard) == 0)) {
+			if ((menu->items[i]->window.name && Q_strncmp(menu->items[i]->window.name, name, wildcard) == 0) || (menu->items[i]->window.group && Q_strncmp(menu->items[i]->window.group, name, wildcard) == 0)) {
 				if (count == index)
 					return menu->items[i];
 				count++;
 			}
 		} else {
-			if (Q_stricmp(menu->items[i]->window.name, name) == 0 || (menu->items[i]->window.group && Q_stricmp(menu->items[i]->window.group, name) == 0)) {
+			if ((menu->items[i]->window.name && Q_stricmp(menu->items[i]->window.name, name) == 0) || (menu->items[i]->window.group && Q_stricmp(menu->items[i]->window.group, name) == 0)) {
 				if (count == index)
 					return menu->items[i];
 				count++;
@@ -1067,6 +1128,16 @@ void Script_Show(itemDef_t *item, qboolean *bAbort, char **args) {
 	if (String_Parse(args, &name)) {
 		Menu_ShowItemByName(item->parent, name, qtrue);
 	}
+}
+
+/* Original UI ELF32 Script_ConditionalHideShow, VA 0x30510.
+ * The condition belongs to the invoking item, not to the target group. */
+void Script_ConditionalHideShow(itemDef_t *item, qboolean *bAbort, char **args) {
+	const char *name = NULL;
+	(void)bAbort;
+	if (!String_Parse(args, &name)) return;
+	if (!item || !item->parent || !item->cvar || !*item->cvar) return;
+	Menu_ShowItemByName(item->parent, name, DC->getCVarValue(item->cvar) != 0);
 }
 
 void Script_Hide(itemDef_t *item, qboolean *bAbort, char **args) {
@@ -1792,6 +1863,7 @@ commandDef_t commandList[] =
 	{"fadeout", &Script_FadeOut},				// group/name
 	{"show", &Script_Show},						// group/name
 	{"hide", &Script_Hide},						// group/name
+	{"condhideshow", &Script_ConditionalHideShow},
 	{"setcolor", &Script_SetColor},				// works on this
 	{"open", &Script_Open},						// menu
 	{"fadeinmenu", &Script_FadeInMenu},			// menu
@@ -2095,41 +2167,48 @@ int Item_ListBox_ThumbDrawPosition(itemDef_t *item) {
 	}
 }
 
+/* Shared slider geometry for paint, hit testing, click and drag. Original
+ * Nitmod uses a 96-unit track and a 12-unit thumb. Invalid menu data must
+ * never result in division by zero or nonfinite Cvar writes. */
+static qboolean Item_Slider_Data(itemDef_t *item, double *x, double *low, double *high) {
+	editFieldDef_t *edit;
+	if(!item || !DC || !item->cvar || !*item->cvar || !item->typeData) return qfalse;
+	edit = item->typeData;
+	*x = item->text ? (double)item->textRect.x + item->textRect.w + 8 : item->window.rect.x;
+	*low = edit->minVal; *high = edit->maxVal;
+	return *x >= -FLT_MAX && *x <= FLT_MAX &&
+		*low >= -FLT_MAX && *high <= FLT_MAX && *low < *high;
+}
+
+static qboolean Item_Slider_SetValue(itemDef_t *item, float cursor) {
+	double x, low, high, fraction, value;
+	if(!Item_Slider_Data(item, &x, &low, &high) || !DC->setCVar ||
+	   !(cursor >= -FLT_MAX && cursor <= FLT_MAX)) return qfalse;
+	fraction = ((double)cursor - x) / SLIDER_WIDTH;
+	if(fraction < 0) fraction = 0;
+	else if(fraction > 1) fraction = 1;
+	value = low + (high - low) * fraction;
+	DC->setCVar(item->cvar, va("%f", value));
+	return qtrue;
+}
+
 float Item_Slider_ThumbPosition(itemDef_t *item) {
-	float value, range, x;
-	editFieldDef_t *editDef = item->typeData;
-
-	if (item->text) {
-		x = item->textRect.x + item->textRect.w + 8;
-	} else {
-		x = item->window.rect.x;
+	double x, low, high, value;
+	if(!Item_Slider_Data(item, &x, &low, &high) || !DC->getCVarValue) {
+		return item && item->window.rect.x >= -FLT_MAX && item->window.rect.x <= FLT_MAX ?
+			item->window.rect.x : 0;
 	}
-
-	if (editDef == NULL && item->cvar) {
-		return x;
-	}
-
 	value = DC->getCVarValue(item->cvar);
-
-	if (value < editDef->minVal) {
-		value = editDef->minVal;
-	} else if (value > editDef->maxVal) {
-		value = editDef->maxVal;
-	}
-
-	range = editDef->maxVal - editDef->minVal;
-	value -= editDef->minVal;
-	value /= range;
-	//value /= (editDef->maxVal - editDef->minVal);
-	value *= SLIDER_WIDTH;
-	x += value;
-	// vm fuckage
-	//x = x + (((float)value / editDef->maxVal) * SLIDER_WIDTH);
-	return x;
+	if(!(value >= low)) value = low; /* includes NaN */
+	else if(value > high) value = high;
+	x += (value - low) / (high - low) * SLIDER_WIDTH;
+	return x <= FLT_MAX ? (float)x : FLT_MAX;
 }
 
 int Item_Slider_OverSlider(itemDef_t *item, float x, float y) {
 	rectDef_t r;
+	double origin, low, high;
+	if(!Item_Slider_Data(item, &origin, &low, &high)) return 0;
 
 	r.x = Item_Slider_ThumbPosition(item) - (SLIDER_THUMB_WIDTH / 2);
 	//r.y = item->window.rect.y - 2;
@@ -2633,8 +2712,8 @@ qboolean Item_YesNo_HandleKey(itemDef_t *item, int key) {
 }
 
 int Item_Multi_CountSettings(itemDef_t *item) {
-	multiDef_t *multiPtr = (multiDef_t*)item->typeData;
-	if (multiPtr == NULL) {
+	multiDef_t *multiPtr = item ? (multiDef_t*)item->typeData : NULL;
+	if (!multiPtr || multiPtr->count < 0 || multiPtr->count > MAX_MULTI_CVARS) {
 		return 0;
 	}
 	return multiPtr->count;
@@ -2644,7 +2723,8 @@ int Item_Multi_FindCvarByValue(itemDef_t *item) {
 	char buff[1024];
 	float value = 0;
 	int i;
-	multiDef_t *multiPtr = (multiDef_t*)item->typeData;
+	multiDef_t *multiPtr = item ? (multiDef_t*)item->typeData : NULL;
+	if(!Item_Multi_CountSettings(item) || !item->cvar) return 0;
 	if (multiPtr) {
 		if (multiPtr->strDef) {
 	    DC->getCVarString(item->cvar, buff, sizeof(buff));
@@ -2670,7 +2750,10 @@ const char *Item_Multi_Setting(itemDef_t *item) {
 	char buff[1024];
 	float value = 0;
 	int i;
-	multiDef_t *multiPtr = (multiDef_t*)item->typeData;
+	multiDef_t *multiPtr = item ? (multiDef_t*)item->typeData : NULL;
+	if(!multiPtr) return "None Defined";
+	if(!Item_Multi_CountSettings(item) || !item->cvar)
+		return multiPtr->undefinedStr ? multiPtr->undefinedStr : "None Defined";
 	if (multiPtr) {
 		if (multiPtr->strDef) {
 	    DC->getCVarString(item->cvar, buff, sizeof(buff));
@@ -2697,7 +2780,8 @@ const char *Item_Multi_Setting(itemDef_t *item) {
 }
 
 qboolean Item_Multi_HandleKey(itemDef_t *item, int key) {
-	multiDef_t *multiPtr = (multiDef_t*)item->typeData;
+	multiDef_t *multiPtr = item ? (multiDef_t*)item->typeData : NULL;
+	if(!Item_Multi_CountSettings(item)) return qfalse;
 	if (multiPtr) {
 	  if (Rect_ContainsPoint(&item->window.rect, DC->cursorx, DC->cursory) && item->window.flags & WINDOW_HASFOCUS && item->cvar) {
 			if (key == K_MOUSE1 || key == K_ENTER || key == K_MOUSE2 || key == K_MOUSE3) {
@@ -2976,28 +3060,8 @@ static void Scroll_ListBox_ThumbFunc(void *p) {
 }
 
 static void Scroll_Slider_ThumbFunc(void *p) {
-	float x, value, cursorx;
 	scrollInfo_t *si = (scrollInfo_t*)p;
-	editFieldDef_t *editDef = si->item->typeData;
-
-	if (si->item->text) {
-		x = si->item->textRect.x + si->item->textRect.w + 8;
-	} else {
-		x = si->item->window.rect.x;
-	}
-
-	cursorx = DC->cursorx;
-
-	if (cursorx < x) {
-		cursorx = x;
-	} else if (cursorx > x + SLIDER_WIDTH) {
-		cursorx = x + SLIDER_WIDTH;
-	}
-	value = cursorx - x;
-	value /= SLIDER_WIDTH;
-	value *= (editDef->maxVal - editDef->minVal);
-	value += editDef->minVal;
-	DC->setCVar(si->item->cvar, va("%f", value));
+	if(si && DC) Item_Slider_SetValue(si->item, DC->cursorx);
 }
 
 void Item_StartCapture(itemDef_t *item, int key) {
@@ -3052,43 +3116,17 @@ void Item_StopCapture(itemDef_t *item) {
 }
 
 qboolean Item_Slider_HandleKey(itemDef_t *item, int key, qboolean down) {
-	float x, value, width, work;
-
-	//DC->Print("slider handle key\n");
-	if (item->window.flags & WINDOW_HASFOCUS && item->cvar && Rect_ContainsPoint(&item->window.rect, DC->cursorx, DC->cursory)) {
-		if (key == K_MOUSE1 || key == K_ENTER || key == K_MOUSE2 || key == K_MOUSE3) {
-			editFieldDef_t *editDef = item->typeData;
-			if (editDef) {
-				rectDef_t testRect;
-				width = SLIDER_WIDTH;
-				if (item->text) {
-					x = item->textRect.x + item->textRect.w + 8;
-				} else {
-					x = item->window.rect.x;
-				}
-
-				testRect = item->window.rect;
-				testRect.x = x;
-				value = (float)SLIDER_THUMB_WIDTH / 2;
-				testRect.x -= value;
-				//DC->Print("slider x: %f\n", testRect.x);
-				testRect.w = (SLIDER_WIDTH + (float)SLIDER_THUMB_WIDTH / 2);
-				//DC->Print("slider w: %f\n", testRect.w);
-				if (Rect_ContainsPoint(&testRect, DC->cursorx, DC->cursory)) {
-					work = DC->cursorx - x;
-					value = work / width;
-					value *= (editDef->maxVal - editDef->minVal);
-					// vm fuckage
-					// value = (((float)(DC->cursorx - x)/ SLIDER_WIDTH) * (editDef->maxVal - editDef->minVal));
-					value += editDef->minVal;
-					DC->setCVar(item->cvar, va("%f", value));
-					return qtrue;
-				}
-			}
-		}
-	}
-//	DC->Print("slider handle key exit\n");
-	return qfalse;
+	double x, low, high;
+	rectDef_t hit;
+	if(!down || !Item_Slider_Data(item, &x, &low, &high) ||
+	   !(item->window.flags & WINDOW_HASFOCUS) ||
+	   !Rect_ContainsPoint(&item->window.rect, DC->cursorx, DC->cursory) ||
+	   (key != K_MOUSE1 && key != K_MOUSE2 && key != K_MOUSE3 && key != K_ENTER)) return qfalse;
+	hit = item->window.rect;
+	hit.x = (float)(x - SLIDER_THUMB_WIDTH / 2);
+	hit.w = SLIDER_WIDTH + SLIDER_THUMB_WIDTH / 2;
+	if(!Rect_ContainsPoint(&hit, DC->cursorx, DC->cursory)) return qfalse;
+	return Item_Slider_SetValue(item, DC->cursorx);
 }
 
 
@@ -3953,6 +3991,9 @@ void Item_TextField_Paint(itemDef_t *item) {
 	if (item->cvar) {
 		DC->getCVarString(item->cvar, buff, sizeof(buff));
 	} 
+	// Cvar contents may have shrunk since the last edit/scroll operation.
+	if(editPtr->paintOffset < 0 || editPtr->paintOffset > (int)strlen(buff))
+		editPtr->paintOffset = 0;
 
 	parent = (menuDef_t*)item->parent;
 
@@ -3980,7 +4021,8 @@ void Item_TextField_Paint(itemDef_t *item) {
 	do
 	{
 		field_offset++;
-		if( buff + editPtr->paintOffset + field_offset == '\0' ) {
+		if( buff[editPtr->paintOffset + field_offset] == '\0' ) {
+			text_len = 0;
 			break; // keep it safe
 		}
 		text_len = DC->textWidth( buff + editPtr->paintOffset + field_offset, item->textscale, 0 );
@@ -4113,7 +4155,6 @@ void Item_Multi_Paint(itemDef_t *item) {
 
 typedef struct {
 	char	*command;
-	int		id;
 	int		defaultbind1_right;
 	int		defaultbind2_right;
 	int		defaultbind1_left;
@@ -4142,7 +4183,8 @@ static bind_t g_bindings[] = {
 	{ "+leanleft",	'q',			-1,	K_DEL,			-1,	-1,	-1 },
 	{ "+prone",		'x',			-1,	K_SHIFT,		-1,	-1,	-1 },
 	{ "+attack",	K_MOUSE1,		-1,	K_MOUSE1,		-1,	-1,	-1 },
-	{ "weapalt",	K_MOUSE2,		-1,	K_MOUSE2,		-1,	-1,	-1 },
+	{ "+attack2",	K_MOUSE2,		-1,	K_MOUSE2,		-1,	-1,	-1 },
+	{ "weapalt",	-1,		-1,	-1,		-1,	-1,	-1 },
 	{ "weapprev",	K_MWHEELDOWN,	-1,	K_MWHEELDOWN,	-1,	-1,	-1 },
 	{ "weapnext",	K_MWHEELUP,		-1,	K_MWHEELUP,		-1,	-1,	-1 },
 	{ "weaponbank 10",	'0',		-1,	'0',			-1,	-1,	-1 },
@@ -4192,6 +4234,8 @@ static bind_t g_bindings[] = {
 	{ "selectbuddy 4",	K_KP_5,			-1,	K_KP_5,			-1,	-1,	-1 },
 	{ "selectbuddy 5",	K_KP_RIGHTARROW,-1,	K_KP_RIGHTARROW,-1,	-1,	-1 },
 	{ "selectbuddy -2",	K_KP_INS,		-1,	K_KP_MINUS,		-1,	-1,	-1 },
+	{ "dropobj", 'h', -1, 'h', -1, -1, -1 },
+	{ "globalstats", 'n', -1, 'n', -1, -1, -1 },
 
 /*	{"+scores", 		-1,				-1, -1, -1},
 	{"+speed",			K_SHIFT,		-1, -1, -1},
@@ -4386,6 +4430,7 @@ void Controls_SetDefaults( qboolean lefthanded ) {
 
 int BindingIDFromName( const char *name ) {
 	int i;
+	if(!name || !*name) return -1;
 	
 	for(i = 0; i < g_bindCount; i++) {
 		if(!Q_stricmp(name, g_bindings[i].command)) {
@@ -4422,12 +4467,13 @@ char* BindingFromName(const char *cvar) {
 
 void Item_Slider_Paint(itemDef_t *item) {
 	vec4_t newColor, lowLight;
-	float x, y, value;
-	menuDef_t *parent = (menuDef_t*)item->parent;
+	float x, y;
+	double origin, low, high;
+	menuDef_t *parent;
+	if(!Item_Slider_Data(item, &origin, &low, &high)) return;
+	parent = (menuDef_t*)item->parent;
 
-	value = (item->cvar) ? DC->getCVarValue(item->cvar) : 0;
-
-	if (item->window.flags & WINDOW_HASFOCUS && item->window.flags & WINDOW_FOCUSPULSE) {
+	if (parent && item->window.flags & WINDOW_HASFOCUS && item->window.flags & WINDOW_FOCUSPULSE) {
 		lowLight[0] = 0.8 * parent->focusColor[0]; 
 		lowLight[1] = 0.8 * parent->focusColor[1]; 
 		lowLight[2] = 0.8 * parent->focusColor[2]; 
@@ -4506,6 +4552,8 @@ qboolean Display_KeyBindPending() {
 qboolean Item_Bind_HandleKey(itemDef_t *item, int key, qboolean down) {
 	int			id;
 	int			i;
+	if(g_waitingForKey && g_bindItem) item = g_bindItem;
+	if(!item || !item->cvar || !*item->cvar) return qfalse;
 
 	if (Rect_ContainsPoint(&item->window.rect, DC->cursorx, DC->cursory) && !g_waitingForKey)
 	{
@@ -4537,8 +4585,15 @@ qboolean Item_Bind_HandleKey(itemDef_t *item, int key, qboolean down) {
 			case K_BACKSPACE:
 				id = BindingIDFromName(item->cvar);
 				if (id != -1) {
+					if(g_bindings[id].bind1 != -1) DC->setBinding(g_bindings[id].bind1, "");
+					if(g_bindings[id].bind2 != -1) DC->setBinding(g_bindings[id].bind2, "");
 					g_bindings[id].bind1 = -1;
 					g_bindings[id].bind2 = -1;
+				} else {
+					int first = -1, second = -1;
+					DC->getKeysForBinding(item->cvar, &first, &second);
+					if(first != -1) DC->setBinding(first, "");
+					if(second != -1) DC->setBinding(second, "");
 				}
 				Controls_SetConfig(qtrue);
 				g_waitingForKey = qfalse;
@@ -4550,11 +4605,13 @@ qboolean Item_Bind_HandleKey(itemDef_t *item, int key, qboolean down) {
 		}
 	}
 
+	id = BindingIDFromName(item->cvar);
 	if (key != -1)
 	{
 
 		for (i=0; i < g_bindCount; i++)
 		{
+			if(i == id) continue;
 
 			if (g_bindings[i].bind2 == key) {
 				g_bindings[i].bind2 = -1;
@@ -4568,8 +4625,6 @@ qboolean Item_Bind_HandleKey(itemDef_t *item, int key, qboolean down) {
 		}
 	}
 
-
-	id = BindingIDFromName(item->cvar);
 
 	if (id != -1) {
 		if (key == -1) {
@@ -4590,10 +4645,22 @@ qboolean Item_Bind_HandleKey(itemDef_t *item, int key, qboolean down) {
 		}
 		else {
 			DC->setBinding( g_bindings[id].bind1, "" );
-			DC->setBinding( g_bindings[id].bind2, "" );
+			if(g_bindings[id].bind2 != -1) DC->setBinding( g_bindings[id].bind2, "" );
 			g_bindings[id].bind1 = key;
 			g_bindings[id].bind2 = -1;
 		}						
+	} else {
+		/* Original menus may bind commands absent from the default table. */
+		int first = -1, second = -1;
+		DC->getKeysForBinding(item->cvar, &first, &second);
+		if(key == -1) {
+			if(first != -1) DC->setBinding(first, "");
+			if(second != -1) DC->setBinding(second, "");
+		} else if((key == first || key == second) && first != -1) {
+			DC->setBinding(first, "");
+		} else {
+			DC->setBinding(key, item->cvar);
+		}
 	}
 
 	Controls_SetConfig(qtrue);	
@@ -4607,9 +4674,14 @@ qboolean Item_Bind_HandleKey(itemDef_t *item, int key, qboolean down) {
 
 void AdjustFrom640(float *x, float *y, float *w, float *h) {
 	//*x = *x * DC->scale + DC->bias;
+#ifdef UIDLL
+	*x *= UI_NitmodXScale(DC);
+	*w *= UI_NitmodXScale(DC);
+#else
 	*x *= DC->xscale;
-	*y *= DC->yscale;
 	*w *= DC->xscale;
+#endif
+	*y *= DC->yscale;
 	*h *= DC->yscale;
 }
 
@@ -7405,7 +7477,7 @@ void BG_PanelButton_RenderEdit( panel_button_t* button ) {
 
 		do {
 			offset++;
-			if( buffer + offset  == '\0' )
+			if( buffer[offset] == '\0' )
 				break;
 		} while( DC->textWidthExt( buffer + offset, button->font->scalex, 0, button->font->font ) > button->rect.w );
 
@@ -7424,7 +7496,7 @@ void BG_PanelButton_RenderEdit( panel_button_t* button ) {
 
 		do {
 			offset++;
-			if( s + offset  == '\0' )
+			if( s[offset] == '\0' )
 				break;
 		} while( DC->textWidthExt( s + offset, button->font->scalex, 0, button->font->font ) > button->rect.w );
 

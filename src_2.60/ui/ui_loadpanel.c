@@ -9,6 +9,58 @@ void UI_LoadPanel_RenderHeaderText( panel_button_t* button );
 void UI_LoadPanel_RenderLoadingText( panel_button_t* button );
 void UI_LoadPanel_RenderPercentageMeter( panel_button_t* button );
 
+/* Original Nitmod UI 0x21f90/0x22000.  These coordinates deliberately stay
+ * in the 640-wide virtual space: the normal panel is 4:3 while status text
+ * may use the additional width exposed by a widescreen renderer. */
+static float UI_NitmodWideXOffset( void ) {
+	return (UI_NitmodWideWidth(&uiInfo.uiDC) - 640) * .5f;
+}
+
+static qboolean UI_NitmodDownloading( void ) {
+	uiClientState_t cstate;
+	char downloadName[MAX_INFO_VALUE];
+
+	trap_GetClientState( &cstate );
+	trap_Cvar_VariableStringBuffer( "cl_downloadName", downloadName,
+		sizeof(downloadName) );
+	return ( cstate.connState == CA_DISCONNECTED ||
+		cstate.connState == CA_CONNECTED ) && downloadName[0];
+}
+
+/* Original UI_LoadPanel_RenderDownloadingBar 0x22690. */
+static void UI_NitmodDrawDownloadBar( void ) {
+	float downloadSize = trap_Cvar_VariableValue( "cl_downloadSize" );
+	float downloadCount = trap_Cvar_VariableValue( "cl_downloadCount" );
+	float fraction;
+	float x, y, w, h;
+	vec4_t background = { 1.f, 1.f, 1.f, .25f };
+
+	if( downloadSize <= 0.f ) {
+		return;
+	}
+	fraction = downloadCount / downloadSize;
+	if( fraction < 0.f ) fraction = 0.f;
+	if( fraction > 1.f ) fraction = 1.f;
+
+	/* Draw in raw screen coordinates, matching the original full-width bar. */
+	x = 0.f;
+	y = 468.f * uiInfo.uiDC.yscale;
+	w = 640.f * uiInfo.uiDC.xscale;
+	h = 12.f * uiInfo.uiDC.yscale;
+	trap_R_SetColor( background );
+	trap_R_DrawStretchPic( x, y, w, h, 0, 0, 1, 1,
+		uiInfo.uiDC.whiteShader );
+
+	x = 2.f * uiInfo.uiDC.xscale;
+	y = 469.f * uiInfo.uiDC.yscale;
+	w = 638.f * fraction * uiInfo.uiDC.xscale;
+	h = 10.f * uiInfo.uiDC.yscale;
+	trap_R_SetColor( colorGreen );
+	trap_R_DrawStretchPic( x, y, w, h, 0, 0, 1, 1,
+		uiInfo.uiDC.whiteShader );
+	trap_R_SetColor( NULL );
+}
+
 // panel_button_text_t FONTNAME = { SCALEX, SCALEY, COLOUR, STYLE, FONT };
 
 panel_button_text_t missiondescriptionTxt = {
@@ -130,6 +182,10 @@ CG_DrawConnectScreen
 static qboolean connect_ownerdraw;
 void UI_DrawLoadPanel( qboolean forcerefresh, qboolean ownerdraw, qboolean uihack ) {
 	static qboolean inside = qfalse;
+	float screenWidth;
+	float screenHeight;
+	float panelX[sizeof(loadpanelButtons) / sizeof(loadpanelButtons[0])];
+	int i;
 
 	if( inside ) {
 		if( !uihack && trap_Cvar_VariableValue( "ui_connecting" ) ) {
@@ -151,7 +207,23 @@ void UI_DrawLoadPanel( qboolean forcerefresh, qboolean ownerdraw, qboolean uihac
 		bg_loadscreeninited = qtrue;
 	}
 
+	/* Original UI_DrawLoadPanel 0x22bf0 clears the entire physical viewport.
+	 * This prevents stale menu pixels around its 4:3 panel on widescreen. */
+	screenWidth = (float)uiInfo.uiDC.glconfig.vidWidth;
+	screenHeight = (float)uiInfo.uiDC.glconfig.vidHeight;
+	trap_R_SetColor( colorBlack );
+	trap_R_DrawStretchPic( 0, 0, screenWidth, screenHeight, 0, 0, 1, 1,
+		uiInfo.uiDC.whiteShader );
+	trap_R_SetColor( NULL );
+
+	/* Original C_PanelButtonsSetup centers the 4:3 panel. Use temporary
+	 * positions so reinitializing or changing resolution cannot add twice. */
+	for(i = 0; loadpanelButtons[i]; ++i) {
+		panelX[i] = loadpanelButtons[i]->rect.x;
+		loadpanelButtons[i]->rect.x += UI_NitmodWideXOffset();
+	}
 	BG_PanelButtonsRender( loadpanelButtons );
+	for(i = 0; loadpanelButtons[i]; ++i) loadpanelButtons[i]->rect.x = panelX[i];
 
 	if( forcerefresh ) {
 		//trap_UpdateScreen();
@@ -268,91 +340,53 @@ void UI_LoadPanel_RenderHeaderText( panel_button_t* button ) {
 #define ESTIMATES 80
 const char *UI_DownloadInfo( const char *downloadName )
 {
-	static char dlText[]	= "Downloading:";
-	static char etaText[]	= "Estimated time left:";
-	static char xferText[]	= "Transfer rate:";
 	static int	tleEstimates[ESTIMATES] = { 60,60,60,60,60,60,60,60,60,60,60,60,60,60,60,60,60,60,60,60,
 											60,60,60,60,60,60,60,60,60,60,60,60,60,60,60,60,60,60,60,60,
 											60,60,60,60,60,60,60,60,60,60,60,60,60,60,60,60,60,60,60,60,
 											60,60,60,60,60,60,60,60,60,60,60,60,60,60,60,60,60,60,60,60 };
 	static int	tleIndex = 0;
-
-	char dlSizeBuf[64], totalSizeBuf[64], xferRateBuf[64], dlTimeBuf[64];
+	char xferRateBuf[64], dlTimeBuf[64];
 	int downloadSize, downloadCount, downloadTime;
-	int xferRate;
-	const char *s, *ds;
+	int elapsed, xferRate;
+	const char *progress;
 
 	downloadSize = trap_Cvar_VariableValue( "cl_downloadSize" );
 	downloadCount = trap_Cvar_VariableValue( "cl_downloadCount" );
 	downloadTime = trap_Cvar_VariableValue( "cl_downloadTime" );
 
 	if( downloadSize > 0 ) {
-		ds = va( "%s (%d%%)", downloadName, (int)( (float)downloadCount * 100.0f / (float)downloadSize ) );
+		int percent = (int)( (float)downloadCount * 100.f / (float)downloadSize );
+		if( percent < 0 ) percent = 0;
+		if( percent > 100 ) percent = 100;
+		progress = va( "%s (%d%%)", downloadName, percent );
 	} else {
-		ds = downloadName;
+		progress = downloadName;
 	}
-
-	UI_ReadableSize( dlSizeBuf,		sizeof dlSizeBuf,		downloadCount );
-	UI_ReadableSize( totalSizeBuf,	sizeof totalSizeBuf,	downloadSize );
 
 	if( downloadCount < 4096 || !downloadTime ) {
-		s = va( "%s\n %s\n%s\n\n%s\n estimating...\n\n%s\n\n%s copied", dlText, ds, totalSizeBuf,
-												etaText,
-												xferText,
-												dlSizeBuf );
-		return s;
-	} else {
-		if( ( uiInfo.uiDC.realTime - downloadTime ) / 1000 ) {
-			xferRate = downloadCount / ( ( uiInfo.uiDC.realTime - downloadTime ) / 1000 );
-		} else {
-			xferRate = 0;
-		}
-		UI_ReadableSize( xferRateBuf, sizeof xferRateBuf, xferRate );
-
-		// Extrapolate estimated completion time
-		if( downloadSize && xferRate ) {
-			int n = downloadSize / xferRate; // estimated time for entire d/l in secs
-			int timeleft = 0, i;
-
-			// We do it in K (/1024) because we'd overflow around 4MB
-			tleEstimates[ tleIndex ] = (n - (((downloadCount/1024) * n) / (downloadSize/1024)));
-			tleIndex++;
-			if( tleIndex >= ESTIMATES )
-				tleIndex = 0;
-
-			for( i = 0; i<ESTIMATES; i++ )
-				timeleft += tleEstimates[ i ];
-
-			timeleft /= ESTIMATES;
-
-			UI_PrintTime( dlTimeBuf, sizeof dlTimeBuf, timeleft );
-		} else {
-			dlTimeBuf[0] = '\0';
-		}
-
-		if( xferRate ) {
-			s = va( "%s\n %s\n%s\n\n%s\n %s\n\n%s\n %s/sec\n\n%s copied", dlText, ds, totalSizeBuf,
-													etaText, dlTimeBuf,
-													xferText, xferRateBuf,
-													dlSizeBuf );
-		} else {
-			if( downloadSize ) {
-				s = va( "%s\n %s\n%s\n\n%s\n estimating...\n\n%s\n\n%s copied", dlText, ds, totalSizeBuf,
-																	   etaText,
-																	   xferText,
-																	   dlSizeBuf );
-			} else {
-				s = va( "%s\n %s\n\n%s\n estimating...\n\n%s\n\n%s copied", dlText, ds,
-																 etaText,
-																 xferText,
-																 dlSizeBuf );
-			}
-		}
-
-		return s;
+		return va( "Estimating download time for '%s'...", downloadName );
 	}
 
-    return "";
+	elapsed = ( uiInfo.uiDC.realTime - downloadTime ) / 1000;
+	xferRate = elapsed > 0 ? downloadCount / elapsed : 0;
+	UI_ReadableSize( xferRateBuf, sizeof(xferRateBuf), xferRate );
+	dlTimeBuf[0] = '\0';
+	if( downloadSize > 0 && xferRate > 0 ) {
+		int totalSeconds = downloadSize / xferRate;
+		int remaining = totalSeconds - downloadCount / xferRate;
+		int average = 0;
+		int i;
+		if( remaining < 0 ) remaining = 0;
+		tleEstimates[tleIndex++] = remaining;
+		if( tleIndex >= ESTIMATES ) tleIndex = 0;
+		for( i = 0; i < ESTIMATES; ++i ) average += tleEstimates[i];
+		UI_PrintTime( dlTimeBuf, sizeof(dlTimeBuf), average / ESTIMATES );
+	}
+	if( xferRate > 0 ) {
+		return va( "File: '%s'\nSpeed: %s/s\n\n^0%s -- %s remaining^7",
+			downloadName, xferRateBuf, progress, dlTimeBuf );
+	}
+	return va( "\n\nEstimating download time for '%s'...", downloadName );
 }
 
 void UI_LoadPanel_RenderLoadingText( panel_button_t* button )
@@ -360,10 +394,9 @@ void UI_LoadPanel_RenderLoadingText( panel_button_t* button )
 	uiClientState_t	cstate;
 	char			downloadName[MAX_INFO_VALUE];
 	char			buff[2560];
-	static connstate_t	lastConnState;
-	static char			lastLoadingText[MAX_INFO_VALUE];
 	char			*p, *s = "";
 	float			y;
+	float			textX;
 
 	trap_GetClientState( &cstate );
 
@@ -372,11 +405,6 @@ void UI_LoadPanel_RenderLoadingText( panel_button_t* button )
 	//Com_sprintf( buff, sizeof(buff), "%s^*", cstate.servername, Info_ValueForKey( cstate.updateInfoString, "motd" ) );
 
 	trap_Cvar_VariableStringBuffer( "cl_downloadName", downloadName, sizeof(downloadName) );
-
-	if ( lastConnState > cstate.connState ) {
-		lastLoadingText[0] = '\0';
-	}
-	lastConnState = cstate.connState;
 
 	if( !connect_ownerdraw ) {
 		if( !trap_Cvar_VariableValue( "ui_connecting" ) ) {
@@ -417,17 +445,50 @@ void UI_LoadPanel_RenderLoadingText( panel_button_t* button )
 	//UI_DrawRect( button->rect.x, button->rect.y, button->rect.w, button->rect.h, colorRed );
 
 	y = button->rect.y + 12;
+	textX = UI_NitmodWideXOffset();
 
 	s = p = buff;
 
 	while( *p ) {
 		if( *p == '\n' ) {
 			*p++ = '\0';
-			Text_Paint_Ext( button->rect.x + 4, y, button->font->scalex, button->font->scaley, button->font->colour, s, 0, 0, 0, button->font->font );
+			Text_Paint_Ext( textX, y, button->font->scalex, button->font->scaley,
+				button->font->colour, s, 0, 0, 0, button->font->font );
 			y += 8;
 			s = p;
 		} else {
 			p++; 
 		}
+	}
+
+	/* Nitmod moves download details out of the narrow side panel and keeps
+	 * them directly above the full-width progress bar. */
+	if( UI_NitmodDownloading() ) {
+		char downloadText[2560];
+		const char *line;
+
+		Q_strncpyz( downloadText, UI_DownloadInfo( downloadName ),
+			sizeof(downloadText) );
+		BG_FitTextToWidth_Ext( downloadText, .2f, 640.f,
+			sizeof(downloadText), &bg_loadscreenfont2 );
+		y = 454.f;
+		line = downloadText;
+		p = downloadText;
+		while( *p ) {
+			if( *p == '\n' ) {
+				*p++ = '\0';
+				Text_Paint_Ext( textX, y, .2f, .2f, colorWhite, line,
+					0, 0, 0, &bg_loadscreenfont2 );
+				y += 8.f;
+				line = p;
+			} else {
+				p++;
+			}
+		}
+		if( line[0] ) {
+			Text_Paint_Ext( textX, y, .2f, .2f, colorWhite, line,
+				0, 0, 0, &bg_loadscreenfont2 );
+		}
+		UI_NitmodDrawDownloadBar();
 	}
 }

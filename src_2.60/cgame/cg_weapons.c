@@ -6,9 +6,28 @@
 */
 
 #include "cg_local.h"
+#include <stdint.h>
+#include "cg_nitmod_ammo.h"
+#include "cg_nitmod_weapon_pose.h"
+#include "cg_nitmod_config.h"
+#include "cg_nitmod_events.h"
 #include "../game/bg_classes.h"
+#include "../game/nitmod_weapon_paths.h"
 
 vec3_t	ejectBrassCasingOrigin;
+
+vmCvar_t cg_tracers, cg_muzzleFlash;
+
+/* Original CG_Bullet: flesh uses any nonzero mode; moving tracers use
+ * 1 = everyone, 2 = everyone except the viewed player. */
+qboolean CG_NitmodTracerEnabled(int mode, qboolean flesh, int source, int viewedClient) {
+	if (flesh) return mode != 0;
+	return mode == 1 || (mode == 2 && source != viewedClient);
+}
+
+qboolean CG_NitmodMuzzleFlashEnabled(int mode, const playerState_t *ps) {
+	return !ps || mode != 0;
+}
 
 //----(SA)	
 // forward decs
@@ -58,6 +77,107 @@ static void CG_ContinueWeaponAnim( int anim ) {
 CG_MachineGunEjectBrassNew
 ==============
 */
+void CG_NitmodWeaponOffset(const weaponInfo_t *weapon, const vec3_t userOffset, vec3_t result) {
+	VectorAdd(userOffset, weapon->offset, result);
+}
+
+qboolean CG_NitmodFlashSmokeParams(const weaponInfo_t *weapon, int weaponNum, int age, nitmodWeaponSmoke_t *smoke) {
+	*smoke = weapon->flashSmoke;
+	if(!smoke->shader) {
+		if(weaponNum != WP_STEN || age >= 100) return qfalse;
+		// Without a custom shader STEN ignores the custom numerical settings.
+		smoke->shader = cgs.media.smokeParticleShader;
+		smoke->life = 500; smoke->alpha = .25f; smoke->size = 8.f;
+	} else {
+		if(!smoke->life) smoke->life = 500;
+		if(smoke->alpha == 0.f) smoke->alpha = .25f;
+		if(smoke->size == 0.f) smoke->size = 8.f;
+	}
+	return qtrue;
+}
+
+void CG_NitmodEmitFlashSmoke(const weaponInfo_t *weapon, int weaponNum, int age, vec3_t origin) {
+	nitmodWeaponSmoke_t smoke;
+	if(CG_NitmodFlashSmokeParams(weapon, weaponNum, age, &smoke))
+		CG_ParticleImpactSmokePuffExtended(smoke.shader, origin, smoke.life, 8, 20, 30, smoke.alpha, smoke.size);
+}
+
+void CG_NitmodShortenWeapon(const weaponInfo_t *weapon, refEntity_t *hand) {
+	if(weapon->foreShorten != 0.0f) {
+		VectorScale(hand->axis[0], weapon->foreShorten, hand->axis[0]);
+		hand->nonNormalizedAxes = qtrue;
+	}
+}
+
+// Original pickup models and skins fall back independently. Missile overrides
+// instead distinguish an absent definition from an explicitly registered zero.
+void CG_NitmodPickupMedia(const weaponInfo_t *weapon, int team, refEntity_t *ent) {
+	ent->hModel = weapon->weaponModel[W_PU_MODEL].model;
+	ent->customSkin = weapon->weaponModel[W_PU_MODEL].skin[0];
+	if(team == TEAM_AXIS || team == TEAM_ALLIES) {
+		if(weapon->pickupTeamModel[team]) ent->hModel = weapon->pickupTeamModel[team];
+		if(weapon->weaponModel[W_PU_MODEL].skin[team]) ent->customSkin = weapon->weaponModel[W_PU_MODEL].skin[team];
+	}
+}
+
+void CG_NitmodViewMedia(const weaponInfo_t *weapon, int view, int team, refEntity_t *ent) {
+	if(!weapon || !ent || view < 0 || view >= W_NUM_TYPES) return;
+	ent->hModel = weapon->weaponModel[view].model;
+	ent->customSkin = weapon->weaponModel[view].skin[0];
+	if(team == TEAM_AXIS || team == TEAM_ALLIES) {
+		if(weapon->viewTeamModel[view][team]) ent->hModel = weapon->viewTeamModel[view][team];
+		if(weapon->weaponModel[view].skin[team]) ent->customSkin = weapon->weaponModel[view].skin[team];
+	}
+}
+
+void CG_NitmodPartMedia(const partModel_t *part, int team, refEntity_t *ent) {
+	if(!part || !ent) return;
+	ent->hModel = part->model;
+	ent->customSkin = part->skin[0];
+	if(team == TEAM_AXIS || team == TEAM_ALLIES) {
+		if(part->teamModel[team]) ent->hModel = part->teamModel[team];
+		if(part->skin[team]) ent->customSkin = part->skin[team];
+	}
+}
+
+void CG_NitmodDrawMortarBipod(const weaponInfo_t *weapon, const refEntity_t *parent,
+	const refEntity_t *barrel, int team) {
+	int leg;
+	if(!weapon || !parent || !barrel) return;
+	for(leg = 0; leg < 2; ++leg) {
+		refEntity_t entity;
+		memset(&entity, 0, sizeof(entity));
+		VectorCopy(parent->lightingOrigin, entity.lightingOrigin);
+		entity.shadowPlane = parent->shadowPlane;
+		entity.renderfx = parent->renderfx;
+		CG_NitmodPartMedia(&weapon->partModels[W_FP_MODEL][W_PART_4 + leg], team, &entity);
+		CG_PositionEntityOnTag(&entity, barrel, leg ? "tag_barrel5" : "tag_barrel4", 0, NULL);
+		trap_R_AddRefEntityToScene(&entity);
+	}
+}
+
+void CG_NitmodMissileMedia(const weaponInfo_t *weapon, int weaponNum, int team, refEntity_t *ent) {
+	if(weaponNum == WP_LANDMINE || weaponNum == WP_DYNAMITE) team %= 4;
+	ent->hModel = weapon->missileModel;
+	ent->customSkin = 0;
+	if(team == TEAM_AXIS || team == TEAM_ALLIES) {
+		if(weapon->missileTeamModelDefined[team]) ent->hModel = weapon->missileTeamModel[team];
+		ent->customSkin = team == TEAM_AXIS ? weapon->missileAxisSkin : weapon->missileAlliedSkin;
+	}
+}
+
+qhandle_t CG_NitmodBrassModel(int weapon) {
+	if(weapon >= 0 && weapon < MAX_WEAPONS && cg_weapons[weapon].brassModel)
+		return cg_weapons[weapon].brassModel;
+	switch(weapon) {
+	case WP_KAR98: case WP_CARBINE: case WP_GARAND: case WP_MOBILE_MG42:
+	case WP_K43: case WP_FG42: case WP_GARAND_SCOPE: case WP_K43_SCOPE:
+	case WP_FG42SCOPE: case WP_MOBILE_MG42_SET:
+		return cgs.media.machinegunBrassModel;
+	default: return cgs.media.smallgunBrassModel;
+	}
+}
+
 void CG_MachineGunEjectBrassNew( centity_t *cent ) {
 	localEntity_t	*le;
 	refEntity_t		*re;
@@ -100,7 +220,7 @@ void CG_MachineGunEjectBrassNew( centity_t *cent ) {
 	VectorScale( xvelocity, waterScale, le->pos.trDelta );
 
 	AxisCopy( axisDefault, re->axis );
-	re->hModel = cgs.media.smallgunBrassModel;
+	re->hModel = CG_NitmodBrassModel(cent->currentState.weapon);
 
 	le->bounceFactor = 0.4 * waterScale;
 
@@ -542,6 +662,7 @@ void CG_RocketTrail( centity_t *ent, const weaponInfo_t *wi ) {
 	entityState_t	*es;
 	int		t;
 //	localEntity_t	*le;
+	if (!cg_trailparticles.integer) return;
 
 	if (ent->currentState.eType == ET_FLAMEBARREL)
 		step = 30;
@@ -586,16 +707,16 @@ void CG_RocketTrail( centity_t *ent, const weaponInfo_t *wi ) {
 		if (ent->currentState.eType == ET_FLAMEBARREL)
 		{
 			if ((rand() % 100) > 50)
-				CG_ParticleExplosion( "twiltb2", lastPos, vec3_origin, 100+(int)(rnd*400), 5, 7+(int)(rnd*10), qfalse );	// fire
+				CG_ParticleExplosionTrail( "twiltb2", lastPos, vec3_origin, 100+(int)(rnd*400), 5, 7+(int)(rnd*10), qfalse );	// fire
 
-			CG_ParticleExplosion( "blacksmokeanim", lastPos, vec3_origin, 800+(int)(rnd*1500), 5, 12+(int)(rnd*30), qfalse );	// smoke
+			CG_ParticleExplosionTrail( "blacksmokeanim", lastPos, vec3_origin, 800+(int)(rnd*1500), 5, 12+(int)(rnd*30), qfalse );	// smoke
 		}
 		else if (ent->currentState.eType == ET_FP_PARTS)
 		{
 			if ((rand() % 100) > 50)
-				CG_ParticleExplosion( "twiltb2", lastPos, vec3_origin, 100+(int)(rnd*400), 5, 7+(int)(rnd*10), qfalse );	// fire
+				CG_ParticleExplosionTrail( "twiltb2", lastPos, vec3_origin, 100+(int)(rnd*400), 5, 7+(int)(rnd*10), qfalse );	// fire
 
-			CG_ParticleExplosion( "blacksmokeanim", lastPos, vec3_origin, 800+(int)(rnd*1500), 5, 12+(int)(rnd*30), qfalse );	// smoke
+			CG_ParticleExplosionTrail( "blacksmokeanim", lastPos, vec3_origin, 800+(int)(rnd*1500), 5, 12+(int)(rnd*30), qfalse );	// smoke
 		}
 		else if (ent->currentState.eType == ET_RAMJET)
 		{
@@ -603,8 +724,8 @@ void CG_RocketTrail( centity_t *ent, const weaponInfo_t *wi ) {
 
 			VectorCopy (ent->lerpOrigin, lastPos);
 			duration = 100;
-			CG_ParticleExplosion( "twiltb2", lastPos, vec3_origin, duration + (int)(rnd*100), 5, 5 +(int)(rnd*10), qfalse );	// fire
-			CG_ParticleExplosion( "blacksmokeanim", lastPos, vec3_origin, 400+(int)(rnd*750), 12, 24+(int)(rnd*30), qfalse );	// smoke
+			CG_ParticleExplosionTrail( "twiltb2", lastPos, vec3_origin, duration + (int)(rnd*100), 5, 5 +(int)(rnd*10), qfalse );	// fire
+			CG_ParticleExplosionTrail( "blacksmokeanim", lastPos, vec3_origin, 400+(int)(rnd*750), 12, 24+(int)(rnd*30), qfalse );	// smoke
 		}
 		else if (ent->currentState.eType == ET_FIRE_COLUMN || ent->currentState.eType == ET_FIRE_COLUMN_SMOKE)
 		{
@@ -637,17 +758,17 @@ void CG_RocketTrail( centity_t *ent, const weaponInfo_t *wi ) {
 			if (!sizeEnd)
 				sizeEnd = 7;
 
-			CG_ParticleExplosion( "twiltb2", lastPos, vec3_origin, duration + (int)(rnd*400), sizeStart, sizeEnd +(int)(rnd*10), qfalse );	// fire
+			CG_ParticleExplosionTrail( "twiltb2", lastPos, vec3_origin, duration + (int)(rnd*400), sizeStart, sizeEnd +(int)(rnd*10), qfalse );	// fire
 
 			if (ent->currentState.eType == ET_FIRE_COLUMN_SMOKE && (rand() % 100) > 50)
 			{
-				CG_ParticleExplosion( "blacksmokeanim", lastPos, vec3_origin, 800+(int)(rnd*1500), 5, 12+(int)(rnd*30), qfalse );	// smoke
+				CG_ParticleExplosionTrail( "blacksmokeanim", lastPos, vec3_origin, 800+(int)(rnd*1500), 5, 12+(int)(rnd*30), qfalse );	// smoke
 			}
 		}
 		else
 		{
-			//CG_ParticleExplosion( "twiltb", lastPos, vec3_origin, 300+(int)(rnd*100), 4, 14+(int)(rnd*8) );	// fire
-			CG_ParticleExplosion( "blacksmokeanim", lastPos, vec3_origin, 800+(int)(rnd*1500), 5, 12+(int)(rnd*30), qfalse );	// smoke
+			//CG_ParticleExplosionTrail( "twiltb", lastPos, vec3_origin, 300+(int)(rnd*100), 4, 14+(int)(rnd*8) );	// fire
+			CG_ParticleExplosionTrail( "blacksmokeanim", lastPos, vec3_origin, 800+(int)(rnd*1500), 5, 12+(int)(rnd*30), qfalse );	// smoke
 		}
 	}
 /*
@@ -701,6 +822,7 @@ static void CG_GrenadeTrail( centity_t *ent, const weaponInfo_t *wi ) {
 	int		lastContents, startTime;
 	entityState_t	*es;
 	int		t;
+	if (!cg_trailparticles.integer) return;
 
 	step = 15;	// nice and smooth curves
 
@@ -881,7 +1003,18 @@ CG_ParseWeaponConfig
 	read information for weapon animations (first/length/fps)
 ======================
 */
-static qboolean	CG_ParseWeaponConfig( const char *filename, weaponInfo_t *wi ) {
+static qboolean CG_WeaponConfigNumber(char **cursor, double *value, qboolean integer) {
+	char *token = COM_Parse(cursor), *end;
+	double number;
+	if(!token || !*token) return qfalse;
+	number = strtod(token, &end);
+	if(*end || !(number >= -2147483648.0 && number <= 2147483647.0) ||
+	   (integer && number != (double)(int)number)) return qfalse;
+	*value = number;
+	return qtrue;
+}
+
+qboolean CG_ParseWeaponConfig( const char *filename, weaponInfo_t *wi ) {
 	char		*text_p, *prev;
 	int			len;
 	int			i;
@@ -889,15 +1022,21 @@ static qboolean	CG_ParseWeaponConfig( const char *filename, weaponInfo_t *wi ) {
 	char		*token;
 	qboolean	newfmt = qfalse;	//----(SA)	
 	char		text[20000];
-	fileHandle_t	f;
+	fileHandle_t	f = 0;
+	animation_t parsed[MAX_WP_ANIMATIONS];
+	double number;
+	if(!filename || !wi) return qfalse;
+	memcpy(parsed, wi->weapAnimations, sizeof(parsed));
 
 	// load the file
 	len = trap_FS_FOpenFile( filename, &f, FS_READ );
 	if ( len <= 0 ) {
+		if(f) trap_FS_FCloseFile(f);
 		return qfalse;
 	}
 
 	if ( len >= sizeof( text ) - 1 ) {
+		if(f) trap_FS_FCloseFile(f);
 		CG_Printf( "File %s too long\n", filename );
 		return qfalse;
 	}
@@ -913,7 +1052,7 @@ static qboolean	CG_ParseWeaponConfig( const char *filename, weaponInfo_t *wi ) {
 	while ( 1 ) {
 		prev = text_p;	// so we can unget
 		token = COM_Parse( &text_p );
-		if ( !token ) {						// get the variable
+		if ( !token || !*token ) {
 			break;
 		}
 /*		if ( !Q_stricmp( token, "whatever_variable" ) ) {
@@ -939,61 +1078,63 @@ static qboolean	CG_ParseWeaponConfig( const char *filename, weaponInfo_t *wi ) {
 
 
 	for ( i = 0 ; i < MAX_WP_ANIMATIONS  ; i++ ) {
+		/* Older tool/pack assets omit alternate-switch and DROP2 rows.
+		 * Accept only clean EOF here, never a partially written row. */
+		if(i >= WEAP_ALTSWITCHFROM) {
+			prev = text_p;
+			token = COM_Parse(&text_p);
+			if(!*token) {
+				for(; i < MAX_WP_ANIMATIONS; ++i)
+					parsed[i] = parsed[i == WEAP_DROP2 ? WEAP_DROP : WEAP_IDLE1];
+				break;
+			}
+			text_p = prev;
+		}
 
-		token = COM_Parse( &text_p );	// first frame
-		if ( !token ) break;
-		wi->weapAnimations[i].firstFrame = atoi( token );
+		if(!CG_WeaponConfigNumber(&text_p, &number, qtrue)) break;
+		parsed[i].firstFrame = (int)number;
 
-		token = COM_Parse( &text_p );	// length
-		if ( !token ) break;
-		wi->weapAnimations[i].numFrames = atoi( token );
+		if(!CG_WeaponConfigNumber(&text_p, &number, qtrue) || number < 0) break;
+		parsed[i].numFrames = (int)number;
 
-		token = COM_Parse( &text_p );	// fps
-		if ( !token ) break;
-		fps = atof( token );
+		if(!CG_WeaponConfigNumber(&text_p, &number, qfalse) || number < 0) break;
+		fps = (float)number;
 		if ( fps == 0 ) {
 			fps = 1;
 		}
 
-		wi->weapAnimations[i].frameLerp = 1000 / fps;
-		wi->weapAnimations[i].initialLerp = 1000 / fps;
+		if(!(1000.0 / fps <= 2147483647.0)) break;
+		parsed[i].frameLerp = (int)(1000.0 / fps);
+		parsed[i].initialLerp = parsed[i].frameLerp;
 
-		token = COM_Parse( &text_p );	// looping frames
-		if ( !token ) break;
-		wi->weapAnimations[i].loopFrames = atoi( token );
-		if(wi->weapAnimations[i].loopFrames > wi->weapAnimations[i].numFrames)
-			wi->weapAnimations[i].loopFrames = wi->weapAnimations[i].numFrames;
-		else if(wi->weapAnimations[i].loopFrames < 0)
-			wi->weapAnimations[i].loopFrames = 0;
+		if(!CG_WeaponConfigNumber(&text_p, &number, qtrue)) break;
+		parsed[i].loopFrames = (int)number;
+		if(parsed[i].loopFrames > parsed[i].numFrames) parsed[i].loopFrames = parsed[i].numFrames;
+		else if(parsed[i].loopFrames < 0) parsed[i].loopFrames = 0;
 
 
 		// store animation/draw bits in '.moveSpeed'
 
-		wi->weapAnimations[i].moveSpeed = 0;
+		parsed[i].moveSpeed = 0;
 
 		if(newfmt) {
-			token = COM_Parse( &text_p );	// barrel anim bits
-			if ( !token ) break;
-			wi->weapAnimations[i].moveSpeed = atoi(token);
+			if(!CG_WeaponConfigNumber(&text_p, &number, qtrue)) break;
+			parsed[i].moveSpeed = (int)number;
 
-			token = COM_Parse( &text_p );	// animated weapon
-			if ( !token ) break;
-			if(atoi(token))
-				wi->weapAnimations[i].moveSpeed |= (1<<W_MAX_PARTS);	// set the bit one higher than can be set by the barrel bits
+			if(!CG_WeaponConfigNumber(&text_p, &number, qtrue)) break;
+			if(number) parsed[i].moveSpeed |= (1 << W_MAX_PARTS);
 
-			token = COM_Parse( &text_p );	// barrel hide bits (so objects can be flagged to not be drawn during all sequences (a reloading hand that comes in from off screen for that one animation for example)
-			if ( !token ) break;
-			wi->weapAnimations[i].moveSpeed |= ((atoi(token))<<8 );	// use 2nd byte for draw bits
+			if(!CG_WeaponConfigNumber(&text_p, &number, qtrue)) break;
+			parsed[i].moveSpeed |= (int)((unsigned int)(int)number << 8);
 		}
 
 	}
 
 	if ( i != MAX_WP_ANIMATIONS ) {
-		CG_Printf( "Error parsing weapon animation file: %s", filename );
+		CG_Printf( "Error parsing weapon animation file: %s\n", filename );
 		return qfalse;
 	}
-
-
+	memcpy(wi->weapAnimations, parsed, sizeof(parsed));
 	return qtrue;
 }
 
@@ -1045,7 +1186,7 @@ static qboolean CG_RW_ParseWeaponLinkPart( int handle, weaponInfo_t *weaponInfo,
 
 	while( 1 ) {
 		if( !trap_PC_ReadToken( handle, &token ) ) {
-			break;
+			return CG_RW_ParseError(handle, "unterminated CG_RW_ParseWeaponLinkPart block");
 		}
 
 		if( token.string[0] == '}' ) {
@@ -1061,6 +1202,11 @@ static qboolean CG_RW_ParseWeaponLinkPart( int handle, weaponInfo_t *weaponInfo,
 			} else {
 				partModel->model = trap_R_RegisterModel( filename );
 			}
+		} else if(!Q_stricmp(token.string, "axisModel") || !Q_stricmp(token.string, "alliedModel")) {
+			int team = !Q_stricmp(token.string, "axisModel") ? TEAM_AXIS : TEAM_ALLIES;
+			if(!PC_String_ParseNoAlloc(handle, filename, sizeof(filename)))
+				return CG_RW_ParseError(handle, "expected model filename");
+			partModel->teamModel[team] = trap_R_RegisterModel(filename);
 		} else if( !Q_stricmp( token.string, "skin" ) ) {
 			if( !PC_String_ParseNoAlloc( handle, filename, sizeof(filename) ) ) {
 				return CG_RW_ParseError( handle, "expected skin filename" );
@@ -1097,7 +1243,7 @@ static qboolean CG_RW_ParseWeaponLink( int handle, weaponInfo_t *weaponInfo, mod
 
 	while( 1 ) {
 		if( !trap_PC_ReadToken( handle, &token ) ) {
-			break;
+			return CG_RW_ParseError(handle, "unterminated CG_RW_ParseWeaponLink block");
 		}
 
 		if( token.string[0] == '}' ) {
@@ -1126,7 +1272,7 @@ static qboolean CG_RW_ParseViewType( int handle, weaponInfo_t *weaponInfo, model
 
 	while( 1 ) {
 		if( !trap_PC_ReadToken( handle, &token ) ) {
-			break;
+			return CG_RW_ParseError(handle, "unterminated CG_RW_ParseViewType block");
 		}
 
 		if( token.string[0] == '}' ) {
@@ -1139,6 +1285,11 @@ static qboolean CG_RW_ParseViewType( int handle, weaponInfo_t *weaponInfo, model
 			} else {
 				weaponInfo->weaponModel[viewType].model = trap_R_RegisterModel( filename );
 			}
+		} else if( !Q_stricmp(token.string, "axisModel") || !Q_stricmp(token.string, "alliedModel") ) {
+			int team = !Q_stricmp(token.string, "axisModel") ? TEAM_AXIS : TEAM_ALLIES;
+			if(!PC_String_ParseNoAlloc(handle, filename, sizeof(filename)))
+				return CG_RW_ParseError(handle, "expected model filename");
+			weaponInfo->viewTeamModel[viewType][team] = trap_R_RegisterModel(filename);
 		} else if( !Q_stricmp( token.string, "skin" ) ) {
 			if( !PC_String_ParseNoAlloc( handle, filename, sizeof(filename) ) ) {
 				return CG_RW_ParseError( handle, "expected skin filename" );
@@ -1211,7 +1362,7 @@ static qboolean CG_RW_ParseClient( int handle, weaponInfo_t *weaponInfo )
 
 	while( 1 ) {
 		if( !trap_PC_ReadToken( handle, &token ) ) {
-			break;
+			return CG_RW_ParseError(handle, "unterminated CG_RW_ParseClient block");
 		}
 
 		if( token.string[0] == '}' ) {
@@ -1224,6 +1375,34 @@ static qboolean CG_RW_ParseClient( int handle, weaponInfo_t *weaponInfo )
 			} else {
 				weaponInfo->standModel = trap_R_RegisterModel( filename );
 			}
+		} else if( !Q_stricmp( token.string, "weaponIconScale" ) ) {
+			if(!PC_Int_Parse(handle, &weaponInfo->weaponIconScale))
+				return CG_RW_ParseError(handle, "expected weaponIconScale integer");
+		} else if(!Q_stricmp(token.string, "recoil_pitchAdd") ||
+		          !Q_stricmp(token.string, "recoil_yawRandom") ||
+		          !Q_stricmp(token.string, "recoil_pitchAddRandom")) {
+			int *value = !Q_stricmp(token.string, "recoil_pitchAdd") ? &weaponInfo->recoilPitchAdd :
+				!Q_stricmp(token.string, "recoil_yawRandom") ? &weaponInfo->recoilYawRandom : &weaponInfo->recoilPitchAddRandom;
+			if(!PC_Int_Parse(handle, value)) return CG_RW_ParseError(handle, "expected recoil integer");
+		} else if( !Q_stricmp( token.string, "foreShorten" ) ) {
+			if(!PC_Float_Parse(handle, &weaponInfo->foreShorten))
+				return CG_RW_ParseError(handle, "expected foreShorten value");
+		} else if( !Q_stricmp( token.string, "offset" ) ) {
+			if(!PC_Vec_Parse(handle, &weaponInfo->offset))
+				return CG_RW_ParseError(handle, "expected offset vector");
+		} else if( !Q_stricmp( token.string, "flashSmokeShader" ) ) {
+			if(!PC_String_ParseNoAlloc(handle, filename, sizeof(filename)))
+				return CG_RW_ParseError(handle, "expected flashSmokeShader filename");
+			weaponInfo->flashSmoke.shader = trap_R_RegisterShader(filename);
+		} else if( !Q_stricmp( token.string, "flashSmokeLife" ) ) {
+			if(!PC_Int_Parse(handle, &weaponInfo->flashSmoke.life))
+				return CG_RW_ParseError(handle, "expected flashSmokeLife integer");
+		} else if( !Q_stricmp( token.string, "flashSmokeAlpha" ) ) {
+			if(!PC_Float_Parse(handle, &weaponInfo->flashSmoke.alpha))
+				return CG_RW_ParseError(handle, "expected flashSmokeAlpha value");
+		} else if( !Q_stricmp( token.string, "flashSmokeSize" ) ) {
+			if(!PC_Float_Parse(handle, &weaponInfo->flashSmoke.size))
+				return CG_RW_ParseError(handle, "expected flashSmokeSize value");
 		} else if( !Q_stricmp( token.string, "droppedAnglesHack" ) ) {
 			weaponInfo->droppedAnglesHack = qtrue;
 		} else if( !Q_stricmp( token.string, "pickupModel" ) ) {
@@ -1232,6 +1411,17 @@ static qboolean CG_RW_ParseClient( int handle, weaponInfo_t *weaponInfo )
 			} else {
 				weaponInfo->weaponModel[W_PU_MODEL].model = trap_R_RegisterModel( filename );
 			}
+		} else if( !Q_stricmp( token.string, "axisPickupModel" ) || !Q_stricmp( token.string, "alliedPickupModel" ) ) {
+			int team = !Q_stricmp(token.string, "axisPickupModel") ? TEAM_AXIS : TEAM_ALLIES;
+			if(!PC_String_ParseNoAlloc(handle, filename, sizeof(filename)))
+				return CG_RW_ParseError(handle, "expected team pickup model filename");
+			weaponInfo->pickupTeamModel[team] = trap_R_RegisterModel(filename);
+		} else if( !Q_stricmp( token.string, "pickupSkin" ) || !Q_stricmp( token.string, "axisPickupSkin" ) || !Q_stricmp( token.string, "alliedPickupSkin" ) ) {
+			int team = !Q_stricmp(token.string, "pickupSkin") ? 0 :
+				(!Q_stricmp(token.string, "axisPickupSkin") ? TEAM_AXIS : TEAM_ALLIES);
+			if(!PC_String_ParseNoAlloc(handle, filename, sizeof(filename)))
+				return CG_RW_ParseError(handle, "expected pickup skin filename");
+			weaponInfo->weaponModel[W_PU_MODEL].skin[team] = trap_R_RegisterSkin(filename);
 		} else if( !Q_stricmp( token.string, "pickupSound" ) ) {
 			if( !PC_String_ParseNoAlloc( handle, filename, sizeof(filename) ) ) {
 				return CG_RW_ParseError( handle, "expected pickupSound filename" );
@@ -1295,6 +1485,18 @@ static qboolean CG_RW_ParseClient( int handle, weaponInfo_t *weaponInfo )
 				if( i == 4 )
 					CG_Printf( S_COLOR_YELLOW "WARNING: only up to 4 lastShotSound supported per weapon\n" );
 			}
+		} else if( !Q_stricmp(token.string, "deathBySound") || !Q_stricmp(token.string, "deathBySoundFar") ) {
+			qboolean farSound = !Q_stricmp(token.string, "deathBySoundFar");
+			sfxHandle_t *sounds = farSound ? weaponInfo->deathBySoundFar : weaponInfo->deathBySound;
+			int *count = farSound ? &weaponInfo->deathBySoundFarCount : &weaponInfo->deathBySoundCount;
+			if(!PC_String_ParseNoAlloc(handle, filename, sizeof(filename)))
+				return CG_RW_ParseError(handle, "expected %s filename", token.string);
+			for(i = 0; i < 4; ++i) if(!sounds[i]) {
+				sounds[i] = trap_S_RegisterSound(filename, qfalse);
+				*count = i + 1;
+				break;
+			}
+			if(i == 4) CG_Printf("^3WARNING: only up to 4 %s supported per weapon\n", token.string);
 		} else if( !Q_stricmp( token.string, "readySound" ) ) {
 			if( !PC_String_ParseNoAlloc( handle, filename, sizeof(filename) ) ) {
 				return CG_RW_ParseError( handle, "expected readySound filename" );
@@ -1367,6 +1569,12 @@ static qboolean CG_RW_ParseClient( int handle, weaponInfo_t *weaponInfo )
 			} else {
 				weaponInfo->missileModel = trap_R_RegisterModel( filename );
 			}
+		} else if( !Q_stricmp( token.string, "AxisMissileModel" ) || !Q_stricmp( token.string, "AlliedMissileModel" ) ) {
+			int team = !Q_stricmp(token.string, "AxisMissileModel") ? TEAM_AXIS : TEAM_ALLIES;
+			if(!PC_String_ParseNoAlloc(handle, filename, sizeof(filename)))
+				return CG_RW_ParseError(handle, "expected team missile model filename");
+			weaponInfo->missileTeamModel[team] = trap_R_RegisterModel(filename);
+			weaponInfo->missileTeamModelDefined[team] = qtrue;
 		} else if( !Q_stricmp( token.string, "missileAlliedSkin" ) ) {
 			if( !PC_String_ParseNoAlloc( handle, filename, sizeof(filename) ) ) {
 				return CG_RW_ParseError( handle, "expected skin filename" );
@@ -1407,6 +1615,10 @@ static qboolean CG_RW_ParseClient( int handle, weaponInfo_t *weaponInfo )
 			if( !PC_Vec_Parse( handle, &weaponInfo->missileDlightColor ) ) {
 				return CG_RW_ParseError( handle, "expected missileDlightColor as r g b" );
 			}
+		} else if(!Q_stricmp(token.string, "brassModel")) {
+			if(!PC_String_ParseNoAlloc(handle, filename, sizeof(filename)))
+				return CG_RW_ParseError(handle, "expected brassModel filename");
+			weaponInfo->brassModel = trap_R_RegisterModel(filename);
 		} else if( !Q_stricmp( token.string, "ejectBrassFunc" ) ) {
 			if( !PC_String_ParseNoAlloc( handle, filename, sizeof(filename) ) ) {
 				return CG_RW_ParseError( handle, "expected ejectBrassFunc" );
@@ -1454,6 +1666,7 @@ static qboolean CG_RegisterWeaponFromWeaponFile( const char *filename, weaponInf
 {
 	pc_token_t token;
 	int handle;
+	qboolean clientComplete = qfalse;
 
 	handle = trap_PC_LoadSource( filename );
 
@@ -1470,7 +1683,9 @@ static qboolean CG_RegisterWeaponFromWeaponFile( const char *filename, weaponInf
 
 	while( 1 ) {
 		if( !trap_PC_ReadToken( handle, &token ) ) {
-			break;
+			/* Original knife.weap ends after the complete client block. */
+			if(clientComplete) break;
+			return CG_RW_ParseError(handle, "unterminated CG_RegisterWeaponFromWeaponFile block");
 		}
 
 		if( token.string[0] == '}' ) {
@@ -1481,6 +1696,7 @@ static qboolean CG_RegisterWeaponFromWeaponFile( const char *filename, weaponInf
 			if( !CG_RW_ParseClient( handle, weaponInfo ) ) {
 				return qfalse;
 			}
+			clientComplete = qtrue;
 		} else if( !Q_stricmp( token.string, "both" ) ||
 			!Q_stricmp( token.string, "both_altweap" ) ) {
 			if( !CG_RW_SkipSharedDefinition( handle ) ) return qfalse;
@@ -1499,9 +1715,35 @@ static qboolean CG_RegisterWeaponFromWeaponFile( const char *filename, weaponInf
 CG_RegisterWeapon
 =================
 */
+/* Private wire identities retain separate typed media, never alias an ET
+ * gameplay weapon or change the shared engine ABI. */
+static weaponInfo_t nitmodPrivateMedia[4];
+static const int nitmodPrivateIds[4] = {47, 48, 50, 51};
+const weaponInfo_t *CG_NitmodPrivateWeaponMedia(int wireWeapon) {
+	int i;
+	for(i = 0; i < 4; ++i)
+		if(nitmodPrivateIds[i] == wireWeapon && nitmodPrivateMedia[i].registered)
+			return &nitmodPrivateMedia[i];
+	return NULL;
+}
+void CG_NitmodRegisterPrivateWeaponMedia(void) {
+	static const char *files[4] = {"weapons/poison.weap", "weapons/bomb.weap",
+		"weapons/poisongas.weap", "weapons/landmine_pgas.weap"};
+	int i;
+	memset(nitmodPrivateMedia, 0, sizeof(nitmodPrivateMedia));
+	if(!NITMOD_UsesOriginalProtocol()) return;
+	for(i = 0; i < 4; ++i) {
+		weaponInfo_t *media = &nitmodPrivateMedia[i];
+		if(CG_RegisterWeaponFromWeaponFile(files[i], media)) media->registered = qtrue;
+		else memset(media, 0, sizeof(*media));
+	}
+}
+
 void CG_RegisterWeapon( int weaponNum, qboolean force ) {
 	weaponInfo_t	*weaponInfo;
-	char			*filename;
+	weaponInfo_t previous;
+	const char *filename;
+	const nitmodWeaponPath_t *path;
 
 	if( weaponNum <= 0 || weaponNum >= WP_NUM_WEAPONS )
 		return;
@@ -1512,70 +1754,29 @@ void CG_RegisterWeapon( int weaponNum, qboolean force ) {
 		return;
 	}
 
+	previous = *weaponInfo;
 	memset( weaponInfo, 0, sizeof( *weaponInfo ) );
 	weaponInfo->registered = qtrue;
 
-	/*for( item = bg_itemlist + 1 ; item->classname ; item++ ) {
-		if( item->giType == IT_WEAPON && item->giTag == weaponNum ) {
-			weaponInfo->item = item;
-			break;
-		}
-	}
-
-	if( !item->classname ) {
-		CG_Error( "Couldn't find weapon %i", weaponNum );
-	}*/
-
-	switch( weaponNum ) {
-		case WP_KNIFE:					filename = "knife.weap"; break;
-		case WP_LUGER:					filename = "luger.weap"; break;
-		case WP_COLT:					filename = "colt.weap"; break;
-		case WP_MP40:					filename = "mp40.weap"; break;
-		case WP_THOMPSON:				filename = "thompson.weap"; break;
-		case WP_STEN:					filename = "sten.weap"; break;
-		case WP_GRENADE_LAUNCHER:		filename = "grenade.weap"; break;
-		case WP_GRENADE_PINEAPPLE:		filename = "pineapple.weap"; break;
-		case WP_PANZERFAUST:			filename = "panzerfaust.weap"; break;
-		case WP_FLAMETHROWER:			filename = "flamethrower.weap"; break;
-		case WP_AMMO:					filename = "ammopack.weap"; break;
-		case WP_SMOKETRAIL:				filename = "smoketrail.weap"; break;
-		case WP_MEDKIT:					filename = "medpack.weap"; break;
-		case WP_PLIERS:					filename = "pliers.weap"; break;
-		case WP_SMOKE_MARKER:			filename = "smokemarker.weap"; break;
-		case WP_DYNAMITE:				filename = "dynamite.weap"; break;
-		case WP_MEDIC_ADRENALINE:		filename = "adrenaline.weap"; break;
-		case WP_MEDIC_SYRINGE:			filename = "syringe.weap"; break;
-		case WP_BINOCULARS:				filename = "binocs.weap"; break;
-		case WP_KAR98:					filename = "kar98.weap"; break;
-		case WP_GPG40:					filename = "gpg40.weap"; break;
-		case WP_CARBINE:				filename = "m1_garand.weap"; break;
-		case WP_M7:						filename = "m7.weap"; break;
-		case WP_GARAND:
-		case WP_GARAND_SCOPE:			filename = "m1_garand_s.weap"; break;
-		case WP_FG42:
-		case WP_FG42SCOPE:				filename = "fg42.weap"; break;
-		case WP_LANDMINE:				filename = "landmine.weap"; break;
-		case WP_SATCHEL:				filename = "satchel.weap"; break;
-		case WP_SATCHEL_DET:			filename = "satchel_det.weap"; break;
-		case WP_SMOKE_BOMB:				filename = "smokegrenade.weap"; break;
-		case WP_MOBILE_MG42_SET: // do we need a seperate file for this?
-		case WP_MOBILE_MG42:			filename = "mg42.weap"; break;
-		case WP_SILENCER:				filename = "silenced_luger.weap"; break;
-		case WP_SILENCED_COLT:			filename = "silenced_colt.weap"; break;
-		case WP_K43:
-		case WP_K43_SCOPE:				filename = "k43.weap"; break;
-		case WP_MORTAR:					filename = "mortar.weap"; break;
-		case WP_MORTAR_SET:				filename = "mortar_set.weap"; break;
-		case WP_AKIMBO_LUGER:			filename = "akimbo_luger.weap"; break;
-		case WP_AKIMBO_SILENCEDLUGER:	filename = "akimbo_silenced_luger.weap"; break;
-		case WP_AKIMBO_COLT:			filename = "akimbo_colt.weap"; break;
-		case WP_AKIMBO_SILENCEDCOLT:	filename = "akimbo_silenced_colt.weap"; break;
-		case WP_MAPMORTAR:				filename = "mapmortar.weap"; break;	// do we really need this?
-		case WP_ARTY:					return;	// to shut the game up
-		default:						CG_Printf( S_COLOR_RED "WARNING: trying to register weapon %i but there is no weapon file entry for it.\n", weaponNum ); return;
+	path = NITMOD_WeaponPath(weaponNum);
+	if(path) {
+		filename = path->filename;
+	} else if(weaponNum == WP_MAPMORTAR) {
+		// ET-native compatibility entry, not an original Nitmod wire identity.
+		filename = "mapmortar.weap";
+	} else if(weaponNum == WP_ARTY) {
+		return;
+	} else {
+		CG_Printf(S_COLOR_RED "WARNING: no weapon file entry for %i\n", weaponNum);
+		return;
 	}
 
 	if( !CG_RegisterWeaponFromWeaponFile( va( "weapons/%s", filename ), weaponInfo ) ) {
+		// Never expose a half-parsed model hierarchy. Keep a prior valid
+		// registration on forced reload; otherwise retain an empty cached failure.
+		if(previous.registered) *weaponInfo = previous;
+		else memset(weaponInfo, 0, sizeof(*weaponInfo));
+		weaponInfo->registered = qtrue;
 		CG_Printf( S_COLOR_RED "WARNING: failed to register media for weapon %i from %s\n", weaponNum, filename );
 	}
 }
@@ -1599,7 +1800,7 @@ void CG_RegisterItemVisuals( int itemNum ) {
 
 	item = &bg_itemlist[ itemNum ];
 
-	memset( itemInfo, 0, sizeof( &itemInfo ) );
+	memset( itemInfo, 0, sizeof( *itemInfo ) );
 
 	if( item->giType == IT_WEAPON ) {
 		return;
@@ -1643,34 +1844,39 @@ CG_GetPartFramesFromWeap
 ==============
 */
 qboolean CG_GetPartFramesFromWeap( centity_t *cent, refEntity_t *part, refEntity_t *parent, int partid, weaponInfo_t *wi ) {
-	int i;
-	int frameoffset = 0;
+	int i, animationNumber;
+	int64_t frameoffset = 0, frame, oldframe;
+	unsigned int bit;
 	animation_t *anim;
-
+	if(!cent || !part || !parent || !wi || partid < 0 || partid > W_MAX_PARTS) return qfalse;
+	animationNumber = cent->pe.weap.animationNumber & ~ANIM_TOGGLEBIT;
+	if(animationNumber < 0 || animationNumber >= MAX_WP_ANIMATIONS) return qfalse;
 	anim = cent->pe.weap.animation;
-
-	if( partid == W_MAX_PARTS ) {
-		return qtrue;	// primary weap model drawn for all frames right now
-	}
+	if(!anim) return qfalse;
+	bit = 1u << partid;
 
 	// check draw bit
-	if( anim->moveSpeed & (1<<(partid+8)) ) {	// hide bits are in high byte
+	if(partid != W_MAX_PARTS && ((unsigned int)anim->moveSpeed & (1u << (partid + 8)))) {
 		return qfalse;	// not drawn for current sequence
 	}
 
 	// find part's start frame for this animation sequence
 	// rain - & out ANIM_TOGGLEBIT or we'll go way out of bounds
-	for( i = 0; i < (cent->pe.weap.animationNumber & ~ANIM_TOGGLEBIT); i++ ) {
-		if( wi->weapAnimations[i].moveSpeed & (1<<partid) )	{	// this part has animation for this sequence
+	for( i = 0; i < animationNumber; i++ ) {
+		if( (unsigned int)wi->weapAnimations[i].moveSpeed & bit ) {
 			frameoffset += wi->weapAnimations[i].numFrames;
 		}
 	}
 
 	// now set the correct frame into the part
-	if( anim->moveSpeed & (1<<partid) ) {
+	if( (unsigned int)anim->moveSpeed & bit ) {
+		oldframe = frameoffset + (int64_t)parent->oldframe - anim->firstFrame;
+		frame = frameoffset + (int64_t)parent->frame - anim->firstFrame;
+		if(oldframe < (-2147483647LL-1) || oldframe > 2147483647LL ||
+		   frame < (-2147483647LL-1) || frame > 2147483647LL) return qfalse;
 		part->backlerp	= parent->backlerp;
-		part->oldframe	= frameoffset + ( parent->oldframe - anim->firstFrame);
-		part->frame		= frameoffset + ( parent->frame - anim->firstFrame);
+		part->oldframe	= (int)oldframe;
+		part->frame		= (int)frame;
 	}
 
 	return qtrue;
@@ -1696,7 +1902,10 @@ static void CG_SetWeapLerpFrameAnimation( weaponInfo_t *wi, lerpFrame_t *lf, int
 	anim = &wi->weapAnimations[ newAnimation ];
 
 	lf->animation		= anim;
-	lf->animationTime	= lf->frameTime + anim->initialLerp;
+	{
+		int64_t time = (int64_t)lf->frameTime + anim->initialLerp;
+		lf->animationTime = time > 2147483647LL ? 2147483647 : time < (-2147483647LL-1) ? (-2147483647-1) : (int)time;
+	}
 
 	if ( cg_debugAnim.integer & 2) {
 		CG_Printf( "Weap Anim: %d\n", newAnimation );
@@ -1726,9 +1935,13 @@ Sets cg.snap, cg.oldFrame, and cg.backlerp
 cg.time should be between oldFrameTime and frameTime after exit
 ===============
 */
-static void CG_RunWeapLerpFrame( clientInfo_t *ci, weaponInfo_t *wi, lerpFrame_t *lf, int newAnimation, float speedScale ) {
-	int			f;
+void CG_RunWeapLerpFrame( clientInfo_t *ci, weaponInfo_t *wi, lerpFrame_t *lf, int newAnimation, float speedScale ) {
+	int64_t f;
 	animation_t	*anim;
+	int sequence = newAnimation & ~ANIM_TOGGLEBIT;
+	(void)ci;
+	if(!wi || !lf || sequence < 0 || sequence >= MAX_WP_ANIMATIONS ||
+	   !(speedScale >= 0 && speedScale <= 1000)) return;
 
 	// debugging tool to get no animations
 	if ( cg_animSpeed.integer == 0 ) {
@@ -1741,7 +1954,7 @@ static void CG_RunWeapLerpFrame( clientInfo_t *ci, weaponInfo_t *wi, lerpFrame_t
 		CG_ClearWeapLerpFrame(wi, lf, newAnimation );
 	}
 	else if ( newAnimation != lf->animationNumber ) {
-		if((newAnimation&~ANIM_TOGGLEBIT) == PM_RaiseAnimForWeapon(cg.snap->ps.nextWeapon)) {
+		if(cg.snap && (newAnimation&~ANIM_TOGGLEBIT) == PM_RaiseAnimForWeapon(cg.snap->ps.nextWeapon)) {
 			CG_ClearWeapLerpFrame(wi, lf, newAnimation );	// clear when switching to raise (since it should be out of view anyway)
 		} else {
 			CG_SetWeapLerpFrameAnimation( wi, lf, newAnimation );
@@ -1757,21 +1970,27 @@ static void CG_RunWeapLerpFrame( clientInfo_t *ci, weaponInfo_t *wi, lerpFrame_t
 
 		// get the next frame based on the animation
 		anim = lf->animation;
-		if ( !anim->frameLerp ) {
-			return;		// shouldn't happen
+		if ( anim->frameLerp <= 0 || anim->numFrames <= 0 ) {
+			lf->oldFrame = lf->frame = anim->firstFrame;
+			lf->oldFrameTime = lf->frameTime = cg.time;
+			lf->backlerp = 0;
+			return;
 		}
 		if ( cg.time < lf->animationTime ) {
 			lf->frameTime = lf->animationTime;		// initial lerp
 		} else {
-			lf->frameTime = lf->oldFrameTime + anim->frameLerp;
+			int64_t next = (int64_t)lf->oldFrameTime + anim->frameLerp;
+			lf->frameTime = next > 2147483647LL ? 2147483647 : (int)next;
 		}
-		f = ( lf->frameTime - lf->animationTime ) / anim->frameLerp;
-		f *= speedScale;		// adjust for haste, etc
+		f = ((int64_t)lf->frameTime - lf->animationTime) / anim->frameLerp;
+		f = (int64_t)((double)f * speedScale);
+		if(f < 0) f = 0;
 		if ( f >= anim->numFrames ) {
 			f -= anim->numFrames;
-			if ( anim->loopFrames ) {
-				f %= anim->loopFrames;
-				f += anim->numFrames - anim->loopFrames;
+			if ( anim->loopFrames > 0 ) {
+				int loop = anim->loopFrames > anim->numFrames ? anim->numFrames : anim->loopFrames;
+				f %= loop;
+				f += anim->numFrames - loop;
 			} else {
 				f = anim->numFrames - 1;
 				// the animation is stuck at the end, so it
@@ -1779,7 +1998,8 @@ static void CG_RunWeapLerpFrame( clientInfo_t *ci, weaponInfo_t *wi, lerpFrame_t
 				lf->frameTime = cg.time;
 			}
 		}
-		lf->frame = anim->firstFrame + f;
+		f += anim->firstFrame;
+		lf->frame = f > 2147483647LL ? 2147483647 : f < (-2147483647LL-1) ? (-2147483647-1) : (int)f;
 		lf->frameModel = anim->mdxFile;
 		if ( cg.time > lf->frameTime ) {
 			lf->frameTime = cg.time;
@@ -1789,7 +2009,7 @@ static void CG_RunWeapLerpFrame( clientInfo_t *ci, weaponInfo_t *wi, lerpFrame_t
 		}
 	}
 
-	if ( lf->frameTime > cg.time + 200 ) {
+	if ( (int64_t)lf->frameTime > (int64_t)cg.time + 200 ) {
 		lf->frameTime = cg.time;
 	}
 
@@ -1800,7 +2020,9 @@ static void CG_RunWeapLerpFrame( clientInfo_t *ci, weaponInfo_t *wi, lerpFrame_t
 	if ( lf->frameTime == lf->oldFrameTime ) {
 		lf->backlerp = 0;
 	} else {
-		lf->backlerp = 1.0 - (float)( cg.time - lf->oldFrameTime ) / ( lf->frameTime - lf->oldFrameTime );
+		lf->backlerp = (float)(1.0 - (double)((int64_t)cg.time - lf->oldFrameTime) / ((int64_t)lf->frameTime - lf->oldFrameTime));
+		if(lf->backlerp < 0) lf->backlerp = 0;
+		if(lf->backlerp > 1) lf->backlerp = 1;
 	}
 }
 
@@ -1820,6 +2042,7 @@ static void CG_WeaponAnimation(playerState_t *ps, weaponInfo_t *weapon, int *wea
 
 	if ( cg_noPlayerAnims.integer ) {
 		*weapOld = *weap = 0;
+		*weapBackLerp = 0;
 		return;
 	}
 
@@ -1850,6 +2073,10 @@ static void CG_CalculateWeaponPosition( vec3_t origin, vec3_t angles ) {
 	float	scale;
 	int		delta;
 	float	fracsin;
+	if(NITMOD_UsesOriginalProtocol()) {
+		CG_NitmodCalculateWeaponPosition(&cg, NITMOD_GameState()->weapons, origin, angles);
+		return;
+	}
 
 	VectorCopy( cg.refdef_current->vieworg, origin );
 	VectorCopy( cg.refdefViewAngles, angles );
@@ -2110,15 +2337,7 @@ void CG_AddPlayerWeapon( refEntity_t *parent, playerState_t *ps, centity_t *cent
 			team = team == TEAM_AXIS ? TEAM_ALLIES : TEAM_AXIS;
 		}
 
-		gun.hModel = weapon->weaponModel[W_FP_MODEL].model;
-		if( ( team == TEAM_AXIS ) &&
-			weapon->weaponModel[W_FP_MODEL].skin[TEAM_AXIS] )
-			gun.customSkin = weapon->weaponModel[W_FP_MODEL].skin[TEAM_AXIS];
-		else if( ( team == TEAM_ALLIES ) &&
-				 weapon->weaponModel[W_FP_MODEL].skin[TEAM_ALLIES] )
-			gun.customSkin = weapon->weaponModel[W_FP_MODEL].skin[TEAM_ALLIES];
-		else
-			gun.customSkin = weapon->weaponModel[W_FP_MODEL].skin[0];	// if not loaded it's 0 so doesn't do any harm
+		CG_NitmodViewMedia(weapon, W_FP_MODEL, team, &gun);
 	} else {
 		team_t team = cgs.clientinfo[cent->currentState.clientNum].team;
 
@@ -2126,15 +2345,7 @@ void CG_AddPlayerWeapon( refEntity_t *parent, playerState_t *ps, centity_t *cent
 			team = team == TEAM_AXIS ? TEAM_ALLIES : TEAM_AXIS;
 		}
 
-		gun.hModel = weapon->weaponModel[W_TP_MODEL].model;
-		if( ( team == TEAM_AXIS ) &&
-			weapon->weaponModel[W_TP_MODEL].skin[TEAM_AXIS] )
-			gun.customSkin = weapon->weaponModel[W_FP_MODEL].skin[TEAM_AXIS];
-		else if( ( team == TEAM_ALLIES ) &&
-				 weapon->weaponModel[W_TP_MODEL].skin[TEAM_ALLIES] )
-			gun.customSkin = weapon->weaponModel[W_TP_MODEL].skin[TEAM_ALLIES];
-		else
-			gun.customSkin = weapon->weaponModel[W_TP_MODEL].skin[0];	// if not loaded it's 0 so doesn't do any harm
+		CG_NitmodViewMedia(weapon, W_TP_MODEL, team, &gun);
 	}
 
 	if (!gun.hModel) {
@@ -2250,6 +2461,9 @@ void CG_AddPlayerWeapon( refEntity_t *parent, playerState_t *ps, centity_t *cent
 
 	if( ps ) {
 		qboolean spunpart;
+		int partTeam = ps->persistant[PERS_TEAM];
+		if(weaponNum != WP_SATCHEL && (cent->currentState.powerups & (1 << PW_OPS_DISGUISED)))
+			partTeam = partTeam == TEAM_AXIS ? TEAM_ALLIES : TEAM_AXIS;
 
 		for( i = W_PART_1; i < W_MAX_PARTS; i++ ) {
 			if( weaponNum == WP_MORTAR_SET && ( i == W_PART_4 || i == W_PART_5 ) ) {
@@ -2259,7 +2473,7 @@ void CG_AddPlayerWeapon( refEntity_t *parent, playerState_t *ps, centity_t *cent
 			}
 
 			spunpart = qfalse;
-			barrel.hModel = weapon->partModels[W_FP_MODEL][i].model;
+			CG_NitmodPartMedia(&weapon->partModels[W_FP_MODEL][i], partTeam, &barrel);
 
 			if( weaponNum == WP_MORTAR_SET ) {
 				if( i == W_PART_3 ) {
@@ -2299,16 +2513,6 @@ void CG_AddPlayerWeapon( refEntity_t *parent, playerState_t *ps, centity_t *cent
 				}
 
 				if( drawpart ) {
-					if( ( ps->persistant[PERS_TEAM] == TEAM_AXIS ||
-						( ps->persistant[PERS_TEAM] == TEAM_ALLIES && cent->currentState.powerups & (1 << PW_OPS_DISGUISED) ) ) &&
-						weapon->partModels[W_FP_MODEL][i].skin[TEAM_AXIS] )
-						barrel.customSkin = weapon->partModels[W_FP_MODEL][i].skin[TEAM_AXIS];
-					else if( ( ps->persistant[PERS_TEAM] == TEAM_ALLIES ||
-							 ( ps->persistant[PERS_TEAM] == TEAM_AXIS && cent->currentState.powerups & (1 << PW_OPS_DISGUISED) ) ) &&
-							 weapon->partModels[W_FP_MODEL][i].skin[TEAM_ALLIES] )
-						barrel.customSkin = weapon->partModels[W_FP_MODEL][i].skin[TEAM_ALLIES];
-					else
-						barrel.customSkin = weapon->partModels[W_FP_MODEL][i].skin[0];	// if not loaded it's 0 so doesn't do any harm
 
 					if( weaponNum == WP_MEDIC_SYRINGE && i == W_PART_1 ) {
 						if( cgs.clientinfo[ ps->clientNum ].skill[ SK_FIRST_AID ] >= 3 ) {
@@ -2362,20 +2566,7 @@ void CG_AddPlayerWeapon( refEntity_t *parent, playerState_t *ps, centity_t *cent
 						CG_AddWeaponWithPowerups( &satchelDetPart, cent->currentState.powerups, ps, cent );
 					} else if( weaponNum == WP_MORTAR_SET && i == W_PART_3 ) {
 						if( ps && !cg.renderingThirdPerson && cg.predictedPlayerState.weaponstate != WEAPON_RAISING ) {
-							refEntity_t bipodLeg;
-
-							memset( &bipodLeg, 0, sizeof( bipodLeg ) );
-							VectorCopy( parent->lightingOrigin, bipodLeg.lightingOrigin );
-							bipodLeg.shadowPlane = parent->shadowPlane;
-							bipodLeg.renderfx = parent->renderfx;
-
-							bipodLeg.hModel = weapon->partModels[W_FP_MODEL][3].model;
-							CG_PositionEntityOnTag( &bipodLeg, &barrel, "tag_barrel4", 0, NULL);
-							CG_AddWeaponWithPowerups( &bipodLeg, cent->currentState.powerups, ps, cent );
-
-							bipodLeg.hModel = weapon->partModels[W_FP_MODEL][4].model;
-							CG_PositionEntityOnTag( &bipodLeg, &barrel, "tag_barrel5", 0, NULL);
-							CG_AddWeaponWithPowerups( &bipodLeg, cent->currentState.powerups, ps, cent );
+							CG_NitmodDrawMortarBipod(weapon, parent, &barrel, partTeam);
 						}
 					}
 				}
@@ -2576,14 +2767,10 @@ void CG_AddPlayerWeapon( refEntity_t *parent, playerState_t *ps, centity_t *cent
 
 	// weaps with barrel smoke
 	if ( ps || cg.renderingThirdPerson || !isPlayer ) {
-		if( weaponNum == WP_STEN ) {
-			if ( cg.time - cent->muzzleFlashTime < 100 )
-//				CG_ParticleImpactSmokePuff (cgs.media.smokeParticleShader, flash.origin);
-				CG_ParticleImpactSmokePuffExtended(cgs.media.smokeParticleShader, flash.origin, 500, 8, 20, 30, 0.25f, 8.f);
-		}
+		CG_NitmodEmitFlashSmoke(weapon, weaponNum, cg.time - cent->muzzleFlashTime, flash.origin);
 	}
 
-	if( flash.hModel ) {
+	if( flash.hModel && CG_NitmodMuzzleFlashEnabled(cg_muzzleFlash.integer, ps) ) {
 		if(weaponNum != WP_FLAMETHROWER ) {	//Ridah, hide the flash also for now
 			// RF, changed this so the muzzle flash stays onscreen for long enough to be seen
 			if ( cg.time - cent->muzzleFlashTime < MUZZLE_FLASH_TIME ) {
@@ -2787,6 +2974,7 @@ void CG_AddViewWeapon( playerState_t *ps ) {
 		gunoff[0] = cg_gun_x.value;
 		gunoff[1] = cg_gun_y.value;
 		gunoff[2] = cg_gun_z.value;
+		CG_NitmodWeaponOffset(weapon, gunoff, gunoff);
 
 //----(SA)	removed
 
@@ -2827,6 +3015,7 @@ void CG_AddViewWeapon( playerState_t *ps ) {
 
 
 		hand.hModel = weapon->handsModel;
+		CG_NitmodShortenWeapon(weapon, &hand);
 		hand.renderfx = RF_DEPTHHACK | RF_FIRST_PERSON | RF_MINLIGHT;	//----(SA)	
 
 		// add everything onto the hand
@@ -2882,6 +3071,7 @@ CG_WeaponSelectable
 ===============
 */
 qboolean CG_WeaponSelectable( int i ) {
+	if(i < WP_NONE || i >= WP_NUM_WEAPONS) return qfalse;
 
 	// allow the player to unselect all weapons
 //	if(i == WP_NONE)
@@ -3797,6 +3987,7 @@ CG_LastWeaponUsed_f
 */
 void CG_LastWeaponUsed_f( void ) {
 	int lastweap;
+	if(!cg.snap) return;
 
 	//fretn - #447
 	//osp-rtcw & et pause bug
@@ -3837,6 +4028,7 @@ CG_NextWeaponInBank_f
 ==============
 */
 void CG_NextWeaponInBank_f ( void ) {
+	if(!cg.snap) return;
 
 	//fretn - #447
 	//osp-rtcw & et pause bug
@@ -3870,6 +4062,7 @@ CG_PrevWeaponInBank_f
 ==============
 */
 void CG_PrevWeaponInBank_f ( void ) {
+	if(!cg.snap) return;
 
 	//fretn - #447
 	//osp-rtcw & et pause bug
@@ -4046,7 +4239,7 @@ void CG_WeaponBank_f(void) {
 
 	bank = atoi( CG_Argv( 1 ) );
 
-	if ( bank <= 0 || bank > MAX_WEAP_BANKS_MP ) {
+	if ( bank <= 0 || bank >= MAX_WEAP_BANKS_MP ) {
 		return;
 	}
 
@@ -4199,6 +4392,15 @@ void CG_OutOfAmmoChange( qboolean allowforceswitch ) {
 	int		i;
 	int		bank, cycle;
 	int		equiv = WP_NONE;
+	int choice;
+	nitmodAmmoAction_t action = CG_NitmodAmmoSelection(allowforceswitch, &choice);
+	if(action != NITMOD_AMMO_NATIVE) {
+		if(action == NITMOD_AMMO_KEEP) return;
+		if(action == NITMOD_AMMO_NEXT) { CG_NextWeap(qtrue); return; }
+		cg.weaponSelect = choice;
+		if(action == NITMOD_AMMO_FINISH) CG_FinishWeaponChange(cg.predictedPlayerState.weapon, choice);
+		return;
+	}
 
 	//
 	// trivial switching
@@ -4546,7 +4748,18 @@ Caused by an EV_FIRE_WEAPON event
 
 ================
 */
-void CG_FireWeapon( centity_t *cent ) {
+/* A tag chain may be incomplete while snapshots arrive during a join. */
+qboolean CG_MountedTankIsBrowning(const centity_t *cent) {
+	int parent, tank;
+	if(cent->currentState.number < 0 || cent->currentState.number >= MAX_GENTITIES) return qfalse;
+	parent = cg_entities[cent->currentState.number].tagParent;
+	if(parent < 0 || parent >= MAX_GENTITIES) return qfalse;
+	tank = cg_entities[parent].tankparent;
+	if(tank < 0 || tank >= MAX_GENTITIES) return qfalse;
+	return (cg_entities[tank].currentState.density & 8) != 0;
+}
+
+void CG_FireWeapon(centity_t *cent, int dispatchEvent) {
 	entityState_t *ent;
 	int				c;
 	weaponInfo_t	*weap;
@@ -4554,10 +4767,12 @@ void CG_FireWeapon( centity_t *cent ) {
 	sfxHandle_t		*fireEchosound;
 
 	ent = &cent->currentState;
+	if(!cg.snap || ent->number < 0 || ent->number >= MAX_GENTITIES ||
+	   ent->weapon < WP_NONE || ent->weapon >= WP_NUM_WEAPONS) return;
 
 	// Arnout: quick hack for EF_MOUNTEDTANK, need to change this - likely it needs to use viewlocked as well
 	if( cent->currentState.eFlags & EF_MOUNTEDTANK ) {
-		if( cg_entities[cg_entities[cg_entities[ cent->currentState.number ].tagParent].tankparent].currentState.density & 8 ) { // should we use a browning?
+		if( CG_MountedTankIsBrowning(cent) ) { // should we use a browning?
 			trap_S_StartSound( NULL, cent->currentState.number, CHAN_WEAPON, cgs.media.hWeaponSnd_2 );
 		} else {
 			trap_S_StartSound( NULL, cent->currentState.number, CHAN_WEAPON, cgs.media.hWeaponSnd );
@@ -4642,7 +4857,7 @@ void CG_FireWeapon( centity_t *cent ) {
 		}
 	}
 
-	if((cent->currentState.event &~EV_EVENT_BITS) == EV_FIRE_WEAPON_LASTSHOT) {
+	if(dispatchEvent == EV_FIRE_WEAPON_LASTSHOT) {
 		firesound = &weap->lastShotSound[0];
 		fireEchosound = &weap->flashEchoSound[0];
 
@@ -4667,6 +4882,11 @@ void CG_FireWeapon( centity_t *cent ) {
 		firesound = &cg_weapons[ WP_MEDKIT ].flashSound[0];
 	}*/
 
+	if(dispatchEvent == NITMOD_FIRE_THROWKNIFE) {
+		if(cgs.media.nitmodThrowKnifeSound > 0)
+			trap_S_StartSound(NULL, ent->number, CHAN_WEAPON, cgs.media.nitmodThrowKnifeSound);
+		return;
+	}
 	if (!(cent->currentState.eFlags & EF_ZOOMING)) { // JPW NERVE -- don't play sounds or eject brass if zoomed in
 		// play a sound
 		for ( c = 0 ; c < 4 ; c++ ) {
@@ -4758,6 +4978,7 @@ void CG_AddBulletParticles( vec3_t origin, vec3_t dir, int speed, int duration, 
 //	refEntity_t		*re;
 	vec3_t	velocity, pos;
 	int	i;
+	if (!cg_impactparticles.integer) return;
 /*
 	// add the falling streaks
 	for (i=0; i<count/3; i++) {
@@ -4812,6 +5033,7 @@ CG_AddDirtBulletParticles
 void CG_AddDirtBulletParticles( vec3_t origin, vec3_t dir, int speed, int duration, int count, float randScale, float width, float height, float alpha, qhandle_t shader) {
 	vec3_t	velocity, pos;
 	int	i;
+	if (!cg_impactparticles.integer) return;
 
 	// add the big falling particle
 	VectorSet( velocity, 0, 0, (float)speed );
@@ -5053,7 +5275,7 @@ void CG_MissileHitWall( int weapon, int clientNum, vec3_t origin, vec3_t dir, in
 		// enough to see it, this way we can leave other marks around a lot
 		// longer, since most of the time we can't actually see the bullet holes
 // (SA) small modification.  only do this for non-rifles (so you can see your shots hitting when you're zooming with a rifle scope)
-		if (weapon == WP_FG42SCOPE || weapon == WP_GARAND_SCOPE || weapon == WP_K43_SCOPE || (Distance( cg.refdef_current->vieworg, origin ) < 384)) {
+		if (CG_NitmodBulletImpactVisible(weapon, origin)) {
 			if(clientNum) {
 				// mark and sound can potentially use the surface for override values
 
@@ -5889,10 +6111,11 @@ void CG_Bullet( vec3_t end, int sourceEntityNum, vec3_t normal, qboolean flesh, 
 			// if not flesh, then do a moving tracer
 			if ( flesh ) {
 				// draw a tracer
-				if ( random() < cg_tracerChance.value ) {
+				if ( CG_NitmodTracerEnabled(cg_tracers.integer, qtrue, sourceEntityNum, cg.snap->ps.clientNum) &&
+					random() < cg_tracerChance.value ) {
 					CG_Tracer( start, end, 0 );
 				}
-			} else {	// (not flesh)
+			} else if (CG_NitmodTracerEnabled(cg_tracers.integer, qfalse, sourceEntityNum, cg.snap->ps.clientNum)) {
 				if(otherEntNum2 >=0 && otherEntNum2 != ENTITYNUM_NONE) {
 					CG_SpawnTracer( otherEntNum2, start, end );
 				} else {

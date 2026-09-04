@@ -12,6 +12,16 @@ int NITMOD_ParseProtocolInteger( const char *text, int *value );
 int NITMOD_ParseProtocolSigned( const char *text, int *value );
 /* Finite decimal float; no whitespace, hexadecimal, NaN or infinity. */
 int NITMOD_ParseProtocolFloat( const char *text, float *value );
+/* Original uppercase =XX text codec. Encoding requires distinct buffers;
+ * failure leaves destination unchanged. Decoding is in-place, single-pass. */
+int NITMOD_EncodeText( const char *text, char *output, int capacity );
+void NITMOD_DecodeText( char *text );
+/* Canonical original text commands; NULL for unrelated console commands. */
+const char *NITMOD_ChatCommand( const char *command );
+int NITMOD_TextNeedsEncoding( const char *text );
+/* Atomic reliable-command construction. Rejects quotes/control characters. */
+int NITMOD_BuildChatCommand( const char *command, const char *text,
+                           char *output, int capacity );
 
 #define NITMOD_MAX_CONFIGSTRINGS 655
 #define NITMOD_CONFIGSTRING_CHARS 1018 /* original qagame slot size (0x3fa) */

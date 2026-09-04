@@ -1,5 +1,95 @@
 // cg_scoreboard -- draw the scoreboard on top of the game screen
 #include "cg_local.h"
+#include "cg_nitmod_config.h"
+#include "cg_nitmod_scoreboard.h"
+#include "cg_nitmod_mapvote.h"
+
+vmCvar_t cg_pingColors;
+
+
+/* Original CG_ScoresDown_f: released double press <=249 ms, with a
+ * strictly greater than 500 ms toggle cooldown. State belongs to cg and
+ * is reset on a new map. Double arithmetic avoids signed timer overflow. */
+void CG_NitmodScoreKeyDown(void) {
+	double sincePress = (double)cg.time - cg.nitmodScoreLastPress;
+	double sinceToggle = (double)cg.time - cg.nitmodScoreLastToggle;
+	if (!NITMOD_UsesOriginalProtocol()) return;
+	if (!cg.showScores && cg.nitmodScorePressSeen && sincePress >= 0 &&
+	    sincePress <= 249 && sinceToggle > 500) {
+		cg.nitmodScoreSortKD = !cg.nitmodScoreSortKD;
+		cg.nitmodScoreLastToggle = cg.time;
+	}
+	cg.nitmodScoreLastPress = cg.time;
+	cg.nitmodScorePressSeen = qtrue;
+}
+
+/* Sort a view, never the score storage consumed by multipart sc/kd updates.
+ * Original comparison is kills descending, then deaths ascending, NOT ratio.
+ * Equal pairs retain server order (deterministic tie handling). */
+int CG_NitmodScoreOrder(int *order, int capacity) {
+	int i, count = 0, limit = cg.numScores;
+	if (!order || capacity <= 0) return 0;
+	if (limit > MAX_CLIENTS) limit = MAX_CLIENTS;
+	for (i = 0; i < limit && count < capacity; ++i) {
+		int client = cg.scores[i].client;
+		if (client < 0 || client >= MAX_CLIENTS) continue;
+		order[count++] = i;
+	}
+	if (NITMOD_UsesOriginalProtocol() && cg.nitmodScoreSortKD) {
+		for (i = 1; i < count; ++i) {
+			int row = order[i], j = i;
+			const score_t *a = &cg.scores[row];
+			while (j > 0) {
+				const score_t *b = &cg.scores[order[j - 1]];
+				if (a->kills < b->kills || (a->kills == b->kills && a->deaths >= b->deaths)) break;
+				order[j] = order[j - 1];
+				--j;
+			}
+			order[j] = row;
+		}
+	}
+	return count;
+}
+
+int CG_NitmodPingColor(int ping) {
+	if(!cg_pingColors.integer) return 7;
+	if(ping <= 100) return 2;
+	if(ping <= 200) return 3;
+	if(ping <= 350) return 8;
+	return 1;
+}
+
+const char *CG_NitmodPingText(int ping) {
+	if(ping == -1) return "^2CONN.^7";
+	return va("^%i%4i^7", CG_NitmodPingColor(ping), ping);
+}
+
+nitmodScoreboardPlan_t CG_NitmodScoreboardPlan(int gametype, qboolean intermission) {
+	nitmodScoreboardPlan_t plan;
+	plan.axisRows = plan.alliedRows = intermission ? 20 : 25;
+	plan.deathmatch = gametype == 8;
+	if(gametype == GT_WOLF_STOPWATCH && intermission)
+		plan.axisRows = plan.alliedRows = 15;
+	return plan;
+}
+
+qboolean CG_NitmodCountryFlagUV(int code, float *s0, float *t0, float *s1, float *t1) {
+	int column, row;
+	if(code < 0 || code >= 255 || !s0 || !t0 || !s1 || !t1) return qfalse;
+	column = code & 15;
+	row = code >> 4;
+	*s0 = column / 16.0f; *t0 = row / 16.0f;
+	*s1 = (column + 1) / 16.0f; *t1 = (row + 1) / 16.0f;
+	return qtrue;
+}
+
+static qboolean CG_NitmodDrawCountryFlag(float x, float y, const clientInfo_t *client) {
+	float s0, t0, s1, t1;
+	if(!client || !NITMOD_UsesOriginalProtocol() || !cg_countryflags.integer ||
+	   !cgs.media.countryFlags || !CG_NitmodCountryFlagUV(client->countryCode, &s0, &t0, &s1, &t1)) return qfalse;
+	CG_DrawPicST(x - 11, y - 7, 32, 32, s0, t0, s1, t1, cgs.media.countryFlags);
+	return qtrue;
+}
 
 
 #define	SCOREBOARD_WIDTH	(31*BIGCHAR_WIDTH)
@@ -179,6 +269,12 @@ int WM_DrawObjectives( int x, int y, int width, float fade ) {
 			w = CG_Text_Width_Ext( s, 0.25f, 0, &cgs.media.limboFont1 );
 
 			CG_Text_Paint_Ext( x + 300 - w*0.5f, y + 13, 0.25f, 0.25f, tclr, s, 0, 0, 0, &cgs.media.limboFont1 );
+		} else if(NITMOD_UsesOriginalProtocol()) {
+			char cycle[64];
+			if(CG_NitmodScoreboardCycleText(NITMOD_GameState(), cgs.gametype, cycle, sizeof(cycle))) {
+				int w = CG_Text_Width_Ext(cycle, .25f, 0, &cgs.media.limboFont1);
+				CG_Text_Paint_Ext(x + 300 - w*.5f, y + 13, .25f, .25f, tclr, cycle, 0, 0, 0, &cgs.media.limboFont1);
+			}
 		}
 		
 		y += SMALLCHAR_HEIGHT * 2;
@@ -270,6 +366,7 @@ static void WM_DrawClientScore( int x, int y, score_t *score, float *color, floa
 	}
 
 	// draw name
+	if(CG_NitmodDrawCountryFlag(tempx, y, ci)) { tempx += 16; maxchars -= 2; offset += 16; }
 	CG_DrawStringExt( tempx, y, ci->name, hcolor, qfalse, qfalse, SMALLCHAR_WIDTH, SMALLCHAR_HEIGHT, maxchars );
 	maxchars -= CG_DrawStrlen( ci->name );
 
@@ -290,13 +387,17 @@ static void WM_DrawClientScore( int x, int y, score_t *score, float *color, floa
 
 		totalwidth = INFO_CLASS_WIDTH + INFO_SCORE_WIDTH + INFO_LATENCY_WIDTH - 8;
 
-		s = CG_TranslateString( "^3SPECTATOR" );
+		s = NITMOD_UsesOriginalProtocol() ? CG_NitmodSpectatorLabel(ci, score->ping) : CG_TranslateString( "^3SPECTATOR" );
 		w = CG_DrawStrlen( s ) * SMALLCHAR_WIDTH;
 
 		CG_DrawSmallString( tempx + totalwidth - w, y, s, fade );
 		return;
 	}
 	// OSP - allow MV clients see the class of its merged client's on the scoreboard
+	else if (NITMOD_UsesOriginalProtocol()) {
+		CG_DrawStringExt(tempx, y + 1, va("^2%i^7/^1%i", score->kills, score->deaths),
+			hcolor, qfalse, qfalse, 7, 14, 7);
+	}
 	else if ( cg.snap->ps.persistant[PERS_TEAM] == ci->team || CG_mvMergedClientLocate(score->client) ) {
 		CG_DrawSmallString( tempx, y, CG_TranslateString( BG_ShortClassnameForNumber( score->playerClass ) ), fade );
 	}
@@ -309,7 +410,7 @@ static void WM_DrawClientScore( int x, int y, score_t *score, float *color, floa
 		tempx += INFO_XP_WIDTH;
 	}
 
-	CG_DrawSmallString( tempx, y, va( "%4i", score->ping ), fade );
+	CG_DrawSmallString( tempx, y, CG_NitmodPingText(score->ping), fade );
 	tempx += INFO_LATENCY_WIDTH;
 
 	if( cg_gameType.integer != GT_WOLF_LMS ) {
@@ -414,6 +515,7 @@ static void WM_DrawClientScore_Small( int x, int y, score_t *score, float *color
 	}
 
 	// draw name
+	if(CG_NitmodDrawCountryFlag(tempx, y, ci)) { tempx += 16; maxchars -= 3; offset += 16; }
 	CG_DrawStringExt( tempx, y, ci->name, hcolor, qfalse, qfalse, MINICHAR_WIDTH, MINICHAR_HEIGHT, maxchars );
 	tempx += INFO_PLAYER_WIDTH - offset;
 	// dhm - nerve
@@ -424,11 +526,15 @@ static void WM_DrawClientScore_Small( int x, int y, score_t *score, float *color
 
 		totalwidth = INFO_CLASS_WIDTH + INFO_SCORE_WIDTH + INFO_LATENCY_WIDTH - 8;
 
-		s = CG_TranslateString( "^3SPECTATOR" );
+		s = NITMOD_UsesOriginalProtocol() ? CG_NitmodSpectatorLabel(ci, score->ping) : CG_TranslateString( "^3SPECTATOR" );
 		w = CG_DrawStrlen( s ) * MINICHAR_WIDTH;
 
 		CG_DrawSmallString( tempx + totalwidth - w, y, s, fade );
 		return;
+	}
+	else if (NITMOD_UsesOriginalProtocol()) {
+		CG_DrawStringExt(tempx, y, va("^2%i^7/^1%i", score->kills, score->deaths),
+			hcolor, qfalse, qfalse, MINICHAR_WIDTH, MINICHAR_HEIGHT, 8);
 	}
 	else if ( cg.snap->ps.persistant[PERS_TEAM] == ci->team ) {
 		CG_DrawStringExt(	tempx, y, CG_TranslateString( BG_ShortClassnameForNumber( score->playerClass ) ), hcolor, qfalse, qfalse, MINICHAR_WIDTH, MINICHAR_HEIGHT, 0 );
@@ -443,7 +549,7 @@ static void WM_DrawClientScore_Small( int x, int y, score_t *score, float *color
 		tempx += INFO_XP_WIDTH;
 	}
 
-	CG_DrawStringExt( tempx, y, va( "%4i", score->ping ), hcolor, qfalse, qfalse, MINICHAR_WIDTH, MINICHAR_HEIGHT, 0 );
+	CG_DrawStringExt( tempx, y, CG_NitmodPingText(score->ping), hcolor, qfalse, qfalse, MINICHAR_WIDTH, MINICHAR_HEIGHT, 0 );
 	tempx += INFO_LATENCY_WIDTH;
 
 	if( cg_gameType.integer != GT_WOLF_LMS ) {
@@ -511,10 +617,32 @@ static int WM_TeamScoreboard( int x, int y, team_t team, float fade, int maxrows
 	float tempx, tempy;
 	int height, width;
 	int i;
+	int order[MAX_CLIENTS], orderedCount = CG_NitmodScoreOrder(order, MAX_CLIENTS);
 	int count = 0;
+	qboolean compact;
+	qboolean original = NITMOD_UsesOriginalProtocol(), lives = qtrue;
+	int rowHeight;
 	vec4_t tclr =	{ 0.6f,		0.6f,		0.6f,		1.0f };
+	if(original) {
+		const char *info = CG_ConfigString(CS_SERVERINFO);
+		const char *value = Info_ValueForKey(info, "g_maxlives");
+		lives = !*value || atoi(value) > 0 ||
+		    atoi(Info_ValueForKey(info, "g_alliedmaxlives")) > 0 ||
+		    atoi(Info_ValueForKey(info, "g_axismaxlives")) > 0;
+	}
 
-	height = SMALLCHAR_HEIGHT * maxrows;
+	/* Original WM_TeamScoreboard switches to 33 compact rows when the
+	 * normal row limit is exceeded. Count before drawing the header. */
+	cg.teamPlayers[team] = 0;
+	for(i = 0; i < orderedCount; ++i) {
+		int client = cg.scores[order[i]].client;
+		if(client >= 0 && client < MAX_CLIENTS && cgs.clientinfo[client].team == team)
+			++cg.teamPlayers[team];
+	}
+	compact = cg.teamPlayers[team] > maxrows;
+	if(compact) maxrows = 33;
+	rowHeight = compact ? MINICHAR_HEIGHT : SMALLCHAR_HEIGHT;
+	height = rowHeight * maxrows;
 	width = INFO_PLAYER_WIDTH + INFO_CLASS_WIDTH + INFO_SCORE_WIDTH + INFO_LATENCY_WIDTH;
 
 	CG_FillRect( x-5, y-2, width+5, 21, clrUiBack );
@@ -527,21 +655,21 @@ static int WM_TeamScoreboard( int x, int y, team_t team, float fade, int maxrows
 	if( cg_gameType.integer == GT_WOLF_LMS ) {
 		char *s;
 		if ( team == TEAM_AXIS ) {
-			s = va( "%s [%d] (%d %s)", CG_TranslateString( "AXIS" ), cg.teamScores[0], cg.teamPlayers[team], CG_TranslateString("PLAYERS") );
+			s = va( "%s [%d] (%d %s)", "^1AXIS", cg.teamScores[0], cg.teamPlayers[team], CG_TranslateString("PLAYERS") );
 			s = va( "%s ^3%s", s, cg.teamFirstBlood == TEAM_AXIS ? CG_TranslateString("FIRST BLOOD") : "" );
 
 			CG_Text_Paint_Ext( x, y + 13, 0.25f, 0.25f, tclr, s, 0, 0, 0, &cgs.media.limboFont1 );
 		} else if ( team == TEAM_ALLIES ) {
-			s = va( "%s [%d] (%d %s)", CG_TranslateString( "ALLIES" ), cg.teamScores[1], cg.teamPlayers[team], CG_TranslateString("PLAYERS") );
+			s = va( "%s [%d] (%d %s)", "^4ALLIES", cg.teamScores[1], cg.teamPlayers[team], CG_TranslateString("PLAYERS") );
 			s = va( "%s ^3%s", s, cg.teamFirstBlood == TEAM_ALLIES ? CG_TranslateString("FIRST BLOOD") : "" );
 
 			CG_Text_Paint_Ext( x, y + 13, 0.25f, 0.25f, tclr, s, 0, 0, 0, &cgs.media.limboFont1 );
 		}
 	} else {
 		if ( team == TEAM_AXIS ) {
-			CG_Text_Paint_Ext( x, y + 13, 0.25f, 0.25f, tclr, va( "%s [%d] (%d %s)", CG_TranslateString( "AXIS" ), cg.teamScores[0], cg.teamPlayers[team], CG_TranslateString("PLAYERS") ), 0, 0, 0, &cgs.media.limboFont1 );
+			CG_Text_Paint_Ext( x, y + 13, 0.25f, 0.25f, tclr, va( "%s [%d] (%d %s)", "^1AXIS", cg.teamScores[0], cg.teamPlayers[team], CG_TranslateString("PLAYERS") ), 0, 0, 0, &cgs.media.limboFont1 );
 		} else if ( team == TEAM_ALLIES ) {
-			CG_Text_Paint_Ext( x, y + 13, 0.25f, 0.25f, tclr, va( "%s [%d] (%d %s)", CG_TranslateString( "ALLIES" ), cg.teamScores[1], cg.teamPlayers[team], CG_TranslateString("PLAYERS") ), 0, 0, 0, &cgs.media.limboFont1 );
+			CG_Text_Paint_Ext( x, y + 13, 0.25f, 0.25f, tclr, va( "%s [%d] (%d %s)", "^4ALLIES", cg.teamScores[1], cg.teamPlayers[team], CG_TranslateString("PLAYERS") ), 0, 0, 0, &cgs.media.limboFont1 );
 		}
 	}
 
@@ -558,12 +686,12 @@ static int WM_TeamScoreboard( int x, int y, team_t team, float fade, int maxrows
 			VectorSet( hcolor, (0.f/255.f), (0.f/255.f), (0.f/255.f) );			// DARK BLUE
 		hcolor[3] = fade * 0.3;
 
-		CG_FillRect( x-5, y, width+5, SMALLCHAR_HEIGHT+1, hcolor );
+		CG_FillRect( x-5, y, width+5, rowHeight+1, hcolor );
 		trap_R_SetColor( colorBlack );
-		CG_DrawTopBottom( x-5, y, width+5, SMALLCHAR_HEIGHT+1, 1 );
+		CG_DrawTopBottom( x-5, y, width+5, rowHeight+1, 1 );
 		trap_R_SetColor( NULL );
 
-		y += SMALLCHAR_HEIGHT;
+		y += rowHeight;
 	}
 		hcolor[3] = 1;
 
@@ -577,11 +705,23 @@ static int WM_TeamScoreboard( int x, int y, team_t team, float fade, int maxrows
 	CG_DrawTopBottom( x-5, y-1, width+5, 18, 1 );
 	trap_R_SetColor( NULL );
 
+	if(original) {
+		int base = x + 184 + (lives ? 0 : 22);
+		int ping = base + (cg_gameType.integer == GT_WOLF_LMS ? 56 : 36) + (lives ? 8 : 0);
+		CG_DrawSmallString(x, y, "Name", fade);
+		CG_DrawSmallString(x + (compact ? 140 : 146), y, "K/D", fade);
+		CG_DrawSmallString(base + (cg_gameType.integer == GT_WOLF_LMS ? -6 : 8), y,
+		    cg_gameType.integer == GT_WOLF_LMS ? "Score" : "XP", fade);
+		CG_DrawSmallString(ping, y, "Ping", fade);
+		if(lives && cg_gameType.integer != GT_WOLF_LMS)
+			CG_DrawPicST(ping + 34, y, 16, 16, 0, 0, .5f, 1,
+			    team == TEAM_ALLIES ? cgs.media.hudAlliedHelmet : cgs.media.hudAxisHelmet);
+	} else {
 	// draw player info headings
 	CG_DrawSmallString( tempx, y, CG_TranslateString( "Name" ), fade );
 	tempx += INFO_PLAYER_WIDTH;
 
-	CG_DrawSmallString( tempx, y, CG_TranslateString( "Class" ), fade );
+	CG_DrawSmallString( tempx, y, NITMOD_UsesOriginalProtocol() ? "K/D" : CG_TranslateString( "Class" ), fade );
 	tempx += INFO_CLASS_WIDTH;
 
 	if( cgs.gametype == GT_WOLF_LMS ) {
@@ -601,31 +741,27 @@ static int WM_TeamScoreboard( int x, int y, team_t team, float fade, int maxrows
 	}
 	
 
-	y += SMALLCHAR_HEIGHT;
-
+	}
+	y += original ? 18 : SMALLCHAR_HEIGHT;
 	// draw player info
 	VectorSet( hcolor, 1, 1, 1 );
 	hcolor[3] = fade;
 
-	cg.teamPlayers[team] = 0; // JPW NERVE
-	for ( i = 0; i < cg.numScores; i++ ) {
-		if ( team != cgs.clientinfo[ cg.scores[i].client ].team )
-			continue;
-
-		cg.teamPlayers[team]++;
-	}
-
 	count = 0;
-	for( i = 0; i < cg.numScores && count < maxrows; i++ ) {
-		if( team != cgs.clientinfo[ cg.scores[i].client ].team ) {
+	for( i = 0; i < orderedCount && count < maxrows; i++ ) {
+		score_t *score = &cg.scores[order[i]];
+		if( team != cgs.clientinfo[ score->client ].team ) {
 			continue;
 		}
 
-		if( cg.teamPlayers[team] > maxrows ) {
-			WM_DrawClientScore_Small( x, y, &cg.scores[i], hcolor, fade );
+		if(original) {
+			CG_NitmodDrawScoreRow(x, y, score, fade, compact, lives);
+			y += rowHeight;
+		} else if( compact ) {
+			WM_DrawClientScore_Small( x, y, score, hcolor, fade );
 			y += MINICHAR_HEIGHT;
 		} else {
-			WM_DrawClientScore( x, y, &cg.scores[i], hcolor, fade );
+			WM_DrawClientScore( x, y, score, hcolor, fade );
 			y += SMALLCHAR_HEIGHT;
 		}
 
@@ -635,7 +771,8 @@ static int WM_TeamScoreboard( int x, int y, team_t team, float fade, int maxrows
 	// draw spectators
 	y += SMALLCHAR_HEIGHT;
 
-	for ( i = 0; i < cg.numScores; i++ ) {
+	for ( i = 0; i < cg.numScores && i < MAX_CLIENTS; i++ ) {
+		if (cg.scores[i].client < 0 || cg.scores[i].client >= MAX_CLIENTS) continue;
 		if ( cgs.clientinfo[ cg.scores[i].client ].team != TEAM_SPECTATOR )
 			continue;
 		if ( team == TEAM_AXIS && ( i % 2 ) )
@@ -643,10 +780,61 @@ static int WM_TeamScoreboard( int x, int y, team_t team, float fade, int maxrows
 		if ( team == TEAM_ALLIES && ( ( i + 1 ) % 2 ) )
 			continue;
 
-		WM_DrawClientScore( x, y, &cg.scores[i], hcolor, fade );
-		y += SMALLCHAR_HEIGHT;
+		if(original) CG_NitmodDrawScoreRow(x, y, &cg.scores[i], fade, compact, qfalse);
+		else if (compact) WM_DrawClientScore_Small( x, y, &cg.scores[i], hcolor, fade );
+		else WM_DrawClientScore( x, y, &cg.scores[i], hcolor, fade );
+		y += rowHeight;
 	}
 
+	return y;
+}
+
+/* Original gametype 8 uses one full-width FFA board (cgame_nitrox.c), not
+ * the two ET team panels. Its score rows already receive K/D through kd0/kd1. */
+int CG_NitmodDMScoreboard(int x, int y, float fade, int maxrows, qboolean intermission) {
+	vec4_t textColor = { .6f, .6f, .6f, 1.f };
+	vec4_t rowColor;
+	const char *host = Info_ValueForKey(CG_ConfigString(CS_SERVERINFO), "sv_hostname");
+	int i, row = 0;
+	if(intermission) {
+		int winner = NITMOD_GameState()->dmWinnerClient;
+		if(winner >= 0 && winner < MAX_CLIENTS && cgs.clientinfo[winner].infoValid) {
+			const char *winnerText = va("%s^7 wins!", cgs.clientinfo[winner].name);
+			CG_Text_Paint_Ext(320 - CG_Text_Width_Ext(winnerText, .35f, 0, &cgs.media.limboFont1) * .5f,
+				y - 5, .35f, .35f, colorWhite, winnerText, 0, 0, 0, &cgs.media.limboFont1);
+		}
+	}
+	CG_FillRect(x - 5, y - 2, 610, 21, clrUiBack);
+	CG_FillRect(x - 5, y - 2, 610, 21, clrUiBar);
+	CG_DrawRect_FixedBorder(x - 5, y - 2, 610, 21, 1, colorBlack);
+	CG_Text_Paint_Ext(x, y + 13, .25f, .25f, textColor,
+		"^1Death Match ^f- ^1Free For All^7", 0, 0, 0, &cgs.media.limboFont1);
+	CG_Text_Paint_Ext(615 - CG_DrawStrlen(host) * 8,
+		y + 13, .25f, .25f, textColor, host, 0, 0, 0, &cgs.media.limboFont1);
+	y += 19;
+	CG_FillRect(x - 5, y, 610, 18, clrUiBack);
+	CG_FillRect(x - 5, y + 17, 610, 1, colorBlack);
+	CG_DrawSmallString(x, y, "Name", fade);
+	CG_DrawSmallString(x + 210, y, "K/D", fade);
+	CG_DrawSmallString(x + 318, y, "XP", fade);
+	CG_DrawSmallString(x + 570, y, "Ping", fade);
+	y += 18;
+	/* The original row limit sizes the background, not the score iteration. */
+	if(maxrows < 0) maxrows = 0;
+	if(maxrows > MAX_CLIENTS) maxrows = MAX_CLIENTS;
+	for(row = 0; row < maxrows; ++row) {
+		int bandY = y + row * 16;
+		Vector4Set(rowColor, row & 1 ? 0.f : 80.f / 255.f,
+			row & 1 ? 0.f : 80.f / 255.f, row & 1 ? 0.f : 80.f / 255.f, fade * .3f);
+		CG_FillRect(x - 5, bandY, 610, 16, rowColor);
+		CG_FillRect(x - 5, bandY + 15, 610, 1, colorBlack);
+	}
+	for(i = 0; i < cg.numScores && i < MAX_CLIENTS && y <= 453; ++i) {
+		const score_t *score = &cg.scores[i];
+		if(score->client < 0 || score->client >= MAX_CLIENTS) continue;
+		CG_NitmodDrawDMScoreRow(x, y, score, fade);
+		y += 16;
+	}
 	return y;
 }
 // -NERVE - SMF
@@ -699,23 +887,32 @@ qboolean CG_DrawScoreboard( void ) {
 	}
 
 	y = WM_DrawObjectives( x, y, 640 - 2*x + 5, fade );
+	{
+		nitmodScoreboardPlan_t plan = CG_NitmodScoreboardPlan(cgs.gametype,
+			cg.snap->ps.pm_type == PM_INTERMISSION);
+		if(NITMOD_UsesOriginalProtocol() && plan.deathmatch) {
+			CG_NitmodDMScoreboard(x, y, fade, plan.axisRows,
+				cg.snap->ps.pm_type == PM_INTERMISSION);
+			return qtrue;
+		}
 
 	if ( cgs.gametype == GT_WOLF_STOPWATCH && ( cg.snap->ps.pm_type == PM_INTERMISSION ) ) {
 		y = WM_DrawInfoLine( x, 155, fade );
 
-		WM_TeamScoreboard( x, y, TEAM_AXIS, fade, 8 );
+		WM_TeamScoreboard( x, 90, TEAM_AXIS, fade, plan.axisRows );
 		x = x_right;
-		WM_TeamScoreboard( x, y, TEAM_ALLIES, fade, 8 );
+		WM_TeamScoreboard( x, 90, TEAM_ALLIES, fade, plan.alliedRows );
 	} else {
 		if(cg.snap->ps.pm_type == PM_INTERMISSION) {
-			WM_TeamScoreboard( x, y, TEAM_AXIS, fade, 9 );
+			WM_TeamScoreboard( x, y, TEAM_AXIS, fade, plan.axisRows );
 			x = x_right;
-			WM_TeamScoreboard( x, y, TEAM_ALLIES, fade, 9 );
+			WM_TeamScoreboard( x, y, TEAM_ALLIES, fade, plan.alliedRows );
 		} else {
-			WM_TeamScoreboard( x, y, TEAM_AXIS, fade, 25 );
+			WM_TeamScoreboard( x, y, TEAM_AXIS, fade, plan.axisRows );
 			x = x_right;
-			WM_TeamScoreboard( x, y, TEAM_ALLIES, fade, 25 );
+			WM_TeamScoreboard( x, y, TEAM_ALLIES, fade, plan.alliedRows );
 		}
+	}
 	}
 
 /*	if(!CG_IsSinglePlayer()) {

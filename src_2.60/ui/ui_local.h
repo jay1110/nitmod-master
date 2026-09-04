@@ -7,6 +7,10 @@
 #include "keycodes.h"
 #include "../game/bg_public.h"
 #include "ui_shared.h"
+qboolean UI_NitmodMenuAction(const char *name);
+qboolean UI_NitmodPlayerSelectionValid(void);
+void UI_NitmodRefreshPlayers(void);
+qboolean UI_OwnerDrawVisible(int flags);
 
 extern vmCvar_t	ui_ffa_fraglimit;
 extern vmCvar_t	ui_ffa_timelimit;
@@ -778,11 +782,29 @@ typedef struct {
 	char pings[MAX_CLIENTS * 3];
 	int numLines;
 } serverStatusInfo_t;
+void UI_ParseServerStatus(serverStatusInfo_t *info, const char *address);
+int UI_GetServerStatusInfo(const char *address, serverStatusInfo_t *info);
+int UI_QueryServerStatus(const char *address, serverStatusInfo_t *info);
+void UI_BuildFindPlayerList(qboolean force);
+int UI_ServerHumanCount(const char *status, const char *master);
+int UI_CompareBrowserServers(int first, int second);
+void UI_DrawDescriptionText(const rectDef_t *rect, float scale, vec4_t color, float textX, float textY, int style, int align, const char *text, int stars);
+void UI_DrawCampaignDescription(rectDef_t *rect, float scale, vec4_t color, float textX, float textY, int style, int align, qboolean net);
+void UI_DrawGametypeDescription(rectDef_t *rect, float scale, vec4_t color, float textX, float textY, int style, int align, qboolean net);
+void UI_DrawCampaignMapDescription(rectDef_t *rect, float scale, vec4_t color, float textX, float textY, int style, int align, qboolean net, int number);
 
 typedef struct {
 	const char *modName;
 	const char *modDescr;
 } modInfo_t;
+
+typedef enum { UI_CATALOG_MAPS, UI_CATALOG_CAMPAIGNS, UI_CATALOG_MODS } uiCatalog_t;
+const char *UI_CatalogNextString(const char *buffer, int capacity, int *offset);
+qboolean UI_CatalogScriptPath(const char *name, char *path, int capacity);
+void UI_SortCatalog(uiCatalog_t catalog);
+void UI_LoadCampaignsFromFile(const char *filename);
+void UI_OrderCampaigns(void);
+void UI_Update(const char *name);
 
 typedef struct {
 	displayContextDef_t uiDC;
@@ -818,6 +840,7 @@ typedef struct {
 	int playerNumber; 
 	qboolean teamLeader;
 	char playerNames[MAX_CLIENTS][MAX_NAME_LENGTH*2];
+	int playerClientNums[MAX_CLIENTS];
 	qboolean playerMuted[MAX_CLIENTS];
 	int playerRefereeStatus[MAX_CLIENTS];
 	char teamNames[MAX_CLIENTS][MAX_NAME_LENGTH];
@@ -1177,6 +1200,12 @@ void UI_SPUnlock_f( void );
 void UI_SPUnlockMedals_f( void );
 
 void UI_InitGameinfo( void );
+void UI_BuildServerDisplayList(qboolean force);
+void UI_FeederSelection(float feederID, int index);
+int UI_FeederCount(float feederID);
+const char *UI_FileText(char *fileName);
+const char *UI_FeederItemText(float feederID, int index, int column, qhandle_t *handles, int *numhandles);
+void UI_DrawPreviewCinematic(rectDef_t *rect, float scale, vec4_t color);
 
 const char* UI_DescriptionForCampaign( void );
 const char* UI_NameForCampaign( void );

@@ -11,10 +11,10 @@ module = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(module)
 records = module.extract(root)
 assert len(records) == 11
-records.update(module.extract(root, names=('g_medics',)))
+records.update(module.extract(root, names=('g_medics', 'g_noReload')))
 source = (root / 'src_2.60/game/g_nitmod_weapon_config.c').read_text()
 rows = re.findall(r'\{ "([^"]+)", "([^"]+)", (\d+) \}', source)
-assert len(rows) == 9 and len({row[0] for row in rows}) == 9
+assert len(rows) == 10 and len({row[0] for row in rows}) == 10
 for name, default, flags in rows:
     original = records[name]
     assert (default, int(flags)) == (original['default'], original['flags']), name

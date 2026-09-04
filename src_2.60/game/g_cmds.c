@@ -1005,6 +1005,14 @@ qboolean G_IsHeavyWeapon( weapon_t weap ) {
 
 qboolean G_IsWeaponDisabled( gentity_t* ent, weapon_t weapon ) {
 	int count, wcount;
+	nitmodWeaponPolicyResult_t policy;
+	if(!ent || !ent->client || weapon < WP_NONE || weapon >= WP_NUM_WEAPONS)
+		return qtrue;
+	/* Spawn checks are silent; selection publishes its own denial below.
+	 * Keep native behavior if reconstruction inputs are unavailable. */
+	policy = G_NITMOD_EvaluateServerWeaponPolicy(ent, weapon, 0, 1);
+	if(policy.limit != NITMOD_LIMIT_INVALID && policy.decision != NITMOD_WEAPON_DEFER)
+		return policy.decision == NITMOD_WEAPON_DENY;
 
 	if( ent->client->sess.sessionTeam == TEAM_SPECTATOR ) {
 		return qtrue;
@@ -1026,6 +1034,11 @@ qboolean G_IsWeaponDisabled( gentity_t* ent, weapon_t weapon ) {
 
 void G_SetClientWeapons( gentity_t* ent, weapon_t w1, weapon_t w2, qboolean updateclient ) {
 	qboolean changed = qfalse;
+	if(!ent || !ent->client || w1 < WP_NONE || w1 >= WP_NUM_WEAPONS ||
+		w2 < WP_NONE || w2 >= WP_NUM_WEAPONS) return;
+	/* Shared with setclass: primary denial clears its latch, secondary is
+	 * retained, and clientinfo is published only for an actual change. */
+	if(G_NITMOD_SetClientWeapons(ent, w1, w2, updateclient) >= 0) return;
 
 	if( ent->client->sess.latchPlayerWeapon2 != w2 ) {
 		ent->client->sess.latchPlayerWeapon2 = w2;
@@ -3087,8 +3100,8 @@ void Cmd_IntermissionWeaponStats_f ( gentity_t* ent ) {
 
 	trap_Argv( 1, buffer, sizeof( buffer ) );
 
-	clientNum = atoi( buffer );
-	if( clientNum < 0 || clientNum > MAX_CLIENTS ) {
+	if( trap_Argc() != 2 || !NITMOD_ParseProtocolSigned( buffer, &clientNum ) ||
+		clientNum < 0 || clientNum >= MAX_CLIENTS ) {
 		return;
 	}
 
@@ -3098,6 +3111,27 @@ void Cmd_IntermissionWeaponStats_f ( gentity_t* ent ) {
 	}
 
 	trap_SendServerCommand( ent-g_entities, buffer );
+}
+
+void Cmd_IntermissionHitRegions_f( gentity_t *ent ) {
+	char buffer[1024], argument[16];
+	int clientNum, i, total = 0;
+
+	if( !ent || !ent->client || trap_Argc() != 2 ) return;
+	trap_Argv( 1, argument, sizeof( argument ) );
+	if( !NITMOD_ParseProtocolSigned( argument, &clientNum ) ||
+		clientNum < 0 || clientNum >= MAX_CLIENTS ) return;
+
+	for( i = 0; i < HR_NUM_HITREGIONS; i++ ) {
+		total += level.clients[clientNum].pers.playerStats.hitRegions[i];
+	}
+	Q_strncpyz( buffer, "imhr ", sizeof( buffer ) );
+	for( i = 0; i < HR_NUM_HITREGIONS; i++ ) {
+		int hits = level.clients[clientNum].pers.playerStats.hitRegions[i];
+		Q_strcat( buffer, sizeof( buffer ), va( "%i %.1f ", hits,
+			total ? 100.f * (float)hits / (float)total : 0.f ) );
+	}
+	trap_SendServerCommand( ent - g_entities, buffer );
 }
 
 void G_MakeReady( gentity_t* ent ) {
@@ -3453,6 +3487,9 @@ void ClientCommand( int clientNum ) {
 		return;
 	} else if( !Q_stricmp( cmd, "imws" ) ) {		
 		Cmd_IntermissionWeaponStats_f( ent );
+		return;
+	} else if( !Q_stricmp( cmd, "imhr" ) ) {
+		Cmd_IntermissionHitRegions_f( ent );
 		return;
 	} else if( !Q_stricmp( cmd, "imready" ) ) {		
 		Cmd_IntermissionReady_f( ent );

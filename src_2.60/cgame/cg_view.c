@@ -2,6 +2,9 @@
 // for a 3D rendering
 #include "cg_local.h"
 #include "cg_nitmod_config.h"
+#include "cg_nitmod_view.h"
+#include "cg_nitmod_locations.h"
+#include "cg_nitmod_coronas.h"
 
 //========================
 extern 	pmove_t		cg_pmove;
@@ -164,6 +167,10 @@ Sets the coordinates of the rendered window
 
 //static float letterbox_frac = 1.0f;	// used for transitioning to letterbox for cutscenes // TODO: add to cg. // TTimo: unused
 void CG_Letterbox( float xsize, float ysize, qboolean center ) {
+	if(NITMOD_UsesOriginalProtocol()) {
+		CG_NitmodLetterbox(&cg.refdef, cgs.glconfig.vidWidth, cgs.glconfig.vidHeight, xsize, ysize, center);
+		return;
+	}
 // normal aspect is xx:xx
 // letterbox is yy:yy  (85% of 'normal' height)
 	if(cg_letterbox.integer) {
@@ -485,9 +492,13 @@ CG_ZoomSway
 	this takes aimspread into account so the view settles after a bit
 ==============
 */
-static void CG_ZoomSway( void ) {
+void CG_ZoomSway( void ) {
 	float spreadfrac;
 	float phase;
+	if(NITMOD_UsesOriginalProtocol()) {
+		CG_NitmodZoomSway(cg.time, cg.zoomval, cg.snap ? &cg.snap->ps : NULL, cg.refdefViewAngles);
+		return;
+	}
 
 	if(!cg.zoomval)	// not zoomed
 		return;
@@ -717,9 +728,14 @@ static void CG_OffsetFirstPersonView( void ) {
 	CG_StepOffset();
 
 	CG_ZoomSway();
+	if(NITMOD_UsesOriginalProtocol()) {
+		CG_NitmodViewOffsets(cg.time, cg.predictedPlayerState.eFlags,
+			NITMOD_GameState()->weapons, cg.predictedPlayerState.leanf,
+			cg.refdefViewAngles, cg.refdef_current->vieworg);
+	}
 
 	// adjust for 'lean'
-	if(cg.predictedPlayerState.leanf != 0)
+	if(!NITMOD_UsesOriginalProtocol() && cg.predictedPlayerState.leanf != 0)
 	{
 		//add leaning offset
 		vec3_t	right;
@@ -870,144 +886,6 @@ CG_CalcFov
 Fixed fov at intermissions, otherwise account for fov variable and zooms.
 ====================
 */
-#define	WAVE_AMPLITUDE	1
-#define	WAVE_FREQUENCY	0.4
-
-static int CG_CalcFov( void ) {
-	static float lastfov = 90;		// for transitions back from zoomed in modes
-	float	x;
-	float	phase;
-	float	v;
-	int		contents;
-	float	fov_x, fov_y;
-	float	zoomFov;
-	float	f;
-	int		inwater;
-
-	CG_Zoom();
-
-	if ( cg.predictedPlayerState.stats[STAT_HEALTH] <= 0 && !(cg.snap->ps.pm_flags & PMF_FOLLOW) ) 
-	{
-		cg.zoomedBinoc = qfalse;
-		cg.zoomTime = 0;
-		cg.zoomval = 0;
-	}
-
-	if ( cg.predictedPlayerState.pm_type == PM_INTERMISSION ) {
-		// if in intermission, use a fixed value
-		fov_x = 90;
-	} else {
-		fov_x = cg_fov.value;
-		if( !developer.integer ) {
-			if ( fov_x < 90 ) {
-				fov_x = 90;
-			} else if ( fov_x > 160 ) {
-				fov_x = 160;
-			}
-		}
-
-		if( !cg.renderingThirdPerson || developer.integer ) {
-			// account for zooms
-			if(cg.zoomval) {
-				zoomFov = cg.zoomval;	// (SA) use user scrolled amount
-
-				if ( zoomFov < 1 ) {
-					zoomFov = 1;
-				} else if ( zoomFov > 160 ) {
-					zoomFov = 160;
-				}
-			} else {
-					zoomFov = lastfov;
-			}
-			
-			// do smooth transitions for the binocs
-			if(cg.zoomedBinoc) {		// binoc zooming in
-				f = ( cg.time - cg.zoomTime ) / (float)ZOOM_TIME;
-				if ( f > 1.0 ) {
-					fov_x = zoomFov;
-				} else {
-					fov_x = fov_x + f * ( zoomFov - fov_x );
-				}
-				lastfov = fov_x;
-			} else if (cg.zoomval) {	// zoomed by sniper/snooper
-				fov_x = cg.zoomval;
-				lastfov = fov_x;
-			} else {					// binoc zooming out
-				f = ( cg.time - cg.zoomTime ) / (float)ZOOM_TIME;
-				if ( f > 1.0 ) {
-					fov_x = fov_x;
-				} else {
-					fov_x = zoomFov + f * ( fov_x - zoomFov);
-				}
-			}
-		}
-	}
-
-	cg.refdef_current->rdflags &= ~RDF_SNOOPERVIEW;
-
-	// Arnout: mg42 zoom
-	if (cg.snap->ps.persistant[PERS_HWEAPON_USE]) {
-		fov_x = 55;
-	} else if( cg.snap->ps.weapon == WP_MOBILE_MG42_SET ) {
-		fov_x = 55;
-	} else if( cg.snap->ps.eFlags & EF_MOUNTEDTANK ) {
-		fov_x = 75;
-	}
-
-	if( cg.showGameView ) {
-		fov_x = fov_y = 60.f;
-	}
-
-	// Arnout: this is weird... (but ensures square pixel ratio!)
-	x = cg.refdef_current->width / tan( fov_x / 360 * M_PI );
-	fov_y = atan2( cg.refdef_current->height, x );
-	fov_y = fov_y * 360 / M_PI;
-	// And this seems better - but isn't really
-	//fov_y = fov_x / cgs.glconfig.windowAspect;
-
-	// warp if underwater
-	//if ( cg_pmove.waterlevel == 3 ) {
-	contents = CG_PointContents( cg.refdef.vieworg, -1 );
-	if ( contents & ( CONTENTS_WATER | CONTENTS_SLIME | CONTENTS_LAVA ) ){
-		phase = cg.time / 1000.0 * WAVE_FREQUENCY * M_PI * 2;
-		v = WAVE_AMPLITUDE * sin( phase );
-		fov_x += v;
-		fov_y -= v;
-		inwater = qtrue;
-		cg.refdef_current->rdflags |= RDF_UNDERWATER;
-	} else {
-		cg.refdef_current->rdflags &= ~RDF_UNDERWATER;
-		inwater = qfalse;
-	}
-
-	// set it
-	cg.refdef_current->fov_x = fov_x;
-	cg.refdef_current->fov_y = fov_y;
-
-/*
-	if( cg.predictedPlayerState.eFlags & EF_PRONE ) {
-		cg.zoomSensitivity = cg.refdef.fov_y / 500.0;
-	} else
-*/
-	// rain - allow freelook when dead until we tap out into limbo
-	if( cg.snap->ps.pm_type == PM_FREEZE || (cg.snap->ps.pm_type == PM_DEAD && (cg.snap->ps.pm_flags & PMF_LIMBO)) || cg.snap->ps.pm_flags & PMF_TIME_LOCKPLAYER ) {
-		// No movement for pauses
-		cg.zoomSensitivity = 0;
-	} else if ( !cg.zoomedBinoc ) {
-		// NERVE - SMF - fix for zoomed in/out movement bug
-		if ( cg.zoomval ) {
-			cg.zoomSensitivity = 0.6 * ( cg.zoomval / 90.f );	// NERVE - SMF - changed to get less sensitive as you zoom in
-//				cg.zoomSensitivity = 0.1;
-		} else {
-			cg.zoomSensitivity = 1;
-		}
-		// -NERVE - SMF
-	} else {
-		cg.zoomSensitivity = cg.refdef_current->fov_y / 75.0;
-	}
-
-	return inwater;
-}
 
 
 /*
@@ -1729,6 +1607,7 @@ void CG_DrawActiveFrame( int serverTime, stereoFrame_t stereoView, qboolean demo
 	// update cvars
 	CG_UpdateCvars();
 	NITMOD_ApplyForcedCvars();
+	CG_NitmodAutoSelectFireteam();
 
 	DEBUGTIME
 
@@ -1845,6 +1724,8 @@ void CG_DrawActiveFrame( int serverTime, stereoFrame_t stereoView, qboolean demo
 			DEBUGTIME
 
 			CG_AddScriptSpeakers();
+			CG_NitmodAddLocationMarkers();
+			CG_NitmodDrawCoronas();
 
 			DEBUGTIME
 			

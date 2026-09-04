@@ -107,14 +107,8 @@ for name, weapon in identities.items():
     actual = native[names.index(name)]
     if actual != expected:
         differences[name] = (expected, actual)
-# Deliberately retained native behavior; changing it needs the complete
-# adrenaline/syringe inventory lifecycle, not just a different array index.
-assert differences == {
-    'WP_MEDIC_ADRENALINE': (
-        ('WP_MEDIC_ADRENALINE', 'WP_MEDIC_ADRENALINE'),
-        ('WP_MEDIC_SYRINGE', 'WP_MEDIC_SYRINGE'))
-}, differences
-print('43 alias pairs match; adrenaline/syringe sharing is one pinned native difference')
+assert differences == {}, differences
+print('44 alias pairs match, including independent adrenaline inventory')
 print('44 recovered alias pairs match both original modules; unsupported identities reject unchanged')
 seen = set()
 for line in subprocess.check_output([sys.argv[2], '--switch-times'], text=True).splitlines():

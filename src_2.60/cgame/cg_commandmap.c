@@ -1,8 +1,66 @@
 #include "cg_local.h"
+#include "cg_nitmod_config.h"
+#include <limits.h>
 
 static mapEntityData_t mapEntities[MAX_GENTITIES];
 static int mapEntityCount = 0;
 static int mapEntityTime = 0;
+
+const mapEntityData_t *CG_MapEntityAt(int index) {
+	return index >= 0 && index < mapEntityCount ? &mapEntities[index] : NULL;
+}
+
+static qboolean CG_MapInteger(int *offset, int argc, int *value) {
+	char text[32];
+	if(*offset >= argc) return qfalse;
+	trap_Argv((*offset)++, text, sizeof(text));
+	if(strlen(text) >= sizeof(text) - 1) return qfalse;
+	return NITMOD_ParseProtocolSigned(text, value);
+}
+
+/* Original CG_ParseMapEntity (0x2bac0): every type carries coordinates;
+ * types 3,4,5,7,8,9 omit yaw. Decode the entire message before publishing it. */
+qboolean CG_ParseOriginalMapEntityInfo(void) {
+	static mapEntityData_t pending[MAX_GENTITIES];
+	int argc = trap_Argc(), offset = 1, axis, allies, i, total;
+	if(!CG_MapInteger(&offset, argc, &axis) || !CG_MapInteger(&offset, argc, &allies) ||
+	   axis < 0 || allies < 0 || axis > MAX_GENTITIES || allies > MAX_GENTITIES - axis) return qfalse;
+	total = axis + allies;
+	for(i = 0; i < total; ++i) {
+		mapEntityData_t *ent = &pending[i];
+		int type, coordinate, component, limit;
+		memset(ent, 0, sizeof(*ent));
+		if(!CG_MapInteger(&offset, argc, &type) || type < ME_PLAYER || type > ME_COMMANDMAP_MARKER) return qfalse;
+		ent->type = type;
+		for(component = 0; component < (cgs.ccLayers ? 3 : 2); ++component) {
+			if(!CG_MapInteger(&offset, argc, &coordinate) || coordinate < INT_MIN / 128 || coordinate > INT_MAX / 128) return qfalse;
+			if(component == 0) ent->x = coordinate * 128;
+			else if(component == 1) ent->y = coordinate * 128;
+			else ent->z = coordinate * 128;
+		}
+		if((type <= ME_PLAYER_DISGUISED || type == ME_LANDMINE) && !CG_MapInteger(&offset, argc, &ent->yaw)) return qfalse;
+		if(!CG_MapInteger(&offset, argc, &ent->data)) return qfalse;
+		limit = type <= ME_PLAYER_DISGUISED ? MAX_CLIENTS :
+		        type >= ME_TANK ? MAX_OID_TRIGGERS : MAX_GENTITIES;
+		if(ent->data < 0 || ent->data >= limit ||
+		   (type == ME_LANDMINE && ent->data != TEAM_AXIS && ent->data != TEAM_ALLIES)) return qfalse;
+		ent->team = i < axis ? TEAM_AXIS : TEAM_ALLIES;
+		ent->transformed[0] = ((float)ent->x - cg.mapcoordsMins[0]) * cg.mapcoordsScale[0] * CC_2D_W;
+		ent->transformed[1] = ((float)ent->y - cg.mapcoordsMins[1]) * cg.mapcoordsScale[1] * CC_2D_H;
+	}
+	if(offset != argc) return qfalse;
+	memcpy(mapEntities, pending, total * sizeof(*pending));
+	mapEntityCount = total;
+	mapEntityTime = cg.time;
+	CG_TransformAutomapEntity();
+	return qtrue;
+}
+
+qboolean CG_DisguiseMapCheck(const mapEntityData_t *ent) {
+	if(!ent || !cg.snap || ent->data < 0 || ent->data >= MAX_CLIENTS || !cgs.clientinfo[ent->data].infoValid) return qfalse;
+	return (cg_entities[ent->data].currentState.powerups & (1 << PW_OPS_DISGUISED)) &&
+	       VectorDistance(cg.snap->ps.origin, cg_entities[ent->data].lerpOrigin) >= 512.0f;
+}
 static qboolean expanded = qfalse;
 
 extern playerInfo_t pi;
@@ -16,12 +74,24 @@ void CG_TransformToCommandMapCoord( float *coord_x, float *coord_y ) {
 
 // START	xkan, 9/19/2002
 //static float automapZoom = 3.583;	// apporoximately 1.2^7
-static float automapZoom = 5.159;
+vmCvar_t cg_automapZoom;
+
+float CG_NitmodAutomapZoom(void) {
+	float zoom = cg_automapZoom.value;
+	if(!(zoom >= 1 && zoom <= 7.43f)) {
+		if(zoom < 1) return 1;
+		if(zoom > 7.43f) return 7.43f;
+		return 5.159f;
+	}
+	return zoom;
+}
 
 int CG_CurLayerForZ( int z ) {
 	int curlayer = 0;
+	int layers = cgs.ccLayers;
+	if(layers <= 0 || layers > sizeof(cgs.ccLayerCeils) / sizeof(cgs.ccLayerCeils[0])) return 0;
 
-	while( z > cgs.ccLayerCeils[curlayer] && curlayer < cgs.ccLayers )
+	while( curlayer < layers && z > cgs.ccLayerCeils[curlayer] )
 		curlayer++;
 
 	if( curlayer == cgs.ccLayers ) {
@@ -30,6 +100,18 @@ int CG_CurLayerForZ( int z ) {
 	}
 
 	return curlayer;
+}
+
+/* Original revive pulse, with defined behavior before valid reinforcement cvars
+ * arrive and for clock values outside the ordinary positive match timeline. */
+float CG_MapReviveAlpha(int time, int interval) {
+	double phase = 0;
+	if(interval > 0) {
+		phase = (interval - fmod((double)time, interval)) / interval;
+		if(phase > 1) phase = 1;
+		if(phase < 0) phase = 0;
+	}
+	return .5f + .25f * (sin(sqrt(phase) * 50 * M_PI) + 1);
 }
 
 static qboolean CG_ScissorEntIsCulled( mapEntityData_t* mEnt, mapScissor_t *scissor ) {
@@ -85,6 +167,7 @@ each map entity within the automap
 void CG_TransformAutomapEntity( void )
 {
 	int i;
+	float automapZoom = CG_NitmodAutomapZoom();
 
 	for (i=0; i<mapEntityCount; i++) {
 		mapEntityData_t* mEnt = &mapEntities[i];
@@ -97,6 +180,7 @@ void CG_TransformAutomapEntity( void )
 
 void CG_AdjustAutomapZoom(int zoomIn)
 {
+	float automapZoom = CG_NitmodAutomapZoom();
 	if (zoomIn) {
 		automapZoom *= 1.2;
 		if (automapZoom > 7.43)  // approximately 1.2^11
@@ -109,6 +193,8 @@ void CG_AdjustAutomapZoom(int zoomIn)
 			automapZoom = 1;
 	}
 	// recalculate the screen coordinates since the zoom changed
+	trap_Cvar_Set("cg_automapZoom", va("%f", automapZoom));
+	trap_Cvar_Update(&cg_automapZoom);
 	CG_TransformAutomapEntity();
 }
 // END		xkan, 9/19/2002
@@ -176,6 +262,10 @@ CG_ParseMapEntityInfo
 */
 void CG_ParseMapEntityInfo( int axis_number, int allied_number ) {
 	int i, offset;
+	if(NITMOD_UsesOriginalProtocol()) {
+		CG_ParseOriginalMapEntityInfo();
+		return;
+	}
 
 	mapEntityCount = 0;
 	mapEntityTime = cg.time;
@@ -392,11 +482,18 @@ void CG_DrawMapEntity( mapEntityData_t *mEnt, float x, float y, float w, float h
 	vec2_t icon_extends, icon_pos, string_pos;
 	int customimage = 0;
 	oidInfo_t* oidInfo = NULL;
+	qboolean original = NITMOD_UsesOriginalProtocol();
+	if(!mEnt || !snap) return;
 
 	switch( mEnt->type ) {
 	case ME_PLAYER_DISGUISED:
 	case ME_PLAYER_REVIVE:
 	case ME_PLAYER:
+		if(mEnt->data < 0 || mEnt->data >= MAX_CLIENTS) return;
+		/* Original CG_DrawMapEntity: DM has no player/revive/class/voice
+		 * markers; the local player also disappears while in limbo. */
+		if(original && (cgs.gametype == 8 ||
+		   ((snap->ps.pm_flags & PMF_LIMBO) && mEnt->data == cg.clientNum))) return;
 		ci = &cgs.clientinfo[mEnt->data];
 		if(!ci->infoValid) {
 			return;
@@ -433,7 +530,8 @@ void CG_DrawMapEntity( mapEntityData_t *mEnt, float x, float y, float w, float h
 			}
 			
 			mEnt->yaw = cg.predictedPlayerState.viewangles[YAW];
-		} else if( ci->team == snap->ps.persistant[PERS_TEAM] && cent->currentValid ) {
+		} else if( original ? (ci->team == snap->ps.persistant[PERS_TEAM] || CG_DisguiseMapCheck(mEnt)) :
+		           (ci->team == snap->ps.persistant[PERS_TEAM] && cent->currentValid) ) {
 			if( !scissor ) {
 				mEnt->transformed[0] = ((cent->lerpOrigin[0] - cg.mapcoordsMins[0]) * cg.mapcoordsScale[0]) * w;
 				mEnt->transformed[1] = ((cent->lerpOrigin[1] - cg.mapcoordsMins[1]) * cg.mapcoordsScale[1]) * h;
@@ -476,21 +574,22 @@ void CG_DrawMapEntity( mapEntityData_t *mEnt, float x, float y, float w, float h
 		if( scissor ) {
 			icon_extends[0] *= (scissor->zoomFactor / 5.159);
 			icon_extends[1] *= (scissor->zoomFactor / 5.159);
+			if(original) {
+				icon_pos[0] += icon_size - icon_extends[0] * .5f;
+				icon_pos[1] += icon_size - icon_extends[1] * .5f;
+			}
 		}
 
 		if( mEnt->type == ME_PLAYER_REVIVE ) {
-			float msec;
+			int interval = 0, viewer = snap->ps.clientNum;
 			vec4_t reviveClr = { 1.f, 1.f, 1.f, 1.f };
 
-			if (cgs.clientinfo[cg.snap->ps.clientNum].team == TEAM_AXIS) {
-				msec = (cg_redlimbotime.integer - (cg.time%cg_redlimbotime.integer)) / (float)cg_redlimbotime.integer;
-			} else if (cgs.clientinfo[cg.snap->ps.clientNum].team == TEAM_ALLIES) {
-				msec = (cg_bluelimbotime.integer - (cg.time%cg_bluelimbotime.integer)) / (float)cg_bluelimbotime.integer;
-			} else {
-				msec = 0;
+			if(viewer >= 0 && viewer < MAX_CLIENTS) {
+				if(cgs.clientinfo[viewer].team == TEAM_AXIS) interval = cg_redlimbotime.integer;
+				else if(cgs.clientinfo[viewer].team == TEAM_ALLIES) interval = cg_bluelimbotime.integer;
 			}
 
-			reviveClr[3] = .5f + .5f * ((sin(sqrt(msec) * 25 * 2 * M_PI) + 1) * .5f);
+			reviveClr[3] = CG_MapReviveAlpha(cg.time, interval);
 
 			trap_R_SetColor( reviveClr );
 			CG_DrawPic( icon_pos[0] + 3, icon_pos[1] + 3, icon_extends[0] - 3, icon_extends[1] - 3, cgs.media.medicIcon);
@@ -558,10 +657,12 @@ void CG_DrawMapEntity( mapEntityData_t *mEnt, float x, float y, float w, float h
 	case ME_COMMANDMAP_MARKER:
 		cent = NULL;
 		if( mEnt->type == ME_TANK || mEnt->type == ME_TANK_DEAD ) {
+			if(mEnt->data < 0 || mEnt->data >= MAX_OID_TRIGGERS || !cg.snap) return;
 			oidInfo = &cgs.oidInfo[ mEnt->data ];
 
 			for( j = 0; j < cg.snap->numEntities; j++ ) {
 				if( cg.snap->entities[j].eType == ET_OID_TRIGGER && cg.snap->entities[j].teamNum == mEnt->data ) {
+					if(cg.snap->entities[j].number < 0 || cg.snap->entities[j].number >= MAX_GENTITIES) continue;
 					cent = &cg_entities[cg.snap->entities[j].number];
 					if( !scissor ) {
 						mEnt->transformed[0] = ((cent->lerpOrigin[0] - cg.mapcoordsMins[0]) * cg.mapcoordsScale[0]) * w;
@@ -574,7 +675,9 @@ void CG_DrawMapEntity( mapEntityData_t *mEnt, float x, float y, float w, float h
 				}
 			}
 		} else if( mEnt->type == ME_CONSTRUCT || mEnt->type == ME_DESTRUCT || mEnt->type == ME_DESTRUCT_2 ) {
+			if(mEnt->data < 0 || mEnt->data >= MAX_GENTITIES) return;
 			cent = &cg_entities[mEnt->data];
+			if(cent->currentState.modelindex2 < 0 || cent->currentState.modelindex2 >= MAX_OID_TRIGGERS) return;
 
 			oidInfo = &cgs.oidInfo[ cent->currentState.modelindex2 ];
 
@@ -586,6 +689,7 @@ void CG_DrawMapEntity( mapEntityData_t *mEnt, float x, float y, float w, float h
 				mEnt->automapTransformed[1] = ((cent->lerpOrigin[1] - cg.mapcoordsMins[1]) * cg.mapcoordsScale[1]) * h * scissor->zoomFactor;
 			}
 		} else if( mEnt->type == ME_COMMANDMAP_MARKER ) {
+			if(mEnt->data < 0 || mEnt->data >= MAX_OID_TRIGGERS) return;
 			oidInfo = &cgs.oidInfo[ mEnt->data ];
 
 			if( !scissor ) {
@@ -1049,8 +1153,16 @@ void CG_DrawAutoMap( void ) {
 	y = 20;
 	w = 100;
 	h = 100;
+	if ( NITMOD_UsesOriginalProtocol() ) {
+		x = 54; y = 390; w = h = 70;
+		if ( cgs.autoMapExpanded || cg.time - cgs.autoMapExpandTime < 250 ) {
+			CG_DrawExpandedAutoMap();
+		}
+	}
 
-	if( cgs.autoMapExpanded ) {	
+	if ( NITMOD_UsesOriginalProtocol() ) {
+		/* Unlike ET, Nitmod does not slide or hide the compact map. */
+	} else if( cgs.autoMapExpanded ) {
 		if( cg.time - cgs.autoMapExpandTime < 100.f ) {
 			y -= ( ( cg.time - cgs.autoMapExpandTime ) / 100.f ) * 128.f;
 			CG_DrawExpandedAutoMap();
@@ -1073,7 +1185,7 @@ void CG_DrawAutoMap( void ) {
 	mapScissor.circular = qtrue;
 
 
-	mapScissor.zoomFactor = automapZoom;
+	mapScissor.zoomFactor = CG_NitmodAutomapZoom();
 
 	mapScissor.tl[0] = mapScissor.tl[1] = 0;
 	mapScissor.br[0] = mapScissor.br[1] = -1;

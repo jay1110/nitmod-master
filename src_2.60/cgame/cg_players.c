@@ -6,7 +6,12 @@
 */
 
 #include "cg_local.h"
+#include "cg_nitmod_names.h"
+#include "cg_nitmod_debug.h"
+#include "cg_nitmod_animation.h"
+#include "cg_nitmod_lean.h"
 #include "cg_nitmod_config.h"
+#include "cg_nitmod_skill_rewards.h"
 #include "../game/bg_classes.h"
 #include "../game/nitmod_skills.h"
 #include "../game/nitmod_protocol.h"
@@ -142,7 +147,7 @@ void CG_NewClientInfo( int clientNum ) {
 
 	ci = &cgs.clientinfo[clientNum];
 
-	configstring = CG_ConfigString( clientNum + CS_PLAYERS );
+	configstring = NITMOD_PlayerConfigString(clientNum);
 	if ( !*configstring ) {
 		memset( ci, 0, sizeof( *ci ) );
 		return;		// player just left
@@ -151,11 +156,13 @@ void CG_NewClientInfo( int clientNum ) {
 	// build into a temp buffer so the defer checks can use
 	// the old value
 	memset( &newInfo, 0, sizeof( newInfo ) );
+	newInfo.countryCode = 255;
 
 	// Gordon: grabbing some older stuff, if it's a new client, tinfo will update within one second anyway, otherwise you get the health thing flashing red
 	// NOTE: why are we bothering to do all this setting up of a new clientInfo_t anyway? it was all for deffered clients iirc, which we dont have
 	newInfo.location[0] =	ci->location[0];
 	newInfo.location[1] =	ci->location[1];
+	newInfo.location[2] =	ci->location[2];
 	newInfo.health =		ci->health;
 	newInfo.fireteamData =	ci->fireteamData;
 	newInfo.clientNum =		clientNum;
@@ -172,6 +179,10 @@ void CG_NewClientInfo( int clientNum ) {
 	// bot skill
 	v = Info_ValueForKey( configstring, "skill" );
 	newInfo.botSkill = atoi( v );
+
+	/* Original token table value 0x58 maps to configstring key "u". */
+	v = Info_ValueForKey(configstring, "u");
+	newInfo.countryCode = NITMOD_ParseCountryCode(v);
 
 	// team
 	v = Info_ValueForKey( configstring, "t" );
@@ -194,7 +205,7 @@ void CG_NewClientInfo( int clientNum ) {
 		int i;
 		char buf[2];
 		buf[1] = '\0';
-		for( i = 0; i < SK_NUM_SKILLS; i++ ) {
+		for( i = 0; i < SK_NUM_SKILLS && *v; i++ ) {
 			buf[0] = *v;
 			newInfo.medals[i] = atoi( buf );
 			v++;
@@ -207,9 +218,9 @@ void CG_NewClientInfo( int clientNum ) {
 	}
 
 	v = Info_ValueForKey( configstring, "s");
-	/* newInfo is zero-initialized: missing/invalid skills stay neutral.
-	 * Do not accept Nitmod level five before every reward/XP path supports it. */
-	NITMOD_ParseSkillDigits( v, NUM_SKILL_LEVELS - 1, newInfo.skill );
+	/* Preserve original level five for presentation without exposing it as
+	 * an index to native five-entry skill/ability tables. */
+	NITMOD_DecodeClientSkills(v, newInfo.skill, newInfo.nitmodSkillLevels);
 
 	/* Original rn token 0x89 stores a signed equipment status. Missing or
 	 * malformed values stay zero in this freshly initialized snapshot. */
@@ -233,9 +244,15 @@ void CG_NewClientInfo( int clientNum ) {
 
 	v = Info_ValueForKey( configstring, "sw" );
 	newInfo.secondaryweapon = atoi( v );
+	if(NITMOD_UsesOriginalProtocol()) {
+		newInfo.weapon = NITMOD_WeaponFromWire(newInfo.weapon);
+		newInfo.latchedweapon = NITMOD_WeaponFromWire(newInfo.latchedweapon);
+		newInfo.secondaryweapon = NITMOD_WeaponFromWire(newInfo.secondaryweapon);
+	}
 
 	v = Info_ValueForKey( configstring, "ref" );
 	newInfo.refStatus = atoi( v );
+	NITMOD_ParseClientExtras(configstring, &newInfo);
 
 	// Gordon: detect rank/skill changes client side
 	if( clientNum == cg.clientNum ) {
@@ -258,11 +275,14 @@ void CG_NewClientInfo( int clientNum ) {
 		}
 
 		for( i = 0; i < SK_NUM_SKILLS; i++ ) {
-			if( newInfo.skill[i] > cgs.clientinfo[ cg.clientNum ].skill[i] ) {
+			int shownLevel = NITMOD_UsesOriginalProtocol() ? newInfo.nitmodSkillLevels[i] : newInfo.skill[i];
+			int oldLevel = NITMOD_UsesOriginalProtocol() ? ci->nitmodSkillLevels[i] : ci->skill[i];
+			qboolean nativeUpgrade = newInfo.skill[i] > ci->skill[i];
+			if( shownLevel > oldLevel ) {
 				// Gordon: slick hack so that funcs we call use teh new value now
 				cgs.clientinfo[ cg.clientNum ].skill[ i ] = newInfo.skill[ i ];
 
-				if( newInfo.skill[i] == 4 && i == SK_HEAVY_WEAPONS ) {
+				if( nativeUpgrade && newInfo.skill[i] == 4 && i == SK_HEAVY_WEAPONS ) {
 					if( cgs.clientinfo[ cg.clientNum ].skill[SK_LIGHT_WEAPONS] == 4 ) {
 						oldclass = cgs.ccSelectedClass;
 						cgs.ccSelectedClass = newInfo.cls;
@@ -278,7 +298,7 @@ void CG_NewClientInfo( int clientNum ) {
 					}
 				}
 
-				if( newInfo.skill[i] == 4 && i == SK_LIGHT_WEAPONS ) {
+				if( nativeUpgrade && newInfo.skill[i] == 4 && i == SK_LIGHT_WEAPONS ) {
 					if( cgs.clientinfo[ cg.clientNum ].skill[SK_HEAVY_WEAPONS] == 4 ) {
 						if( cgs.ccSelectedWeapon2 == 2 ) {
 							oldclass = cgs.ccSelectedClass;
@@ -296,9 +316,13 @@ void CG_NewClientInfo( int clientNum ) {
 					}					
 				}
 
-				CG_AddPMItemBig( PM_SKILL, va("Increased %s skill to level %i!", skillNames[i], newInfo.skill[i] ), cgs.media.skillPics[ i ] );
+				CG_AddPMItemBig( PM_SKILL, va("Increased %s skill to level %i!", skillNames[i], shownLevel ), cgs.media.skillPics[ i ] );
 
-				if( newInfo.skill[i] > 0 && newInfo.skill[i] < NUM_SKILL_LEVELS ) {
+				if(NITMOD_UsesOriginalProtocol()) {
+					const char *reward = CG_NITMOD_SkillRewardText(i, shownLevel);
+					if(reward) CG_PriorityCenterPrint(va("You have been rewarded with %s", reward),
+						SCREEN_HEIGHT - (SCREEN_HEIGHT * 0.20), SMALLCHAR_WIDTH, 99999);
+				} else if( newInfo.skill[i] > 0 && newInfo.skill[i] < NUM_SKILL_LEVELS ) {
 					CG_PriorityCenterPrint( va( "You have been rewarded with %s", cg_skillRewards[ i ][ newInfo.skill[i]-1 ]), SCREEN_HEIGHT - (SCREEN_HEIGHT * 0.20), SMALLCHAR_WIDTH, 99999 );
 				}
 			}
@@ -596,6 +620,8 @@ void CG_RunLerpFrameRate( clientInfo_t *ci, lerpFrame_t *lf, int newAnimation, c
 #define	ANIM_SPEEDMAX_LOW	100
 #define	ANIM_SPEEDMAX_HIGH	20
 
+	if(CG_NitmodCorpseAnimation(cent, lf, newAnimation)) return;
+
 	// debugging tool to get no animations
 	if( cg_animSpeed.integer == 0 ) {
 		lf->oldFrame = lf->frame = lf->backlerp = 0;
@@ -833,11 +859,12 @@ static void CG_PlayerAnimation( centity_t *cent, refEntity_t *body ) {
 	ci = &cgs.clientinfo[ clientNum ];
 	character = CG_CharacterForClientinfo( ci, cent );
 
-	if( !character ) {
+	if( !character || !character->animModelInfo ) {
 		return;
 	}
 
 	if( cg_noPlayerAnims.integer ) {
+		if(character->animModelInfo->numAnimations < 1 || !character->animModelInfo->animations[0]) return;
 		body->frame = body->oldframe = body->torsoFrame = body->oldTorsoFrame = 0;
 		body->frameModel = body->oldframeModel = body->torsoFrameModel= body->oldTorsoFrameModel = character->animModelInfo->animations[0]->mdxFile;
 		return;
@@ -1134,6 +1161,7 @@ static void CG_PlayerAngles( centity_t *cent, vec3_t legs[3], vec3_t torso[3], v
 	}
 
 	// pain twitch
+	CG_NitmodPlayerLean(cent, torsoAngles, headAngles);
 	CG_AddPainTwitch( cent, torsoAngles );
 
 	// pull the angles back out of the hierarchial chain
@@ -1836,6 +1864,8 @@ void CG_Player( centity_t *cent )
 	// add the any sprites hovering above the player
 	// rain - corpses don't get icons (fireteam check ran out of bounds)
 	if( cent->currentState.eType != ET_CORPSE ) {
+		CG_NitmodQueueWoundedName(cent);
+		CG_NitmodQueueSpectatorName(cent);
 		CG_PlayerSprites( cent );
 	}
 
@@ -1857,6 +1887,13 @@ void CG_Player( centity_t *cent )
 	}
 
 	renderfx |= RF_LIGHTING_ORIGIN;			// use the same origin for all
+	{
+		qhandle_t demoShader = CG_NitmodDemoPlayerShader(ci->team);
+		if(demoShader) {
+			renderfx |= RF_DEPTHHACK;
+			body.customShader = head.customShader = acc.customShader = demoShader;
+		}
+	}
 
 	// set renderfx for accessories
 	acc.renderfx = renderfx;
@@ -1915,6 +1952,7 @@ void CG_Player( centity_t *cent )
 	}
 
 	// (SA) only need to set this once...
+	CG_NitmodDrawPlayerDebug(cent, &body);
 	VectorCopy( lightorigin, acc.lightingOrigin );
 
 	CG_AddRefEntityWithPowerups( &body,	cent->currentState.powerups, ci->team, &cent->currentState, cent->fireRiseDir );
@@ -2182,6 +2220,7 @@ A player just came into view or teleported, so reset all animation info
 ===============
 */
 void CG_ResetPlayerEntity( centity_t *cent ) {
+	memset(&cent->nitmodLean, 0, sizeof(cent->nitmodLean));
 	// Gordon: these are unused
 //	cent->errorTime = -99999;		// guarantee no error decay added
 //	cent->extrapolated = qfalse;	

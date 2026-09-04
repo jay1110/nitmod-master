@@ -3,7 +3,7 @@
 #include "nitmod_protocol.h"
 #include <limits.h>
 
-enum { NITMOD_TRACKED_WEAPON_CVARS = 9 };
+enum { NITMOD_TRACKED_WEAPON_CVARS = 10 };
 static vmCvar_t trackedWeaponCvars[NITMOD_TRACKED_WEAPON_CVARS];
 static int weaponModificationCounts[NITMOD_TRACKED_WEAPON_CVARS];
 static qboolean weaponCvarsRegistered;
@@ -24,6 +24,15 @@ int G_NITMOD_UpdateWeaponConfiguration(void) {
 int G_NITMOD_ConfiguredWarMode(void) {
     /* g_war is the first registration below, initialized by the engine. */
     return weaponCvarsRegistered ? trackedWeaponCvars[0].integer : 0;
+}
+
+int G_NITMOD_ConfiguredWeaponFlags(void) {
+    /* Third tracked registration is g_weapons; no per-usercmd engine query. */
+    return weaponCvarsRegistered ? trackedWeaponCvars[2].integer : 0;
+}
+
+int G_NITMOD_ConfiguredNoReload(void) {
+    return weaponCvarsRegistered ? trackedWeaponCvars[9].integer : 0;
 }
 
 int G_NITMOD_ReadMedicOptions( unsigned int *options ) {
@@ -70,7 +79,8 @@ void G_NITMOD_RegisterWeaponConfiguration( void ) {
         { "team_maxMG42s", "-1", 0 },
         { "team_maxMortars", "-1", 0 },
         { "team_maxriflegrenades", "-1", 0 },
-        { "g_medics", "0", 0 }
+        { "g_medics", "0", 0 },
+        { "g_noReload", "0", 0 }
     };
     int i;
     typedef char trackedCountCheck[(sizeof(defaults) / sizeof(defaults[0]) == NITMOD_TRACKED_WEAPON_CVARS) ? 1 : -1];

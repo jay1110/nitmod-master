@@ -3,6 +3,7 @@
 // processed entities, like smoke puffs, gibs, shells, etc.
 
 #include "cg_local.h"
+#include "cg_nitmod_debug.h"
 
 // Ridah, increased this
 //#define	MAX_LOCAL_ENTITIES	512
@@ -16,6 +17,15 @@ localEntity_t	*cg_freeLocalEntities;		// single linked list
 
 // Ridah, debugging
 int localEntCount=0;
+
+localEntity_t *CG_NitmodFindRailEntity(int group, int segment) {
+	localEntity_t *le;
+	if(!group) return NULL;
+	for(le = cg_activeLocalEntities.next; le && le != &cg_activeLocalEntities; le = le->next)
+		if(le->leType == LE_FADE_RGB && le->nitmodRailGroup == group &&
+		   le->nitmodRailSegment == segment) return le;
+	return NULL;
+}
 
 /*
 ===================
@@ -1346,4 +1356,3 @@ void CG_AddLocalEntities( void ) {
 		}
 	}
 }
-

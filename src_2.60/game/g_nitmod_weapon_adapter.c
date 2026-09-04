@@ -2,6 +2,34 @@
 #include "g_nitmod_teamcount.h"
 #include "g_nitmod_config.h"
 
+int G_NITMOD_PickupPrecheck( gentity_t *entity, int nativeWeapon ) {
+    nitmodWeaponPolicyInput_t input;
+    nitmodWeaponPolicyResult_t result;
+    int slot;
+    if(!entity || !entity->client || nativeWeapon < WP_NONE || nativeWeapon >= WP_NUM_WEAPONS) return 0;
+    memset(&input,0,sizeof(input)); input.pickupContext=1;
+    if(!G_NITMOD_ReadWeaponConfiguration(&input)) return -1;
+    if(G_NITMOD_WeaponPrecheck(entity,nativeWeapon,input.warMode)==NITMOD_WEAPON_DEFER &&
+        !G_NITMOD_ReadCachedWeaponCounts(entity,nativeWeapon,&input)) return -1;
+    result=G_NITMOD_EvaluateWeaponPolicy(entity,nativeWeapon,&input);
+    if(result.limit==NITMOD_LIMIT_INVALID || result.decision==NITMOD_WEAPON_DEFER) return -1;
+    if(result.decision==NITMOD_WEAPON_DENY) {
+        if(result.messageReason && level.clients) {
+            for(slot=0;slot<MAX_CLIENTS;++slot) if(entity==&g_entities[slot]) {
+                if(entity->client==&level.clients[slot])
+                    NITMOD_SendWeaponLimitMessage(slot,result.messageReason);
+                break;
+            }
+        }
+        return 0;
+    }
+    /* These original early returns precede all private weapon/class data. */
+    if((input.warMode>=1 && input.warMode<=4) || nativeWeapon==WP_KNIFE || input.pickAnyWeapon)
+        return G_NITMOD_PickupPolicy(entity,nativeWeapon,result.decision,input.warMode,
+            input.pickAnyWeapon,0,0);
+    return -1;
+}
+
 int G_NITMOD_CanPickupWeapon( gentity_t *entity, int nativeWeapon,
     unsigned int classMask ) {
     nitmodWeaponPolicyInput_t input;

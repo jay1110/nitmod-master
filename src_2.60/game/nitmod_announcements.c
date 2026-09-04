@@ -11,8 +11,8 @@ int NITMOD_AnnouncementCount( int type, int detail ) {
 		return detail < 6 ? ( detail + 1 ) * 5 : -1;
 	case 2: /* Same function: negative streaks -10, -20, -30. */
 		return detail < 3 ? ( detail + 1 ) * 10 : -1;
-	case 3: /* CSWTCH_57 is missing; preserve the tier without guessing kills. */
-		return detail < INT_MAX ? detail + 1 : -1;
+	case 3: /* Original MKName has five entries; return the tier, not kills. */
+		return detail < 5 ? detail + 1 : -1;
 	case 4: /* ReviveEntity sends the actual count at each fifth revive. */
 		return detail >= 5 && detail % 5 == 0 ? detail : -1;
 	case 5: /* ReviveEntity sends count - 2 for counts 2 through 5. */

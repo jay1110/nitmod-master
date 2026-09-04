@@ -1,4 +1,5 @@
 #include "nitmod_weapon_reload.h"
+#include "nitmod_weapon_clip.h"
 #include <stdio.h>
 #include <limits.h>
 #include <stdint.h>
@@ -37,6 +38,64 @@ static void ExpectNativeTransfer(playerState_t *state, int weapon) {
 
 /* Metamorphic check: leaning must not change any reload result for mapped
  * identities, including paths still rejected by native inventory policy. */
+static int TestActiveReloadStart(void) {
+    pmove_t move;
+    pmoveExt_t ext;
+    playerState_t state, before, expected;
+    bg_character_t character;
+    int skills[SK_NUM_SKILLS];
+    int weapon, phase, timer, request, autoReload, inventory, fast, mode, calls, event;
+    pm = &move;
+    memset(&move,0,sizeof(move)); memset(&ext,0,sizeof(ext));
+    memset(&character,0,sizeof(character)); memset(skills,0,sizeof(skills));
+    move.ps=&state; move.pmext=&ext; move.character=&character; move.skill=skills;
+    character.animModelInfo=&model;
+    for(weapon=1;weapon<WP_NUM_WEAPONS;++weapon) {
+        if(!NITMOD_ReloadUsesOuterClipGate(weapon)) continue;
+        for(phase=WEAPON_READY;phase<=WEAPON_RELOADING;++phase)
+        for(timer=-1;timer<=1;++timer) for(request=0;request<3;++request)
+        for(autoReload=0;autoReload<2;++autoReload) for(inventory=0;inventory<4;++inventory)
+        for(fast=0;fast<2;++fast) {
+            memset(&state,0,sizeof(state)); memset(&ext,0,sizeof(ext));
+            state.weapon=weapon; state.weaponstate=phase; state.weaponTime=timer;
+            state.weapAnim=123; state.leanf=12;
+            state.ammo[BG_FindAmmoForWeapon(weapon)]=inventory ? 30 : 0;
+            state.ammoclip[BG_FindClipForWeapon(weapon)]=inventory==3 ? GetAmmoTableData(weapon)->maxclip : inventory==2;
+            if(BG_IsAkimboWeapon(weapon)) state.ammoclip[BG_FindClipForWeapon(BG_AkimboSidearm(weapon))]=inventory==3 ? 8 : 0;
+            move.cmd.weapon=weapon;
+            move.cmd.wbuttons=request==1 ? WBUTTON_RELOAD : request==2 ? WBUTTON_ATTACK2 : 0;
+            move.nitmodReloadPreferenceFlags=NITMOD_CGF_ALT_RELOAD;
+            ext.bAutoReload=autoReload; skills[SK_LIGHT_WEAPONS]=fast ? 2 : 0;
+            before=state; calls=event=0;
+            for(mode=0;mode<2;++mode) {
+                state=before; move.nitmodReloadEnabled=mode;
+                bodyCalls=conditionCalls=badBoundary=0;
+                PM_CheckForReload(weapon);
+                CHECK(!badBoundary && !conditionCalls);
+                if(!mode) { expected=state; calls=bodyCalls; event=bodyEvent; }
+                else {
+                    CHECK(!memcmp(&state,&expected,sizeof(state)));
+                    CHECK(bodyCalls==calls && (!calls || bodyEvent==event));
+                }
+            }
+        }
+    }
+    /* Invalid inventories and overflowing timing cannot emit partial feedback. */
+    move.nitmodReloadEnabled=qtrue; move.cmd.weapon=WP_MP40; move.cmd.wbuttons=WBUTTON_RELOAD;
+    for(inventory=0;inventory<4;++inventory) {
+        memset(&state,0,sizeof(state)); state.weapon=WP_MP40; state.weaponstate=WEAPON_READY;
+        state.ammo[WP_MP40]=30;
+        if(inventory==0) state.ammo[WP_MP40]=-1;
+        if(inventory==1) state.ammoclip[WP_MP40]=-1;
+        if(inventory==2) state.eventSequence=INT_MAX;
+        if(inventory==3) state.weaponTime=INT_MAX;
+        before=state; bodyCalls=conditionCalls=badBoundary=0;
+        if(inventory==3) PM_BeginWeaponReload(WP_MP40); else PM_CheckForReload(WP_MP40);
+        CHECK(!memcmp(&state,&before,sizeof(state)) && !bodyCalls && !conditionCalls);
+    }
+    return 0;
+}
+
 static int TestLeaningReload(void) {
     static const int phases[] = { WEAPON_READY, WEAPON_FIRING, WEAPON_FIRINGALT };
     pmove_t move;
@@ -870,6 +929,73 @@ static int TestReloadFiringStates(void) {
     return 0;
 }
 
+static int TestActiveScopeReload(void) {
+    static const int scopes[] = { WP_GARAND_SCOPE, WP_K43_SCOPE, WP_FG42SCOPE };
+    static const int bases[] = { WP_GARAND, WP_K43, WP_FG42 };
+    pmove_t move;
+    pmoveExt_t ext;
+    playerState_t state, before;
+    bg_character_t character;
+    int skills[SK_NUM_SKILLS];
+    int w, war, phase, timer, request, reserve, clip, allowed, manual, sequence, invalid;
+    memset(&move,0,sizeof(move)); memset(&ext,0,sizeof(ext));
+    memset(&character,0,sizeof(character)); memset(skills,0,sizeof(skills));
+    move.ps=&state; move.pmext=&ext; move.character=&character; move.skill=skills;
+    character.animModelInfo=&model; move.nitmodReloadEnabled=qtrue; pm=&move;
+    for(w=0;w<3;++w) for(war=0;war<=4;++war)
+    for(phase=WEAPON_READY;phase<=WEAPON_RELOADING;++phase)
+    for(timer=-1;timer<=1;++timer) for(request=0;request<4;++request)
+    for(reserve=-1;reserve<=1;++reserve) for(clip=-1;clip<=2;++clip) {
+        memset(&state,0,sizeof(state));
+        state.weapon=scopes[w]; state.weaponstate=phase; state.weaponTime=timer;
+        state.stats[STAT_HEALTH]=100; memset(state.weapons,0xff,sizeof(state.weapons));
+        state.ammo[BG_FindAmmoForWeapon(scopes[w])]=reserve;
+        state.ammoclip[BG_FindClipForWeapon(scopes[w])]=clip==2 ? GetAmmoTableData(scopes[w])->maxclip : clip;
+        move.cmd.weapon=scopes[w]; move.nitmodWarMode=war;
+        move.cmd.wbuttons=request==1 ? WBUTTON_RELOAD : request>=2 ? WBUTTON_ATTACK2 : 0;
+        move.nitmodReloadPreferenceFlags=request==3 ? NITMOD_CGF_ALT_RELOAD : 0;
+        ext.bAutoReload=qtrue;
+        manual=request==1 || request==3;
+        allowed=manual && reserve>0 && clip>=0 && clip<2 &&
+            (phase==WEAPON_READY || phase==WEAPON_FIRING || phase==WEAPON_FIRINGALT);
+        /* Native Garand no-midclip policy is intentionally retained. */
+        if(war==2 && w==0 && clip==1) allowed=0;
+        before=state; bodyCalls=conditionCalls=badBoundary=0;
+        PM_CheckForReload(scopes[w]);
+        CHECK(!badBoundary);
+        CHECK(!memcmp(state.ammo,before.ammo,sizeof(state.ammo)));
+        CHECK(!memcmp(state.ammoclip,before.ammoclip,sizeof(state.ammoclip)));
+        if(!allowed) { CHECK(!memcmp(&state,&before,sizeof(state))); CHECK(!bodyCalls); continue; }
+        if(war!=2) {
+            CHECK(state.weapon==scopes[w] && state.nextWeapon==bases[w]);
+            CHECK(state.weaponstate==WEAPON_DROPPING_TORELOAD);
+            continue;
+        }
+        CHECK(state.weapon==scopes[w] && state.weaponstate==WEAPON_RELOADING);
+        CHECK(state.eventSequence==1 && state.events[0]==EV_FILL_CLIP);
+        CHECK(state.weaponTime==GetAmmoTableData(scopes[w])->reloadTime+(phase==WEAPON_READY ? timer : 0));
+        state.weaponTime=0; sequence=state.eventSequence;
+        PM_FinishWeaponReload();
+        CHECK(state.weapon==scopes[w] && state.weaponstate==WEAPON_READY);
+        CHECK(state.ammo[BG_FindAmmoForWeapon(scopes[w])]==0);
+        CHECK(state.ammoclip[BG_FindClipForWeapon(scopes[w])]==clip+reserve);
+        CHECK(state.eventSequence==sequence);
+    }
+    for(w=0;w<3;++w) for(invalid=0;invalid<4;++invalid) {
+        memset(&state,0,sizeof(state)); state.weapon=scopes[w]; state.weaponstate=WEAPON_READY;
+        state.ammo[BG_FindAmmoForWeapon(scopes[w])]=10;
+        move.cmd.wbuttons=WBUTTON_RELOAD; move.cmd.weapon=scopes[w]; move.nitmodWarMode=2;
+        move.noWeapClips=invalid==3;
+        if(invalid==0) state.weaponTime=INT_MAX;
+        if(invalid==1) state.eventSequence=INT_MAX;
+        if(invalid==2) state.eventSequence=-1;
+        before=state; bodyCalls=conditionCalls=badBoundary=0;
+        PM_CheckForReload(scopes[w]);
+        CHECK(!memcmp(&state,&before,sizeof(state)) && !bodyCalls && !conditionCalls);
+    }
+    return 0;
+}
+
 static int TestScopeReloadCycle(void) {
     static const int bases[] = { WP_GARAND, WP_K43, WP_FG42 };
     static const int scopes[] = { WP_GARAND_SCOPE, WP_K43_SCOPE, WP_FG42SCOPE };
@@ -1262,5 +1388,7 @@ int main(void) {
     CHECK(!TestNativeAmmoConsumption());
     CHECK(!TestAkimboShootReloadCycles());
     CHECK(!TestOuterClipGate());
+    CHECK(!TestActiveReloadStart());
+    CHECK(!TestActiveScopeReload());
     return 0;
 }

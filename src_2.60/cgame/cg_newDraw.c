@@ -1,5 +1,8 @@
 
 #include "cg_local.h"
+#include "cg_nitmod_config.h"
+#include "cg_nitmod_hud.h"
+#include "cg_nitmod_hints.h"
 
 int CG_DrawField (int x, int y, int width, int value, int charWidth, int charHeight, qboolean dodrawpic, qboolean leftAlign );		// NERVE - SMF
 
@@ -191,7 +194,9 @@ void CG_FitTextToWidth_SingleLine( char* instr, float scale, float w, int size) 
 weapIconDrawSize
 ==============
 */
-static int weapIconDrawSize(int weap) {
+int CG_NitmodWeaponIconScale(int weap) {
+	if(weap < WP_NONE || weap >= WP_NUM_WEAPONS) return 1;
+	if(cg_weapons[weap].weaponIconScale) return cg_weapons[weap].weaponIconScale;
 	switch(weap) {
 
 		// weapons to not draw
@@ -237,6 +242,10 @@ void CG_DrawPlayerWeaponIcon( rectDef_t *rect, qboolean drawHighlighted, int ali
 	qhandle_t	icon;
 	float		scale,halfScale;
 	vec4_t		hcolor;
+	qboolean original = NITMOD_UsesOriginalProtocol();
+	nitmodHudAnchor_t previous;
+	int tank = -1;
+	if(!rect || !refcolor || !cg.snap) return;
 	
 	VectorCopy(*refcolor, hcolor);
 	hcolor[3] = 1.f;
@@ -246,13 +255,22 @@ void CG_DrawPlayerWeaponIcon( rectDef_t *rect, qboolean drawHighlighted, int ali
 		realweap = WP_MOBILE_MG42;
 	else
 		realweap = cg.predictedPlayerState.weapon;
+	if(realweap < WP_NONE || realweap >= WP_NUM_WEAPONS) return;
 
-	size = weapIconDrawSize(realweap);
+	size = CG_NitmodWeaponIconScale(realweap);
 
 	if(!size)
 		return;
 
-	if( cg.predictedPlayerEntity.currentState.eFlags & EF_MOUNTEDTANK && cg_entities[cg_entities[ cg_entities[ cg.snap->ps.clientNum ].tagParent ].tankparent].currentState.density & 8 ) {
+	if((cg.predictedPlayerEntity.currentState.eFlags & EF_MOUNTEDTANK) &&
+	   cg.snap->ps.clientNum >= 0 && cg.snap->ps.clientNum < MAX_CLIENTS) {
+		int parent = cg_entities[cg.snap->ps.clientNum].tagParent;
+		if(parent >= 0 && parent < ENTITYNUM_WORLD) {
+			tank = cg_entities[parent].tankparent;
+			if(tank < 0 || tank >= ENTITYNUM_WORLD) tank = -1;
+		}
+	}
+	if(tank >= 0 && (cg_entities[tank].currentState.density & 8)) {
 		icon = cgs.media.browningIcon;
 	} else {
 		if( drawHighlighted ) {
@@ -266,7 +284,15 @@ void CG_DrawPlayerWeaponIcon( rectDef_t *rect, qboolean drawHighlighted, int ali
 
 
 	// pulsing grenade icon to help the player 'count' in their head
-	if(cg.predictedPlayerState.grenadeTimeLeft) {	// grenades and dynamite set this
+	if(original) {
+		/* Original icon animation is visual only. Audio is not emitted by
+		 * this HUD path; native ET's countdown sounds must not leak into it. */
+		int remaining = cg.predictedPlayerState.grenadeTimeLeft;
+		if(remaining < 0) remaining = 0;
+		scale = realweap == WP_KNIFE ? remaining / 50.0f : (remaining % 1000) / 100.0f;
+		halfScale = scale * .5f;
+		if(remaining) cg.grenLastTime = remaining;
+	} else if(cg.predictedPlayerState.grenadeTimeLeft) {	// grenades and dynamite set this
 
 		// these time differently 
 		if( realweap == WP_DYNAMITE ) {
@@ -334,7 +360,9 @@ void CG_DrawPlayerWeaponIcon( rectDef_t *rect, qboolean drawHighlighted, int ali
 
 
 		trap_R_SetColor( hcolor ); // JPW NERVE
+		if(original) previous = CG_NitmodHudAnchor(NITMOD_HUD_RIGHT);
 		CG_DrawPic( x, y, w, h, icon );
+		if(original) CG_NitmodHudAnchor(previous);
 	}
 }
 
@@ -364,6 +392,10 @@ void CG_DrawCursorhint(rectDef_t *rect) {
 		return;
 
 	CG_CheckForCursorHints();
+	if(NITMOD_UsesOriginalProtocol()) {
+		CG_NitmodDrawCursorHint(rect);
+		return;
+	}
 
 	switch(cg.cursorHintIcon) {
 
@@ -609,6 +641,10 @@ CG_DrawWeapStability
 */
 void CG_DrawWeapStability( rectDef_t *rect ) {
 	vec4_t goodColor = {0, 1, 0, 0.5f}, badColor = {1, 0, 0, 0.5f};
+	nitmodHudAnchor_t previous;
+	qboolean original = NITMOD_UsesOriginalProtocol();
+	float fraction;
+	if(!rect || !cg.snap) return;
 
 	if(!cg_drawSpreadScale.integer)
 		return;
@@ -630,7 +666,10 @@ void CG_DrawWeapStability( rectDef_t *rect ) {
 		return;
 	}
 
-	CG_FilledBar(rect->x, rect->y, rect->w, rect->h, goodColor, badColor, NULL, (float)cg.snap->ps.aimSpreadScale / 255.0f, 2|4|256); // flags (BAR_CENTER|BAR_VERT|BAR_LERP_COLOR)
+	fraction = cg.snap->ps.aimSpreadScale / 255.0f;
+	if(original) { previous = CG_NitmodHudAnchor(NITMOD_HUD_LEFT); fraction = Com_Clamp(0, 1, fraction); }
+	CG_FilledBar(rect->x, rect->y, rect->w, rect->h, goodColor, badColor, NULL, fraction, 2|4|256);
+	if(original) CG_NitmodHudAnchor(previous);
 }
 
 
@@ -642,9 +681,17 @@ CG_DrawWeapHeat
 void CG_DrawWeapHeat(rectDef_t *rect, int align) {
 	vec4_t	color = {1, 0, 0, 0.2f}, color2 = {1, 0, 0, 0.5f};
 	int flags = 0;
+	if(!rect || !cg.snap) return;
 
 	if(!(cg.snap->ps.curWeapHeat))
 		return;
+	if(NITMOD_UsesOriginalProtocol()) {
+		nitmodHudAnchor_t previous = CG_NitmodHudAnchor(NITMOD_HUD_RIGHT);
+		CG_FilledBar(rect->x, rect->y, rect->w, rect->h, color, color2, NULL,
+			Com_Clamp(0, 1, cg.snap->ps.curWeapHeat / 255.0f), 0);
+		CG_NitmodHudAnchor(previous);
+		return;
+	}
 
 	if( align != HUD_HORIZONTAL ) {
 		flags|=4;	// BAR_VERT

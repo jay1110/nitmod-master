@@ -1,5 +1,30 @@
 // cg_drawtools.c -- helper functions called by cg_draw, cg_scoreboard, cg_info, etc
 #include "cg_local.h"
+#include "cg_nitmod_hud.h"
+#include "cg_nitmod_config.h"
+
+/* Original full-screen overlays bypass the aspect-corrected HUD transform. */
+void CG_NitmodDrawOverlay(float x, float y, float w, float h, qhandle_t shader, qboolean solid) {
+    float s0 = 0, t0 = 0, s1 = solid ? 0 : 1, t1 = 1;
+    if(!solid) {
+        if(w < 0) { w = -w; s0 = 1; s1 = 0; }
+        if(h < 0) { h = -h; t0 = 1; t1 = 0; }
+    }
+    if(NITMOD_UsesOriginalProtocol()) {
+        float xs = cgs.glconfig.vidWidth / 640.0f;
+        x *= xs; w *= xs;
+        y *= cgs.screenYScale; h *= cgs.screenYScale;
+    } else {
+        CG_AdjustFrom640(&x, &y, &w, &h);
+    }
+    trap_R_DrawStretchPic(x, y, w, h, s0, t0, s1, t1, shader);
+}
+
+void CG_NitmodFillOverlay(float x, float y, float w, float h, const float *color) {
+    trap_R_SetColor(color);
+    CG_NitmodDrawOverlay(x, y, w, h, cgs.media.whiteShader, qtrue);
+    trap_R_SetColor(NULL);
+}
 
 /*
 ================
@@ -9,6 +34,7 @@ Adjusted for resolution and screen aspect ratio
 ================
 */
 void CG_AdjustFrom640( float *x, float *y, float *w, float *h ) {
+	if(CG_NitmodAdjustHud(x, y, w, h)) return;
 #if 0
 	// adjust for wide screens
 	if ( cgs.glconfig.vidWidth * 480 > cgs.glconfig.vidHeight * 640 ) {

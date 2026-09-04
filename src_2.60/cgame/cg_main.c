@@ -7,7 +7,15 @@
 
 
 #include "cg_local.h"
+#include "cg_nitmod_hud.h"
+#include "cg_nitmod_debug.h"
+#include "cg_nitmod_autoexec.h"
+#include "cg_nitmod_events.h"
+#include "cg_nitmod_hints.h"
+#include "cg_nitmod_names.h"
 #include "cg_nitmod_config.h"
+#include "cg_nitmod_log.h"
+#include "cg_nitmod_locations.h"
 #include "../game/nitmod_weapon_reload.h"
 
 displayContextDef_t cgDC;
@@ -99,6 +107,7 @@ vmCvar_t	cg_shadows;
 vmCvar_t	cg_gibs;
 vmCvar_t	cg_draw2D;
 vmCvar_t	cg_drawFPS;
+vmCvar_t cg_limbo_secondary;
 vmCvar_t	cg_drawSnapshot;
 vmCvar_t	cg_drawCrosshair;
 vmCvar_t	cg_drawCrosshairNames;
@@ -225,7 +234,7 @@ vmCvar_t	authLevel;
 vmCvar_t	cf_wstats;					// Font scale for +wstats window
 vmCvar_t	cf_wtopshots;				// Font scale for +wtopshots window
 
-//vmCvar_t	cg_announcer;
+vmCvar_t cg_announcer;
 vmCvar_t	cg_autoAction;
 vmCvar_t	cg_autoReload;
 static vmCvar_t cg_weapAltReloads;
@@ -302,7 +311,11 @@ typedef struct {
 } cvarTable_t;
 
 cvarTable_t		cvarTable[] = {
+	{ NULL, "n_guid", "", CVAR_USERINFO | CVAR_ROM | CVAR_NORESTART },
 	{ &cg_pmSounds, "cg_pmSounds", "1", CVAR_ARCHIVE },
+	{ &cg_pmColor, "cg_pmColor", "^7", CVAR_ARCHIVE },
+	{ &cg_pingColors, "cg_pingColors", "1", CVAR_ARCHIVE },
+	{ &cg_automapZoom, "cg_automapZoom", "5.159", CVAR_ARCHIVE },
 	{ &cg_shoveSounds, "cg_shoveSounds", "1", CVAR_ARCHIVE },
 	{ &cg_noGreetingSounds, "cg_noGreetingSounds", "0", CVAR_ARCHIVE },
 	{ &cg_drawBanners, "cg_drawBanners", "1", CVAR_ARCHIVE },
@@ -332,6 +345,58 @@ cvarTable_t		cvarTable[] = {
 	{ &cg_drawSpreadScale, "cg_drawSpreadScale", "1", CVAR_ARCHIVE },
 	{ &cg_drawStatus, "cg_drawStatus", "1", CVAR_ARCHIVE  },
 	{ &cg_drawFPS, "cg_drawFPS", "0", CVAR_ARCHIVE  },
+	{ &cg_drawPing, "cg_drawPing", "0", CVAR_ARCHIVE },
+	{ &cg_objectiveHints, "cg_objectiveHints", "1", CVAR_ARCHIVE },
+	{ &cg_woundedNames, "cg_woundedNames", "1", CVAR_ARCHIVE },
+	{ &cg_obituary, "cg_obituary", "1", CVAR_ARCHIVE },
+	{ &cg_markDistance, "cg_markDistance", "384", CVAR_ARCHIVE },
+	{ &cg_projectileNudge, "cg_projectileNudge", "1", CVAR_ARCHIVE },
+	{ &nitmod_sv_fps, "sv_fps", "20", CVAR_ROM },
+	{ &cg_countryflags, "cg_countryflags", "1", CVAR_ARCHIVE },
+	{ &demo_wallHack, "demo_wallHack", "0", CVAR_CHEAT },
+	{ NULL, "etVersion", "", CVAR_USERINFO | CVAR_ROM },
+#ifdef __EMSCRIPTEN__
+	{ NULL, "build", "wasm32", CVAR_USERINFO | CVAR_ROM },
+#else
+	{ NULL, "build", "linux-i386", CVAR_USERINFO | CVAR_ROM },
+#endif
+	{ NULL, "r_dynamicTextures", "0", CVAR_ARCHIVE },
+	{ &cg_drawHitbox, "cg_drawHitbox", "0", CVAR_CHEAT },
+	{ &cg_optimizePrediction, "cg_optimizePrediction", "1", CVAR_ARCHIVE },
+	{ &cg_locations, "cg_locations", "3", CVAR_ARCHIVE },
+	{ &cg_logFile, "cg_logFile", "client.log", CVAR_ARCHIVE },
+	{ &cg_clientLog, "cg_clientLog", "0", CVAR_ARCHIVE },
+	{ &cg_drawCam, "cg_drawCam", "1", CVAR_ARCHIVE },
+	{ &cg_locationMaxChars, "cg_locationMaxChars", "12", CVAR_ARCHIVE },
+	{ &cg_TDMScorePos, "cg_TDMScorePos", "0", CVAR_ARCHIVE },
+	{ &cg_earlyTransition, "cg_earlyTransition", "1", CVAR_ARCHIVE },
+	{ &cg_tkSounds, "cg_tkSounds", "1", CVAR_ARCHIVE },
+	{ &cg_goatSound, "cg_goatSound", "3", CVAR_ARCHIVE },
+	{ &cg_FTAutoSelect, "cg_FTAutoSelect", "1", CVAR_ARCHIVE },
+	{ &n_forceSinglePistol, "n_forceSinglePistol", "0", CVAR_ARCHIVE },
+	{ &cg_drawHUDStats, "cg_drawHUDStats", "1", CVAR_ARCHIVE },
+	{ &cg_artilleryHints, "cg_artilleryHints", "1", CVAR_ARCHIVE },
+	{ &cg_limbo_secondary, "cg_limbo_secondary", "0", CVAR_ARCHIVE },
+	{ &cg_spawnTimer_set, "cg_spawnTimer_set", "-1", CVAR_TEMP },
+	{ &cg_spawnTimer_period, "cg_spawnTimer_period", "0", CVAR_TEMP },
+	{ &cg_drawTime, "cg_drawTime", "1", CVAR_ARCHIVE },
+	{ &cg_drawTimeSeconds, "cg_drawTimeSeconds", "0", CVAR_ARCHIVE },
+	{ &cg_drawspeed, "cg_drawspeed", "0", CVAR_ARCHIVE },
+	{ &cg_speedunit, "cg_speedunit", "0", CVAR_ARCHIVE },
+	{ &cg_speedinterval, "cg_speedinterval", "100", CVAR_ARCHIVE },
+	{ &cg_HUDBackgroundColor, "cg_HUDBackgroundColor", ".16 .2 .17", CVAR_ARCHIVE },
+	{ &cg_HUDBorderColor, "cg_HUDBorderColor", ".5  .5 .5", CVAR_ARCHIVE },
+	{ &cg_HUDAlpha, "cg_HUDAlpha", "0.8", CVAR_ARCHIVE },
+	{ &cg_notificationTime, "cg_notificationTime", "8000", CVAR_ARCHIVE },
+	{ &cg_notificationFadeTime, "cg_notificationFadeTime", "250", CVAR_ARCHIVE },
+	{ &cg_smokeparticles, "cg_smokeparticles", "1", CVAR_ARCHIVE },
+	{ &cg_trailparticles, "cg_trailparticles", "1", CVAR_ARCHIVE },
+	{ &cg_impactparticles, "cg_impactparticles", "1", CVAR_ARCHIVE },
+	{ &cg_tracers, "cg_tracers", "1", CVAR_ARCHIVE },
+	{ &cg_muzzleFlash, "cg_muzzleFlash", "1", CVAR_ARCHIVE },
+	{ &cg_numPopups, "cg_numPopups", "6", CVAR_ARCHIVE },
+	{ &cg_popupFadeTime, "cg_popupFadeTime", "6000", CVAR_ARCHIVE },
+	{ &cg_HUDFlags, "cg_HUDFlags", "4", CVAR_ARCHIVE },
 	{ &cg_drawSnapshot, "cg_drawSnapshot", "0", CVAR_ARCHIVE  },
 	{ &cg_drawCrosshair, "cg_drawCrosshair", "1", CVAR_ARCHIVE },
 	{ &cg_drawCrosshairNames, "cg_drawCrosshairNames", "1", CVAR_ARCHIVE },
@@ -451,7 +516,7 @@ cvarTable_t		cvarTable[] = {
 	{ &developer, "developer", "0", CVAR_CHEAT },
 	{ &cf_wstats, "cf_wstats", "1.2", CVAR_ARCHIVE },
 	{ &cf_wtopshots, "cf_wtopshots", "1.0", CVAR_ARCHIVE },
-	//{ &cg_announcer, "cg_announcer", "1", CVAR_ARCHIVE },
+	{ &cg_announcer, "cg_announcer", "1", CVAR_ARCHIVE },
 	{ &cg_autoAction, "cg_autoAction", "0", CVAR_ARCHIVE },
 	{ &cg_autoReload, "cg_autoReload", "1", CVAR_ARCHIVE },
 	{ &cg_weapAltReloads, "cg_weapAltReloads", "0", CVAR_ARCHIVE },
@@ -581,11 +646,13 @@ void CG_UpdateCvars( void ) {
 			trap_Cvar_Update( cv->vmCvar );
 			if(cv->modificationCount != cv->vmCvar->modificationCount) {
 				cv->modificationCount = cv->vmCvar->modificationCount;
+				if(cv->vmCvar == &cg_automapZoom) CG_TransformAutomapEntity();
 
 				// Check if we need to update any client flags to be sent to the server
 				if(cv->vmCvar == &cg_autoAction || cv->vmCvar == &cg_autoReload || cv->vmCvar == &cg_weapAltReloads ||
 				   cv->vmCvar == &int_cl_timenudge || cv->vmCvar == &int_cl_maxpackets ||
-				   cv->vmCvar == &cg_autoactivate || cv->vmCvar == &cg_predictItems)
+				   cv->vmCvar == &cg_autoactivate || cv->vmCvar == &cg_predictItems ||
+				   cv->vmCvar == &pmove_fixed || cv->vmCvar == &n_forceSinglePistol)
 				{
 					fSetFlags = qtrue;
 				}
@@ -642,7 +709,8 @@ void CG_setClientFlags(void)
 		((cg_autoactivate.integer > 0) ? CGF_AUTOACTIVATE : 0) |
 		((cg_predictItems.integer > 0) ? CGF_PREDICTITEMS : 0);
 	flags = NITMOD_EncodeReloadPreferences(flags, cg_autoReload.integer,
-		NITMOD_ServerSupports(NITMOD_FEATURE_RELOAD_PREFS) ? cg_weapAltReloads.integer : 0);
+		(NITMOD_UsesOriginalProtocol() || NITMOD_ServerSupports(NITMOD_FEATURE_RELOAD_PREFS)) ? cg_weapAltReloads.integer : 0);
+	flags = NITMOD_ClientPreferenceFlags(flags, pmove_fixed.integer, n_forceSinglePistol.integer);
 	trap_Cvar_Set("cg_uinfo", va("%d %d %d",
 											 // Client Flags
 											(int)flags,
@@ -656,7 +724,7 @@ void CG_setClientFlags(void)
 
 unsigned int CG_NITMOD_ReloadPreferenceFlags( void ) {
 	return NITMOD_EncodeReloadPreferences(0, cg_autoReload.integer,
-		NITMOD_ServerSupports(NITMOD_FEATURE_RELOAD_PREFS) ? cg_weapAltReloads.integer : 0);
+		(NITMOD_UsesOriginalProtocol() || NITMOD_ServerSupports(NITMOD_FEATURE_RELOAD_PREFS)) ? cg_weapAltReloads.integer : 0);
 }
 
 int CG_CrosshairPlayer( void ) {
@@ -1068,6 +1136,8 @@ static void CG_RegisterSounds( void ) {
 	cgs.media.noFireUnderwater =	trap_S_RegisterSound( "sound/weapons/misc/fire_water.wav", qfalse );
 	cgs.media.selectSound =			trap_S_RegisterSound( "sound/weapons/misc/change.wav", qfalse );
 	cgs.media.landHurt =			trap_S_RegisterSound( "sound/player/land_hurt.wav", qfalse );
+	cgs.media.nitmodSlapSound = trap_S_RegisterSound("sound/player/hurt_barbwire.wav", qfalse);
+	cgs.media.nitmodThrowKnifeSound = trap_S_RegisterSound("sound/weapons/knife/throw.wav", qfalse);
 	cgs.media.gibSound =			trap_S_RegisterSound( "sound/player/gib.wav", qfalse );
 	cgs.media.dynamitebounce1 =		trap_S_RegisterSound( "sound/weapons/dynamite/dynamite_bounce.wav", qfalse );
 	cgs.media.satchelbounce1 =		trap_S_RegisterSound( "sound/weapons/satchel/satchel_bounce.wav", qfalse );
@@ -1315,6 +1385,14 @@ static void CG_RegisterGraphics( void ) {
 	CG_LoadingString( "game media" );
 
 	CG_LoadingString( " - textures" );
+	cgs.media.countryFlags = trap_R_RegisterShaderNoMip("gfx/flags/world_flags");
+	CG_NitmodRegisterPowerupMedia();
+	cgs.media.nitmodHitRegionShaders[0] = trap_R_RegisterShaderNoMip("gfx/hr/hr");
+	cgs.media.nitmodHitRegionShaders[1] = trap_R_RegisterShaderNoMip("gfx/hr/head");
+	cgs.media.nitmodHitRegionShaders[2] = trap_R_RegisterShaderNoMip("gfx/hr/rarm");
+	cgs.media.nitmodHitRegionShaders[3] = trap_R_RegisterShaderNoMip("gfx/hr/larm");
+	cgs.media.nitmodHitRegionShaders[4] = trap_R_RegisterShaderNoMip("gfx/hr/torso");
+	cgs.media.nitmodHitRegionShaders[5] = trap_R_RegisterShaderNoMip("gfx/hr/legs");
 
 //bani - dynamic shader api example
 //replaces a fueldump texture with a dynamically generated one.
@@ -1403,9 +1481,9 @@ static void CG_RegisterGraphics( void ) {
 	cgs.media.breakableHintShader	= trap_R_RegisterShader( "gfx/2d/breakableHint" );
 	cgs.media.chairHintShader		= trap_R_RegisterShader( "gfx/2d/chairHint" );
 	cgs.media.alarmHintShader		= trap_R_RegisterShader( "gfx/2d/alarmHint" );
-	cgs.media.healthHintShader		= trap_R_RegisterShader( "gfx/2d/healthHint" );
+	cgs.media.healthHintShader = trap_R_RegisterShader(NITMOD_UsesOriginalProtocol() ? "icons/iconw_medheal_1_select" : "gfx/2d/healthHint");
 	cgs.media.treasureHintShader	= trap_R_RegisterShader( "gfx/2d/treasureHint" );
-	cgs.media.knifeHintShader		= trap_R_RegisterShader( "gfx/2d/knifeHint" );
+	cgs.media.knifeHintShader = trap_R_RegisterShader(NITMOD_UsesOriginalProtocol() ? "icons/iconw_knife_1_select.tga" : "gfx/2d/knifeHint");
 	cgs.media.ladderHintShader		= trap_R_RegisterShader( "gfx/2d/ladderHint" );
 	cgs.media.buttonHintShader		= trap_R_RegisterShader( "gfx/2d/buttonHint" );
 	cgs.media.waterHintShader		= trap_R_RegisterShader( "gfx/2d/waterHint" );
@@ -1416,7 +1494,7 @@ static void CG_RegisterGraphics( void ) {
 	cgs.media.exclamationHintShader	= trap_R_RegisterShader( "gfx/2d/exclamationHint" );
 	cgs.media.clipboardHintShader	= trap_R_RegisterShader( "gfx/2d/clipboardHint" );	
 	cgs.media.weaponHintShader		= trap_R_RegisterShader( "gfx/2d/weaponHint" );	
-	cgs.media.ammoHintShader		= trap_R_RegisterShader( "gfx/2d/ammoHint" );	
+	cgs.media.ammoHintShader = trap_R_RegisterShader(NITMOD_UsesOriginalProtocol() ? "icons/iconw_ammopack_1_select" : "gfx/2d/ammoHint");
 	cgs.media.armorHintShader		= trap_R_RegisterShader( "gfx/2d/armorHint" );	
 	cgs.media.powerupHintShader		= trap_R_RegisterShader( "gfx/2d/powerupHint" );	
 	cgs.media.holdableHintShader	= trap_R_RegisterShader( "gfx/2d/holdableHint" );	
@@ -1434,6 +1512,7 @@ static void CG_RegisterGraphics( void ) {
 	cgs.media.disarmHintShader		= trap_R_RegisterShader( "gfx/2d/disarmHint" );		// DHM - Nerve
 	cgs.media.reviveHintShader		= trap_R_RegisterShader( "gfx/2d/reviveHint" );		// DHM - Nerve
 	cgs.media.dynamiteHintShader	= trap_R_RegisterShader( "gfx/2d/dynamiteHint" );	// DHM - Nerve
+	CG_NitmodRegisterHintMedia();
 
 	cgs.media.tankHintShader		= trap_R_RegisterShaderNoMip( "gfx/2d/tankHint" );
 	cgs.media.satchelchargeHintShader = trap_R_RegisterShaderNoMip( "gfx/2d/satchelchargeHint" ),
@@ -1689,6 +1768,7 @@ static void CG_RegisterGraphics( void ) {
 	cgs.media.waypointMarker =				trap_R_RegisterModel( "models/multiplayer/flagpole/flag_waypoint.md3" );
 
 	cgs.media.railCoreShader =	trap_R_RegisterShaderNoMip( "railCore" );	// (SA) for debugging server traces
+	CG_NitmodRegisterDebugMedia();
 	cgs.media.ropeShader =		trap_R_RegisterShader( "textures/props/cable_m01" );
 
 	cgs.media.thirdPersonBinocModel = trap_R_RegisterModel( "models/multiplayer/binocs/binocs.md3" );				// NERVE - SMF
@@ -1728,10 +1808,11 @@ static void CG_RegisterGraphics( void ) {
 	CG_LoadingString( " - weapons" );
 	for( i = WP_KNIFE; i < WP_NUM_WEAPONS; i++ ) {
 		// DHM - Nerve :: Only register weapons we use in WolfMP
-		if ( BG_WeaponInWolfMP(i) )
+		if ( BG_WeaponInWolfMP(i) || (i == WP_TRIPMINE && NITMOD_UsesOriginalProtocol()) )
 			CG_RegisterWeapon( i, qfalse );
 	}	
 
+	CG_NitmodRegisterPrivateWeaponMedia();
 	CG_LoadingString( " - items" );
 	for ( i = 1 ; i < bg_numItems ; i++ ) {
 		CG_RegisterItemVisuals( i );
@@ -1898,6 +1979,7 @@ static void CG_RegisterGraphics( void ) {
 	cgs.media.limboWeaponCardSurroundC = trap_R_RegisterShaderNoMip( "gfx/limbo/butsur_corn" );
 
 	cgs.media.limboWeaponCardOOS =		trap_R_RegisterShaderNoMip( "gfx/limbo/outofstock" );
+	cgs.media.limboWeaponCardNadesOOS = trap_R_RegisterShaderNoMip( "gfx/limbo/nadesoutofstock" );
 
 	cgs.media.limboClassButtons[PC_ENGINEER] =	trap_R_RegisterShaderNoMip( "gfx/limbo/ic_engineer"		);
 	cgs.media.limboClassButtons[PC_SOLDIER] =	trap_R_RegisterShaderNoMip( "gfx/limbo/ic_soldier"		);
@@ -1989,7 +2071,7 @@ static void CG_RegisterClients( void ) {
 	for (i=0 ; i<MAX_CLIENTS ; i++) {
 		const char		*clientInfo;
 
-		clientInfo = CG_ConfigString( CS_PLAYERS+i );
+		clientInfo = NITMOD_PlayerConfigString(i);
 		if ( !clientInfo[0] ) {
 			continue;
 		}
@@ -2007,6 +2089,11 @@ CG_ConfigString
 */
 
 const char *CG_ConfigString( int index ) {
+	/* SERVERINFO remains raw so protocol detection cannot recurse. */
+	if(index >= 25 && index <= 39 && NITMOD_UsesOriginalProtocol()) {
+		index = NITMOD_CoreConfigToWire(index);
+		if(index < 0) return "";
+	}
 	if ( index < 0 || index >= MAX_CONFIGSTRINGS ) {
 		CG_Error( "CG_ConfigString: bad index: %i", index );
 	}
@@ -2646,6 +2733,7 @@ void CG_Init( int serverMessageNum, int serverCommandSequence, int clientNum, qb
 	memset( cg_weapons, 0, sizeof(cg_weapons) );
 	memset( cg_items, 0, sizeof(cg_items) );
 	NITMOD_ClearConfigStrings();
+	CG_NitmodResetAutoexec();
 
 	cgs.initing = qtrue;
 
@@ -2688,6 +2776,7 @@ void CG_Init( int serverMessageNum, int serverCommandSequence, int clientNum, qb
 	cgs.media.charsetPropB		= trap_R_RegisterShaderNoMip( "menu/art/font2_prop.tga" );
 
 	CG_RegisterCvars();
+	CG_NitmodLogInit();
 
 	CG_InitConsoleCommands();
 
@@ -2702,6 +2791,9 @@ void CG_Init( int serverMessageNum, int serverCommandSequence, int clientNum, qb
 
 	CG_ParseServerinfo();
 	CG_ParseWolfinfo();		// NERVE - SMF
+	CG_NitmodMapAutoexec();
+	// RegisterCvars ran before the server protocol was known.
+	CG_setClientFlags();
 
 	cgs.campaignInfoLoaded = qfalse;
 	if( cgs.gametype == GT_WOLF_CAMPAIGN ) {
@@ -2758,6 +2850,8 @@ void CG_Init( int serverMessageNum, int serverCommandSequence, int clientNum, qb
 	CG_LoadingString( "sounds" );
 
 	CG_RegisterSounds();
+	CG_NitmodRegisterSpreeSounds();
+	CG_NitmodRegisterAnnouncerSounds();
 
 #ifdef _DEBUG
 	DEBUG_INITPROFILE_EXEC ( "sounds" )
@@ -2824,9 +2918,11 @@ void CG_Init( int serverMessageNum, int serverCommandSequence, int clientNum, qb
 	CG_ParseSpawns();
 
 	CG_ParseTagConnects();
+	CG_NitmodLoadLocations();
 
 	/* A Nitmod server sends extensions only after this explicit handshake. */
 	NITMOD_AdvertiseCapabilities();
+	NITMOD_BeginOriginalSession();
 
 #ifdef _DEBUG
 	DEBUG_INITPROFILE_EXEC ( "misc" )
@@ -2858,6 +2954,7 @@ void CG_Shutdown( void ) {
 	// like closing files or archiving session data
 
 	CG_EventHandling( CGAME_EVENT_NONE, qtrue );
+	CG_NitmodLogShutdown();
 	if(cg.demoPlayback) {
 		trap_Cvar_Set("timescale", "1");
 	}

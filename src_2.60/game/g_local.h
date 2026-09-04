@@ -6,6 +6,7 @@
 #include "bg_public.h"
 #include "g_public.h"
 #include "nitmod_bot_handle.h"
+#include "g_nitmod_war.h"
 
 #include "../game/be_aas.h"
 
@@ -872,6 +873,7 @@ struct gclient_s {
 	qboolean		wantsscore;
 	qboolean		maxlivescalced;
 	int nitmodLastShoveTime;
+	nitmodWarState_t nitmodWarState;
 };
 
 typedef struct {
@@ -1644,6 +1646,7 @@ qboolean NITMOD_IntermissionCanExit(void);
 extern vmCvar_t g_dropHealth, g_dropAmmo, n_medPackSinkDelay, n_ammoPackSinkDelay;
 extern vmCvar_t g_dragCorpse;
 extern vmCvar_t g_shove, g_shoveNoZ;
+extern vmCvar_t g_dualSMG;
 extern vmCvar_t g_canisterKick, g_canisterKickOwner;
 void G_CanisterKick(gentity_t *actor);
 void G_NITMOD_ConfigureCanisterKick(gentity_t *missile);

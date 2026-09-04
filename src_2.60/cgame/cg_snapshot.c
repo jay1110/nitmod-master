@@ -4,6 +4,8 @@
 
 
 #include "cg_local.h"
+#include "cg_nitmod_config.h"
+#include "cg_nitmod_hud.h"
 #if __MACOS__
 #ifdef GAMERANGER
 #include "GameRanger SDK/GameRanger.h"
@@ -105,6 +107,33 @@ static void CG_TransitionEntity( centity_t *cent ) {
 
 	// check for events
 	CG_CheckEvents( cent );
+}
+
+qboolean CG_NitmodEarlyTransitionEnabled(void) {
+	return cg_earlyTransition.integer && NITMOD_UsesOriginalProtocol() &&
+		cg.snap && cg.nextSnap && !cg.nextFrameTeleport && cg.mvTotalClients < 2 &&
+		cg.nextSnap->serverTime > cg.snap->serverTime &&
+		cg.nextSnap->numEntities >= 0 &&
+		cg.nextSnap->numEntities <= MAX_ENTITIES_IN_SNAPSHOT;
+}
+
+/* Original CG_AddPacketEntities advances general entities and missiles before
+ * the ordinary snapshot render pass. Keep the normal transition/event path:
+ * previousEventSequence prevents replay on subsequent frames and handover. */
+qboolean CG_NitmodTransitionEarlyEntity(int snapshotIndex) {
+	centity_t *cent;
+	int number;
+	if (!CG_NitmodEarlyTransitionEnabled() || snapshotIndex < 0 ||
+		snapshotIndex >= cg.nextSnap->numEntities) return qfalse;
+	number = cg.nextSnap->entities[snapshotIndex].number;
+	if (number < 0 || number >= ENTITYNUM_WORLD) return qfalse;
+	cent = &cg_entities[number];
+	if (cent->nextState.number != number ||
+		(cent->nextState.eType != ET_GENERAL && cent->nextState.eType != ET_MISSILE))
+		return qfalse;
+	CG_TransitionEntity(cent);
+	cent->interpolate = qtrue;
+	return qtrue;
 }
 
 
@@ -256,13 +285,15 @@ static void CG_TransitionSnapshot( void ) {
 
 	// move nextSnap to snap and do the transitions
 	oldFrame = cg.snap;
+	CG_NitmodLiveStatsTransition(&oldFrame->ps, &cg.nextSnap->ps);
+	NITMOD_SnapshotHitSounds(&oldFrame->ps, &cg.nextSnap->ps);
 	cg.snap = cg.nextSnap;
 
 	if( cg.snap->ps.clientNum == cg.clientNum ) {
-		if( cg.xp < cg.snap->ps.stats[STAT_XP] ) {
+		if( cg.xp < CG_NitmodDisplayXP(&cg.snap->ps) ) {
 			cg.xpChangeTime = cg.time;
 		}
-		cg.xp = cg.snap->ps.stats[STAT_XP];
+		cg.xp = CG_NitmodDisplayXP(&cg.snap->ps);
 	}
 
 	BG_PlayerStateToEntityState( &cg.snap->ps, &cg_entities[ cg.snap->ps.clientNum ].currentState, qfalse );
@@ -411,6 +442,8 @@ static snapshot_t *CG_ReadNextSnapshot( void ) {
 
 		// if it succeeded, return
 		if ( r ) {
+			NITMOD_TranslateSnapshotPersistant(dest);
+			if(NITMOD_UsesOriginalProtocol()) NITMOD_TranslateSnapshotWeapons(dest);
 			CG_AddLagometerSnapshotInfo( dest );
 			// server has been restarted
 			if ( cg.snap && ( dest->snapFlags ^ cg.snap->snapFlags ) & SNAPFLAG_SERVERCOUNT ) {

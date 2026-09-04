@@ -57,9 +57,10 @@ static int SettingsTests( void ) {
     CHECK( !NITMOD_ParseSimpleConfigSnapshot( 12, NULL, &simple ) );
     CHECK( !NITMOD_ParseSimpleConfigSnapshot( 12, Argument, NULL ) );
     fields[15] = "1.25";
-    state.teamScoreAxis = -7; state.teamScoreAllies = 42;
+    state.teamScoreAxis = -7; state.teamScoreAllies = 42; state.tdmScoreLimit = 250; state.dmWinnerClient = 63;
     CHECK( NITMOD_ParseGameStateSnapshot( 21, Argument, &state ) );
-    CHECK( state.teamScoreAxis == -7 && state.teamScoreAllies == 42 );
+    CHECK( state.teamScoreAxis == -7 && state.teamScoreAllies == 42 &&
+        state.tdmScoreLimit == 250 && state.dmWinnerClient == 63 );
     CHECK( state.panzerRestriction == 1 );
     CHECK( state.maxPanzers == 2 );
     CHECK( state.maxMG42s == 3 );

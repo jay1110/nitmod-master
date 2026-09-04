@@ -1,5 +1,9 @@
 # Weapon removal and war-mode entry
 
+Update: the war=4 entry branch is now gameplay-active; see
+reference/active-war-entry.md. The integration-pending statements below
+describe the earlier isolated recovery stage.
+
 Original qagame SHA-256:
 `84a7e7958952f804d65fbe6db6b4758ea0cf6b596b26a514a68de0ba3bd9ef49`.
 G_RemoveWeapons starts at ELF 0x3f160 and clears 46 explicit ownership bits.

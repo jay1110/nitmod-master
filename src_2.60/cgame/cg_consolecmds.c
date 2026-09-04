@@ -7,6 +7,73 @@
 
 
 #include "cg_local.h"
+#include "cg_nitmod_hud.h"
+#include "cg_nitmod_config.h"
+#include "cg_nitmod_stats.h"
+#include "cg_nitmod_mapvote.h"
+
+bg_playerclass_t *CG_NitmodPlayerClass(int team, int cls) {
+	static bg_playerclass_t originalClasses[2][NUM_PLAYER_CLASSES];
+	static const weapon_t originalChoices[2][5][MAX_WEAPS_PER_CLASS] = {
+		{{WP_MP40, WP_MOBILE_MG42, WP_FLAMETHROWER, WP_PANZERFAUST, WP_MORTAR},
+		 {WP_MP40, WP_THOMPSON, WP_STEN}, {WP_MP40, WP_THOMPSON, WP_KAR98},
+		 {WP_MP40, WP_THOMPSON, WP_STEN}, {WP_STEN, WP_FG42, WP_K43}},
+		{{WP_THOMPSON, WP_MOBILE_MG42, WP_FLAMETHROWER, WP_PANZERFAUST, WP_MORTAR},
+		 {WP_THOMPSON, WP_MP40, WP_STEN}, {WP_THOMPSON, WP_MP40, WP_CARBINE},
+		 {WP_THOMPSON, WP_MP40, WP_STEN}, {WP_STEN, WP_FG42, WP_GARAND}}
+	};
+	bg_playerclass_t *base = BG_GetPlayerClassInfo(team, cls), *result;
+	if(!NITMOD_UsesOriginalProtocol() || (team != TEAM_AXIS && team != TEAM_ALLIES) ||
+		cls < 0 || cls >= NUM_PLAYER_CLASSES) return base;
+	result = &originalClasses[team - TEAM_AXIS][cls];
+	*result = *base;
+	memcpy(result->classWeapons, originalChoices[team - TEAM_AXIS][cls], sizeof(result->classWeapons));
+	return result;
+}
+
+static void CG_NitmodClassMenu_f(void) {
+	if(!cg.snap || cg.clientNum < 0 || cg.clientNum >= MAX_CLIENTS ||
+		cgs.clientinfo[cg.clientNum].team == TEAM_SPECTATOR) return;
+	CG_EventHandling(CGAME_EVENT_NONE, qfalse);
+	trap_UI_Popup(cg_quickMessageAlt.integer ? UIMENU_NITMOD_CLASSALT : UIMENU_NITMOD_CLASS);
+}
+
+static void CG_NitmodClass_f(void) {
+	int team, cls = PC_SOLDIER, selected = 0, weapon, wireWeapon;
+	long requested;
+	const char *arg;
+	bg_playerclass_t *info;
+	const weapon_t *choices;
+	weaponType_t *description;
+	if(cg.clientNum < 0 || cg.clientNum >= MAX_CLIENTS || trap_Argc() < 2) return;
+	team = cgs.clientinfo[cg.clientNum].team;
+	if(team != TEAM_AXIS && team != TEAM_ALLIES) return;
+	arg = CG_Argv(1);
+	switch(*arg) {
+		case 'c': cls = PC_COVERTOPS; break;
+		case 'e': cls = PC_ENGINEER; break;
+		case 'f': cls = PC_FIELDOPS; break;
+		case 'm': cls = PC_MEDIC; break;
+	}
+	info = CG_NitmodPlayerClass(team, cls);
+	choices = info->classWeapons;
+	if(trap_Argc() >= 3) {
+		requested = strtol(CG_Argv(2), NULL, 10);
+		if(requested >= 1 && requested <= 6 && choices[requested - 1] != WP_NONE)
+			selected = (int)requested - 1;
+	}
+	weapon = choices[selected];
+	if(weapon <= WP_NONE || weapon >= WP_NUM_WEAPONS) return;
+	wireWeapon = NITMOD_UsesOriginalProtocol() ? NITMOD_WeaponToWire(weapon) : weapon;
+	if(wireWeapon <= 0) return;
+	CG_LimboPanel_SetSelectedWeaponNumForSlot(0, selected);
+	trap_SendClientCommand(va("team %s %i %i \n", team == TEAM_AXIS ? "r" : "b", cls, wireWeapon));
+	description = WM_FindWeaponTypeForWeapon(weapon);
+	CG_CenterPrint(va("You will spawn as an %s %s with a %s.",
+		team == TEAM_AXIS ? "Axis" : "Allied", BG_ClassnameForNumber(cls),
+		description ? description->desc : "^1UNKNOWN WEAPON"), SCREEN_HEIGHT - 88, SMALLCHAR_WIDTH);
+	cgs.limboLoadoutSelected = qtrue;
+}
 
 void CG_TargetCommand_f( void ) {
 	int		targetNum;
@@ -110,6 +177,7 @@ void CG_topshotsUp_f(void)
 }
 
 void CG_ScoresDown_f( void ) {
+	CG_NitmodScoreKeyDown();
 	if ( cg.scoresRequestTime + 2000 < cg.time ) {
 		// the scores are more than two seconds out of data,
 		// so request new ones
@@ -514,6 +582,10 @@ static void CG_MessageMode_f( void ) {
 	{
 		trap_Cvar_Set( "cg_messageType", "3" );
 	}
+	else if( !Q_stricmp( cmd, "messagemode4" ) )
+	{
+		trap_Cvar_Set( "cg_messageType", "4" );
+	}
 	
 	// (normal) say
 	else
@@ -526,6 +598,41 @@ static void CG_MessageMode_f( void ) {
 	
 	// open the menu
 	trap_UI_Popup( UIMENU_INGAME_MESSAGEMODE );
+}
+
+/* Direct reliable command: never feed editable chat text to the console. */
+void CG_NitmodSendChat( const char *command, const char *text ) {
+	char reliable[MAX_STRING_CHARS];
+	if (!text || !*text) return;
+	if (!NITMOD_BuildChatCommand(command, text, reliable, sizeof(reliable))) {
+		CG_Printf("Chat: message too long or contains unsupported quotes/control characters.\n");
+		return;
+	}
+	trap_SendClientCommand(reliable);
+}
+
+static qboolean CG_NitmodConsoleChat(const char *command) {
+	char text[MAX_STRING_CHARS], arg[MAX_STRING_CHARS];
+	const char *name = NITMOD_ChatCommand(command);
+	int i, used = 0, count = trap_Argc();
+	if (!NITMOD_UsesOriginalProtocol() || !name) return qfalse;
+	text[0] = 0;
+	for (i = 1; i < count; ++i) {
+		int length;
+		trap_Argv(i, arg, sizeof(arg));
+		length = (int)strlen(arg);
+		if (length >= sizeof(arg) - 1 || length + used + (i > 1) >= sizeof(text)) {
+			CG_Printf("Chat: message too long.\n");
+			return qtrue;
+		}
+		if (i > 1) text[used++] = ' ';
+		memcpy(text + used, arg, length + 1);
+		used += length;
+	}
+	/* Match the original: ordinary ASCII is forwarded by the engine. */
+	if (!NITMOD_TextNeedsEncoding(text)) return qfalse;
+	CG_NitmodSendChat(name, text);
+	return qtrue;
 }
 
 static void CG_MessageSend_f( void )
@@ -547,6 +654,11 @@ static void CG_MessageSend_f( void )
 	// don't send empty messages
 	if( messageText[ 0 ] == '\0' )
 		return;
+	if (NITMOD_UsesOriginalProtocol()) {
+		CG_NitmodSendChat(messageType == 2 ? "say_team" :
+			messageType == 3 ? "say_buddy" : messageType == 4 ? "ma" : "say", messageText);
+		return;
+	}
 	
 	// team say
 	if( messageType == 2 ) {
@@ -555,6 +667,9 @@ static void CG_MessageSend_f( void )
 	// fireteam say
 	} else if( messageType == 3 ) {
 		trap_SendConsoleCommand( va( "say_buddy \"%s\"\n", messageText ) );
+	} else if( messageType == 4 ) {
+		/* Original admin chat must never fall back to public say. */
+		trap_SendConsoleCommand( va( "ma \"%s\"\n", messageText ) );
 	
 	// normal say
 	} else {
@@ -929,6 +1044,13 @@ static consoleCommand_t	commands[] =
 //	{ "obj", CG_Obj_f },
 //	{ "setspawnpt", CG_Obj_f },
 	{ "testgun", CG_TestGun_f },
+	{ "resetmaxspeed", CG_NitmodResetMaxSpeed },
+	{ "class", CG_NitmodClass_f },
+	{ "classmenu", CG_NitmodClassMenu_f },
+	{ "resetTimer", CG_NitmodResetTimer },
+	{ "timerSet", CG_NitmodTimerSet },
+	{ "tdminfo", NITMOD_TDMInfo_f },
+	{ "globalstats", CG_NitmodGlobalStats_f },
 	{ "testmodel", CG_TestModel_f },
 	{ "nextframe", CG_TestModelNextFrame_f },
 	{ "prevframe", CG_TestModelPrevFrame_f },
@@ -968,6 +1090,7 @@ static consoleCommand_t	commands[] =
 	{ "messageMode", CG_MessageMode_f },
 	{ "messageMode2", CG_MessageMode_f },
 	{ "messageMode3", CG_MessageMode_f },
+	{ "messageMode4", CG_MessageMode_f },
 	{ "messageSend", CG_MessageSend_f },
 	
 	{ "SetWeaponCrosshair", CG_SetWeaponCrosshair_f },
@@ -1020,6 +1143,8 @@ static consoleCommand_t	commands[] =
 	{ "undoSpeaker", CG_UndoSpeaker_f },
 	{ "cpm", CG_CPM_f },
 	{ "forcetapout", CG_ForceTapOut_f },
+	{ "nitmaplist", CG_NitmodMapVoteList_f },
+	{ "nitmapvote", CG_NitmodMapVote_f },
 };
 
 
@@ -1041,6 +1166,8 @@ qboolean CG_ConsoleCommand( void ) {
 	}
 
 	cmd = CG_Argv(0);
+
+	if (CG_NitmodConsoleChat(cmd)) return qtrue;
 
 	for ( i = 0 ; i < sizeof( commands ) / sizeof( commands[0] ) ; i++ ) {
 		if ( !Q_stricmp( cmd, commands[i].cmd ) ) {

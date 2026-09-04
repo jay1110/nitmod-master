@@ -10,12 +10,12 @@ static int badIndex = -1, calls, unknown;
 static const char *badValue;
 static const char *medicValue = "0";
 static int registrations, badRegistration;
-static vmCvar_t *tracked[9];
+static vmCvar_t *tracked[10];
 static int updateCalls, mutation = -1;
 void trap_Cvar_Update(vmCvar_t *cvar) {
     int i;
     ++updateCalls;
-    for(i = 0; i < 9; ++i) if(tracked[i] == cvar) {
+    for(i = 0; i < 10; ++i) if(tracked[i] == cvar) {
         if(i == mutation) { ++cvar->modificationCount; mutation = -1; }
         return;
     }
@@ -25,10 +25,10 @@ void trap_Cvar_Register( vmCvar_t *cvar, const char *name, const char *value, in
     int i;
     registrations++;
     if(!cvar) { badRegistration = 1; return; }
-    tracked[(registrations - 1) % 9] = cvar;
+    tracked[(registrations - 1) % 10] = cvar;
     cvar->modificationCount = 7;
     cvar->integer = !strcmp(name, "g_war") ? 3 : atoi(value);
-    if( !strcmp(name, "g_medics") ) {
+    if( !strcmp(name, "g_medics") || !strcmp(name, "g_noReload") ) {
         if( flags || strcmp(value, "0") ) badRegistration = 1;
         return;
     }
@@ -63,12 +63,15 @@ int main( void ) {
     CHECK(!G_NITMOD_UpdateWeaponConfiguration() && updateCalls == 0);
     CHECK(G_NITMOD_ConfiguredWarMode() == 0);
     G_NITMOD_RegisterWeaponConfiguration();
-    CHECK( registrations == 9 && !badRegistration );
+    CHECK( registrations == 10 && !badRegistration );
     G_NITMOD_RegisterWeaponConfiguration();
-    CHECK( registrations == 18 && !badRegistration );
+    CHECK( registrations == 20 && !badRegistration );
     CHECK(G_NITMOD_ConfiguredWarMode() == 3);
-    CHECK(!G_NITMOD_UpdateWeaponConfiguration() && updateCalls == 9);
-    for(i = 0; i < 9; ++i) {
+    CHECK(!G_NITMOD_UpdateWeaponConfiguration() && updateCalls == 10);
+    CHECK(G_NITMOD_ConfiguredNoReload()==0);
+    tracked[9]->integer=3;
+    CHECK(G_NITMOD_ConfiguredNoReload()==3);
+    for(i = 0; i < 10; ++i) {
         mutation = i;
         CHECK(G_NITMOD_UpdateWeaponConfiguration());
         CHECK(!G_NITMOD_UpdateWeaponConfiguration());

@@ -1,4 +1,5 @@
 #include "cg_local.h"
+#include "cg_nitmod_config.h"
 #include "../ui/ui_shared.h"
 
 extern displayContextDef_t *DC;
@@ -200,7 +201,8 @@ CG_DrawConnectScreen
 */
 
 const char* CG_LoadPanel_GameTypeName( gametype_t gt ) {
-	switch( gt ) {
+	/* Original server IDs 7/8 extend ET's gametype enum; display only. */
+	switch( (int)gt ) {
 		case GT_SINGLE_PLAYER:
 			return "Single Player";
 		case GT_COOP:
@@ -213,6 +215,9 @@ const char* CG_LoadPanel_GameTypeName( gametype_t gt ) {
 			return "Campaign";
 		case GT_WOLF_LMS:
 			return "Last Man Standing";
+		case 6: return "Map Voting";
+		case 7: return "Team Death Match";
+		case 8: return "Death Match";
 		default:
 			break;
 	}
@@ -220,168 +225,118 @@ const char* CG_LoadPanel_GameTypeName( gametype_t gt ) {
 	return "Invalid";
 }
 
+/* Original CG_DrawConnectScreen 0x7bc00 and loadpanelButtons 0x137800.
+ * All assets remain in the original PK3; this is a code-only layout port. */
 void CG_DrawConnectScreen( qboolean interactive, qboolean forcerefresh ) {
-	static qboolean inside = qfalse;
-	char buffer[1024];
-
-	bg_loadscreeninteractive = interactive;
-
-	if( !DC ) {
-		return;
-	}
-
-	if( inside ) {
-		return;
-	}
-
+	static qboolean inside;
+	static qhandle_t nxac;
+	char info[MAX_INFO_STRING];
+	const char *text;
+	int used, expected, i;
+	float fraction, width = 0;
+	vec4_t shade = { .15f, .15f, .15f, .35f };
+	vec4_t tint = { 1, 1, 1, 1 };
+	panel_button_t description = missiondescriptionPanelText;
+	panel_button_t heading = campaignheaderPanelText;
+	panel_button_text_t descriptionFont = missiondescriptionTxt;
+	panel_button_text_t headingFont = campaignpheaderTxt;
+	qhandle_t icons[6];
+	int enabled[6];
+	if(!DC || inside) return;
 	inside = qtrue;
-
-	if( !bg_loadscreeninited ) {
-		trap_Cvar_Set( "ui_connecting", "0" );
-
-		DC->registerFont( "ariblk", 27, &bg_loadscreenfont1 );
-		DC->registerFont( "courbd", 30, &bg_loadscreenfont2 );
-
-		bg_axispin =	DC->registerShaderNoMip( "gfx/loading/pin_axis" );
-		bg_alliedpin =	DC->registerShaderNoMip( "gfx/loading/pin_allied" );
-		bg_neutralpin =	DC->registerShaderNoMip( "gfx/loading/pin_neutral" );
-		bg_pin =		DC->registerShaderNoMip( "gfx/loading/pin_shot" );
-				
-
-		bg_filter_pb =	DC->registerShaderNoMip( "ui/assets/filter_pb" );
-		bg_filter_ff =	DC->registerShaderNoMip( "ui/assets/filter_ff" );
-		bg_filter_hw =	DC->registerShaderNoMip( "ui/assets/filter_weap" );
-		bg_filter_lv =	DC->registerShaderNoMip( "ui/assets/filter_lives" );
-		bg_filter_al =	DC->registerShaderNoMip( "ui/assets/filter_antilag" );
-		bg_filter_bt =	DC->registerShaderNoMip( "ui/assets/filter_balance" );
-
-
-		bg_mappic =		0;
-
-		BG_PanelButtonsSetup( loadpanelButtons );
-
+	bg_loadscreeninteractive = interactive;
+	if(!bg_loadscreeninited) {
+		trap_Cvar_Set("ui_connecting", "0");
+		DC->registerFont("ariblk", 27, &bg_loadscreenfont1);
+		DC->registerFont("courbd", 30, &bg_loadscreenfont2);
+		nxac = DC->registerShaderNoMip("ui/assets/filter_nxac_loading.tga");
+		bg_filter_ff = DC->registerShaderNoMip("ui/assets/filter_ff");
+		bg_filter_hw = DC->registerShaderNoMip("ui/assets/filter_weap");
+		bg_filter_lv = DC->registerShaderNoMip("ui/assets/filter_lives");
+		bg_filter_al = DC->registerShaderNoMip("ui/assets/filter_antilag");
+		bg_filter_bt = DC->registerShaderNoMip("ui/assets/filter_balance");
+		bg_mappic = 0;
 		bg_loadscreeninited = qtrue;
 	}
-
-	BG_PanelButtonsRender( loadpanelButtons );
-
-	if( interactive ) {
-		DC->drawHandlePic( DC->cursorx, DC->cursory, 32, 32, DC->Assets.cursor );
+	CG_FillRect(0, 0, 640, 480, colorBlack);
+	description.rect.x = 10; description.rect.y = 34;
+	description.rect.w = 180; description.rect.h = 250;
+	Vector4Set(descriptionFont.colour, 1, 1, 1, .75f);
+	description.font = &descriptionFont;
+	CG_LoadPanel_RenderMissionDescriptionText(&description);
+	heading.rect.x = 10; heading.rect.y = 24;
+	headingFont.scalex = headingFont.scaley = .35f;
+	Vector4Set(headingFont.colour, 1, 1, 1, 1);
+	heading.font = &headingFont;
+	CG_LoadPanel_RenderCampaignTypeText(&heading);
+	if(cgs.rawmapname[0]) {
+		if(!bg_mappic) {
+			bg_mappic = DC->registerShaderNoMip(va("levelshots/%s", cgs.rawmapname));
+			if(!bg_mappic) bg_mappic = DC->registerShaderNoMip("levelshots/unknownmap");
+		}
+		trap_R_SetColor(NULL);
+		CG_DrawPic(224, 2, 192, 144, bg_mappic);
 	}
-
-	DC->getConfigString( CS_SERVERINFO, buffer, sizeof( buffer ) );
-	if( *buffer ) {
-		const char *str;
-		qboolean enabled = qfalse;
-		float x, y;
-		int i;
-//		vec4_t clr1 = { 41/255.f,	51/255.f,	43/255.f,	204/255.f };
-//		vec4_t clr2 = { 0.f,		0.f,		0.f,		225/255.f };
-		vec4_t clr3 = { 1.f,		1.f,		1.f,		.6f };
-
-/*		CG_FillRect( 8, 8, 230, 16, clr1 );
-		CG_DrawRect_FixedBorder( 8, 8, 230, 16, 1, colorMdGrey );
-
-		CG_FillRect( 8, 23, 230, 210, clr2 );
-		CG_DrawRect_FixedBorder( 8, 23, 230, 216, 1, colorMdGrey );*/
-
-		y = 322;
-		CG_Text_Paint_Centred_Ext( 540, y, 0.22f, 0.22f, clr3, "SERVER INFO", 0, 0, 0, &bg_loadscreenfont1 );
-		
-		y = 340;
-		str = Info_ValueForKey( buffer, "sv_hostname" );
-		CG_Text_Paint_Centred_Ext( 540, y, 0.2f, 0.2f, colorWhite, str && *str ? str : "ETHost", 0, 26, 0, &bg_loadscreenfont2 );
-		
-		
-		y += 14;
-		for( i = 0; i < MAX_MOTDLINES; i++) {
-			str = CG_ConfigString( CS_CUSTMOTD + i );
-			if( !str || !*str ) {
-				break;
-			}
-
-			CG_Text_Paint_Centred_Ext( 540, y, 0.2f, 0.2f, colorWhite, str, 0, 26, 0, &bg_loadscreenfont2 );
-
-			y += 10;
+	if(cgs.gametype == GT_WOLF_CAMPAIGN) {
+		text = DC->nameForCampaign();
+		if(text) {
+			CG_Text_Paint_Centred_Ext(320, 160, .3f, .3f, campaignpTxt.colour, text, 0, 0, 0, &bg_loadscreenfont2);
+			CG_Text_Paint_Centred_Ext(320, 175, .3f, .3f, campaignpTxt.colour,
+				va("%iof%i", cgs.currentCampaignMap + 1, cgs.campaignData.mapCount), 0, 0, 0, &bg_loadscreenfont2);
 		}
-
-		y = 417;
-
-		str = Info_ValueForKey( buffer, "g_friendlyfire" );
-		if( str && *str && atoi( str ) ) {
-			x = 461;
-			CG_DrawPic( x, y, 16, 16, bg_filter_ff );
-		}
-
-		if( atoi( Info_ValueForKey( buffer, "g_gametype" ) ) != GT_WOLF_LMS ) {
-			str = Info_ValueForKey( buffer, "g_alliedmaxlives" );
-			if( str && *str && atoi( str ) ) {
-				enabled = qtrue;
-			} else {
-				str = Info_ValueForKey( buffer, "g_axismaxlives" );
-				if( str && *str && atoi( str ) ) {
-					enabled = qtrue;
-				} else {
-					str = Info_ValueForKey( buffer, "g_maxlives" );
-					if( str && *str && atoi( str ) ) {
-						enabled = qtrue;
-					}
-				}
-			}
-		}
-
-		if( enabled ) {
-			x = 489;
-			CG_DrawPic( x, y, 16, 16, bg_filter_lv );
-		}
-		
-		str = Info_ValueForKey( buffer, "sv_punkbuster" );
-		if( str && *str && atoi( str ) ) {
-			x = 518;
-			CG_DrawPic( x, y, 16, 16, bg_filter_pb );
-		}
-
-		str = Info_ValueForKey( buffer, "g_heavyWeaponRestriction" );
-		if( str && *str && atoi( str ) != 100 ) {
-			x = 546;
-			CG_DrawPic( x, y, 16, 16, bg_filter_hw );
-		}
-
-		str = Info_ValueForKey( buffer, "g_antilag" );
-		if( str && *str && atoi( str ) ) {
-			x = 575;
-			CG_DrawPic( x, y, 16, 16, bg_filter_al );
-		}
-
-		str = Info_ValueForKey( buffer, "g_balancedteams" );
-		if( str && *str && atoi( str ) ) {
-			x = 604;
-			CG_DrawPic( x, y, 16, 16, bg_filter_bt );
-		}
+	} else if(cgs.arenaInfoLoaded) {
+		CG_Text_Paint_Centred_Ext(320, 160, .3f, .3f, campaignpTxt.colour, cgs.arenaData.longname, 0, 0, 0, &bg_loadscreenfont2);
 	}
-
-	if( *cgs.rawmapname ) {
-		if( !bg_mappic ) {
-			bg_mappic = DC->registerShaderNoMip( va( "levelshots/%s", cgs.rawmapname ) );
-
-			if( !bg_mappic ) {
-				bg_mappic = DC->registerShaderNoMip( "levelshots/unknownmap" );	
-			}
+	trap_GetHunkData(&used, &expected);
+	if(expected > 0) {
+		fraction = (float)used / expected;
+		if(fraction < 0) fraction = 0;
+		if(fraction > 1) fraction = 1;
+		CG_FilledBar(260, 458, 120, 10, colorMdRed, NULL, NULL, fraction, 0x50);
+		CG_DrawRect_FixedBorder(260, 458, 120, 10, 1, colorDkGrey);
+	}
+	CG_Text_Paint_Centred_Ext(320, 466, .2f, .2f, colorWhite, cg.infoScreenText, 0, 0, 7, &bg_loadscreenfont2);
+	DC->getConfigString(CS_SERVERINFO, info, sizeof(info));
+	if(info[0]) {
+		int last = -1;
+		int motdBase = NITMOD_UsesOriginalProtocol() ? 841 : CS_CUSTMOTD;
+		text = Info_ValueForKey(info, "sv_hostname");
+		if(!text[0]) text = "ETHost";
+		width = CG_Text_Width_Ext(text, .25f, 32, &bg_loadscreenfont1);
+		for(i = 0; i < 7; ++i) {
+			float lineWidth;
+			const char *line = CG_ConfigString(motdBase + i);
+			if(!line[0]) continue;
+			last = i;
+			lineWidth = CG_Text_Width_Ext(line, .25f, 50, &bg_loadscreenfont1);
+			if(lineWidth > width) width = lineWidth;
 		}
-
-		trap_R_SetColor( colorBlack );
-		CG_DrawPic( 16+1, 2+1, 192, 144, bg_mappic );
-
-		trap_R_SetColor( NULL );
-		CG_DrawPic( 16, 2, 192, 144, bg_mappic );
-
-		CG_DrawPic( 16+80, 2+6, 20, 20, bg_pin );
+		if(last >= 0) CG_FillRect(320 - width * .5f - 4, 268, width + 8, last * 11 + 35, shade);
+		CG_Text_Paint_Centred_Ext(320, 280, .25f, .25f, colorWhite, text, 0, 32, 0, &bg_loadscreenfont1);
+		for(i = 0; i < 7; ++i) {
+			const char *line = CG_ConfigString(motdBase + i);
+			if(line[0]) CG_Text_Paint_Centred_Ext(320, 300 + i * 11, .2f, .2f, colorWhite, line, 0, 50, 0, &bg_loadscreenfont2);
+		}
+		icons[0] = bg_filter_ff; icons[1] = bg_filter_bt; icons[2] = bg_filter_al;
+		icons[3] = bg_filter_hw; icons[4] = bg_filter_lv; icons[5] = nxac;
+		enabled[0] = atoi(Info_ValueForKey(info, "g_friendlyfire")) & 1;
+		enabled[1] = atoi(Info_ValueForKey(info, "g_balancedteams"));
+		enabled[2] = atoi(Info_ValueForKey(info, "g_antilag"));
+		enabled[3] = atoi(Info_ValueForKey(info, "g_heavyWeaponRestriction")) != 100;
+		enabled[4] = atoi(Info_ValueForKey(info, "g_maxlives")) ||
+			atoi(Info_ValueForKey(info, "g_axismaxlives")) || atoi(Info_ValueForKey(info, "g_alliedmaxlives"));
+		enabled[5] = atoi(Info_ValueForKey(info, "sv_NxAC"));
+		for(i = 0; i < 6; ++i) {
+			tint[3] = enabled[i] ? 1 : .2f;
+			trap_R_SetColor(tint);
+			CG_DrawPic(236 + i * 28, 408, 16, 16, icons[i]);
+		}
+		trap_R_SetColor(NULL);
 	}
-
-	if( forcerefresh ) {
-		DC->updateScreen();
-	}
-
+	CG_Text_Paint_Centred_Ext(320, 450, .2f, .2f, colorWhite,
+		"^7N^1!^7tmod", 0, 0, 0, &bg_loadscreenfont2);
+	if(interactive) DC->drawHandlePic(DC->cursorx, DC->cursory, 32, 32, DC->Assets.cursor);
+	if(forcerefresh) DC->updateScreen();
 	inside = qfalse;
 }
 

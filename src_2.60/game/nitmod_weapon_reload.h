@@ -146,7 +146,7 @@ int NITMOD_ReloadWeaponClips( playerState_t *state, int weapon,
     const ammotable_t *ammoTable, int ammoSlots );
 /* Completes the reload after both timers expire: atomic inventory transfer,
  * READY, then gated idle animation. Returns 1 completed, 0 not ready, -1 invalid.
- * No new completion event is emitted by the original. Not an active hook. */
+ * No new completion event is emitted by the original. Active in shared Pmove. */
 int NITMOD_FinishWeaponReload( pmove_t *move,
     const ammotable_t *ammoTable, int ammoSlots );
 typedef enum {
