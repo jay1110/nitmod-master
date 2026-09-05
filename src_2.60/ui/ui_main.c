@@ -11,6 +11,7 @@ USER INTERFACE MAIN
 */
 
 #include "ui_local.h"
+#include "../game/nitmod_protocol.h"
 #include <limits.h>
 
 /* Legacy ET savegame handlers are still compiled, but original Nitmod's

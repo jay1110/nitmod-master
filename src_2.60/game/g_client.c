@@ -2,6 +2,7 @@
 #include "g_nitmod_etbot_lifecycle.h"
 #include "g_nitmod_legacy_cvars.h"
 #include "g_nitmod_abilities.h"
+#include "nitmod_protocol.h"
 #include <limits.h>
 
 void NITMOD_SetSpawnProtection(gclient_t *client, qboolean revived) {

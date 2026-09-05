@@ -3,6 +3,7 @@
 #include "g_nitmod_legacy_cvars.h"
 #include "g_nitmod_teamcount.h"
 #include "g_nitmod_config.h"
+#include "nitmod_protocol.h"
 
 void BotDebug(int clientNum);
 void GetBotAutonomies(int clientNum, int *weapAutonomy, int *moveAutonomy);	

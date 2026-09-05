@@ -1,5 +1,6 @@
 #include "g_local.h"
 #include "g_nitmod_teamcount.h"
+#include "nitmod_protocol.h"
 
 /* Original Cmd_ResetSetup_f (tail at ELF 0x66383): any of the three
  * changed latches publishes userinfo, including a class-only cancellation. */

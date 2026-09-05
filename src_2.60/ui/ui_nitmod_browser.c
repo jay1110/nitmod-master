@@ -1,4 +1,5 @@
 #include "ui_local.h"
+#include "../game/nitmod_protocol.h"
 #include <limits.h>
 
 static int browserHumans[MAX_GLOBAL_SERVERS];

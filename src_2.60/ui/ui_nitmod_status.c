@@ -1,4 +1,5 @@
 #include "ui_local.h"
+#include "../game/nitmod_protocol.h"
 
 /* Original UI_GetServerStatusInfo: borrowed pointers remain inside info. */
 void UI_ParseServerStatus(serverStatusInfo_t *info, const char *address) {
