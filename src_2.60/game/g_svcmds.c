@@ -6,6 +6,7 @@
 #include "g_local.h"
 #include "g_nitmod_omnibot.h"
 #include "g_nitmod_etbot_lifecycle.h"
+#include "g_nitmod_legacy_cvars.h"
 #include <limits.h>
 
 

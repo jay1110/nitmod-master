@@ -1,5 +1,6 @@
 #include "g_local.h"
 #include "g_nitmod_mapvote.h"
+#include "g_nitmod_legacy_cvars.h"
 
 #define NITMOD_MAPVOTE_MAX_MAPS 64
 #define NITMOD_MAPVOTE_CHOICES 3
