@@ -140,12 +140,11 @@ jobs:
         run: cmake --build build/macos-universal --target cgame qagame ui
       - name: Verify universal binaries
         run: |
-          test -f build/macos-universal/cgame_mac
-          test -f build/macos-universal/qagame_mac
-          test -f build/macos-universal/ui_mac
-          lipo -verify_arch x86_64 arm64 build/macos-universal/cgame_mac
-          lipo -verify_arch x86_64 arm64 build/macos-universal/qagame_mac
-          lipo -verify_arch x86_64 arm64 build/macos-universal/ui_mac
+          for module in cgame qagame ui; do
+            file="build/macos-universal/${module}_mac"
+            test -f "$file"
+            lipo "$file" -verify_arch x86_64 arm64
+          done
       - uses: actions/upload-artifact@v4
         with:
           name: nitmod-macos-universal
