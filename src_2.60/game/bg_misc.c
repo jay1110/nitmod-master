@@ -93,13 +93,13 @@ pathCorner_t		pathCorners[MAX_PATH_CORNERS];
 // Arnout: the new loadout for WolfXP
 int weapBanksMultiPlayer[MAX_WEAP_BANKS_MP][MAX_WEAPS_IN_BANK_MP] = {
 	{0,						0,						0,					0,							0,						0,							0,			0,			0,			0,		0,				0			},	// empty bank '0'
-	{WP_KNIFE,				0,						0,					0,							0,						0,							0,			0,			0,			0,		0,				0			},
+	{WP_KNIFE, WP_POISON_SYRINGE, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0},
 	{WP_LUGER,				WP_COLT,				WP_AKIMBO_COLT,		WP_AKIMBO_LUGER,			WP_AKIMBO_SILENCEDCOLT,	WP_AKIMBO_SILENCEDLUGER,	0,			0,			0,			0,		0,				0			},
 	{WP_MP40,				WP_THOMPSON,			WP_STEN,			WP_GARAND,					WP_PANZERFAUST,			WP_FLAMETHROWER,			WP_KAR98,	WP_CARBINE,	WP_FG42,	WP_K43,	WP_MOBILE_MG42,	WP_MORTAR	},
-	{WP_GRENADE_LAUNCHER,	WP_GRENADE_PINEAPPLE,	0,					0,							0,						0,							0,			0,			0,			0,		0,				0			},
-	{WP_MEDIC_SYRINGE,		WP_PLIERS,				WP_SMOKE_MARKER,	WP_SMOKE_BOMB,				0,						0,							0,			0,			0,			0,		0,				0,			},
+	{WP_GRENADE_LAUNCHER, WP_GRENADE_PINEAPPLE, WP_BOMB, 0, 0, 0, 0, 0, 0, 0, 0, 0},
+	{WP_MEDIC_SYRINGE, WP_PLIERS, WP_SMOKE_MARKER, WP_SMOKE_BOMB, WP_POISON_BOMB, 0, 0, 0, 0, 0, 0, 0},
 	{WP_DYNAMITE,			WP_MEDKIT,				WP_AMMO,			WP_SATCHEL,					WP_SATCHEL_DET,			0,							0,			0,			0,			0,		0,				0			},
-	{WP_LANDMINE, WP_TRIPMINE, WP_MEDIC_ADRENALINE, 0, 0, 0, 0, 0, 0, 0, 0, 0}, // original bank 7, excluding unimplemented poison mine
+	{WP_LANDMINE, WP_POISON_MINE, WP_TRIPMINE, WP_MEDIC_ADRENALINE, 0, 0, 0, 0, 0, 0, 0, 0},
 	{WP_BINOCULARS,			0,						0,					0,							0,						0,							0,			0,			0,			0,		0,				0			},
 	{0,						0,						0,					0,							0,						0,							0,			0,			0,			0,		0,				0			},
 };
@@ -196,6 +196,10 @@ ammotable_t ammoTableMP[WP_NUM_WEAPONS] = {
 	{	48,				1,		8,		48,		8,		2700,	DELAY_PISTOL,	200,	0,		0,		MOD_AKIMBO_SILENCEDCOLT	},	// WP_AKIMBO_SILENCEDCOLT	// 47
 	{	48,				1,		8,		48,		8,		2700,	DELAY_PISTOL,	200,	0,		0,		MOD_AKIMBO_SILENCEDLUGER},	// WP_AKIMBO_SILENCEDLUGER	// 48
 	{	450,			1,		150,	0,		150,	3000,	DELAY_LOW,		66,		1500,	300,	MOD_MOBILE_MG42			},	// WP_MOBILE_MG42_SET		// 49
+	{1, 1, 1, 0, 1, 1000, 250, 1600, 0, 0, MOD_BOMB}, // WP_BOMB: original ammo row 48
+	{8, 1, 1, 0, 4, 1500, 50, 500, 0, 0, MOD_POISON}, // WP_POISON_SYRINGE
+	{1, 0, 10, 0, 1, 1000, 250, 1600, 0, 0, MOD_POISON_GAS}, // WP_POISON_BOMB
+	{1, 0, 1, 0, 1, 100, 100, 100, 0, 0, MOD_POISON_GAS_MINE}, // WP_POISON_MINE
 };
 
 //----(SA)	moved in here so both games can get to it
@@ -255,6 +259,10 @@ int weapAlts[] = {
 	WP_NONE,			// 47 WP_AKIMBO_SILENCEDCOLT
 	WP_NONE,			// 48 WP_AKIMBO_SILENCEDLUGER
 	WP_MOBILE_MG42,		// 49 WP_MOBILE_MG42_SET
+	WP_NONE,              // WP_BOMB has no alternate weapon
+	WP_NONE,              // WP_POISON_SYRINGE
+	WP_NONE,              // WP_POISON_BOMB
+	WP_NONE,              // WP_POISON_MINE
 };
 
 
@@ -2524,6 +2532,34 @@ model="models/powerups/xp_key/key.md3"
 
 */
 
+	/* Appended so existing ET item indices do not move. Original item
+	 * weapon_bomb uses its own ammo/clip identity and the bomb.weap media. */
+	{
+		"weapon_bomb", "",
+		{ "models/multiplayer/bomb/bomb.md3", "models/multiplayer/bomb/v_bomb.md3", 0 },
+		"icons/iconw_smokegrenade_1_select", "icons/ammo9", "Bomb", 0,
+		IT_WEAPON, WP_BOMB, WP_BOMB, WP_BOMB, "", ""
+	},
+	{
+		"weapon_poison_syringe", "",
+		{ "models/multiplayer/syringe/0syringe.md3", "models/multiplayer/syringe/v_syringe.md3", 0 },
+		"icons/iconw_syringe_1_select", "icons/ammo9", "Poison Syringe", 0,
+		IT_WEAPON, WP_POISON_SYRINGE, WP_POISON_SYRINGE, WP_POISON_SYRINGE, "", ""
+	},
+	{
+		"weapon_poisonbomb", "",
+		{ "models/multiplayer/pgas/pgasbomb.md3", "models/multiplayer/pgas/v_pgasbomb.md3", 0 },
+		"icons/iconw_smokegrenade_1_select", "icons/ammo9", "Poison Bomb", 0,
+		IT_WEAPON, WP_POISON_BOMB, WP_POISON_BOMB, WP_POISON_BOMB, "", ""
+	},
+	/* Original item 49 reuses weapon_landmine; use a distinct local class name
+	 * so lookup cannot select ordinary landmine media or inventory. */
+	{
+		"weapon_poison_landmine", "",
+		{ "models/multiplayer/landmine/plandmine.md3", "models/multiplayer/landmine/v_plandmine.md3", 0 },
+		"icons/iconw_plandmine_1_select", "icons/ammo9", "Poison Landmine", 0,
+		IT_WEAPON, WP_POISON_MINE, WP_POISON_MINE, WP_POISON_MINE, "", ""
+	},
 	// end of list marker
 	{NULL}
 };
@@ -3052,6 +3088,15 @@ Returns false if the item should not be picked up.
 This needs to be the same for client side prediction and server use.
 ================
 */
+int BG_EffectiveMaxHealth(const playerState_t *ps) {
+	double maximum;
+	if(!ps) return 0;
+	if(ps->stats[STAT_NITMOD_MAX_HEALTH] > 0) return ps->stats[STAT_NITMOD_MAX_HEALTH];
+	maximum = ps->stats[STAT_MAX_HEALTH];
+	if(ps->teamNum == PC_MEDIC) maximum *= 1.12;
+	return maximum <= 0 ? 0 : maximum > 32767 ? 32767 : (int)maximum;
+}
+
 qboolean	BG_CanItemBeGrabbed( const entityState_t *ent, const playerState_t *ps, int *skill, int teamNum ) {
 	gitem_t	*item;
 
@@ -3080,18 +3125,7 @@ qboolean	BG_CanItemBeGrabbed( const entityState_t *ent, const playerState_t *ps,
 		return qfalse;
 
 	case IT_HEALTH:
-		// Gordon: ps->teamNum is really class.... thx whoever decided on that...
-		if( ps->teamNum == PC_MEDIC ) {
-			// Gordon: medics can go up to 12% extra on max health as they have perm. regen
-			if( ps->stats[STAT_HEALTH] >= (int)(ps->stats[STAT_MAX_HEALTH] * 1.12) ) {
-				return qfalse;
-			}
-		} else {
-			if( ps->stats[STAT_HEALTH] >= ps->stats[STAT_MAX_HEALTH] ) {
-				return qfalse;
-			}
-		}
-		return qtrue;
+		return ps->stats[STAT_HEALTH] < BG_EffectiveMaxHealth(ps);
 
 	case IT_TEAM: // team items, such as flags
 
@@ -4790,6 +4824,11 @@ const char* bg_fireteamNames[MAX_FIRETEAMS / 2] = {
 
 const voteType_t voteToggles[] =
 	{
+		{ "vote_allow_poll", CV_SVF_POLL },
+		{ "vote_allow_surrender", CV_SVF_SURRENDER },
+		{ "vote_allow_maprestart", CV_SVF_MAPRESTART },
+		{ "vote_allow_restartcampaign", CV_SVF_RESTARTCAMPAIGN },
+		{ "vote_allow_nextcampaign", CV_SVF_NEXTCAMPAIGN },
 		{ "vote_allow_comp",			CV_SVF_COMP },
 		{ "vote_allow_gametype",		CV_SVF_GAMETYPE },
 		{ "vote_allow_kick",			CV_SVF_KICK },
@@ -4799,7 +4838,9 @@ const voteType_t voteToggles[] =
 		{ "vote_allow_nextmap",			CV_SVF_NEXTMAP },
 		{ "vote_allow_pub",				CV_SVF_PUB },
 		{ "vote_allow_referee",			CV_SVF_REFEREE },
-		{ "vote_allow_shuffleteamsxp",	CV_SVF_SHUFFLETEAMS },
+		{ "vote_allow_shuffleteams",	CV_SVF_SHUFFLETEAMS },
+		{ "vote_allow_shuffleteams_norestart", CV_SVF_SHUFFLETEAMS_NORESTART },
+		{ "vote_allow_swapteamsrestart", CV_SVF_SWAPTEAMS_RESTART },
 		{ "vote_allow_swapteams",		CV_SVF_SWAPTEAMS },
 		{ "vote_allow_friendlyfire",	CV_SVF_FRIENDLYFIRE },
 		{ "vote_allow_timelimit",		CV_SVF_TIMELIMIT },
@@ -5224,4 +5265,16 @@ int Q_vsnprintf( char *dest, int size, const char *fmt, va_list argptr ) {
 		return -1;
 	}
 	return ret;
+}
+
+const char *BG_NitmodGametypeName( int gametype, qboolean shortName ) {
+	static const char *longNames[GT_MAX_GAME_TYPE] = {
+		"Single Player", "Cooperative", "Objective", "Stopwatch", "Campaign",
+		"Last Man Standing", "Map Voting", "Team Deathmatch", "Deathmatch"
+	};
+	static const char *shortNames[GT_MAX_GAME_TYPE] = {
+		"SP", "Co-op", "OBJ", "SW", "Campaign", "LMS", "Vote", "TDM", "DM"
+	};
+	if( gametype < 0 || gametype >= GT_MAX_GAME_TYPE ) return shortName ? "???" : "Invalid";
+	return shortName ? shortNames[gametype] : longNames[gametype];
 }

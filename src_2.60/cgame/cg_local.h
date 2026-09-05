@@ -532,6 +532,7 @@ typedef struct clientInfo_s {
 	int				medals[SK_NUM_SKILLS];
 	int				skill[SK_NUM_SKILLS];
 	int             nitmodSkillLevels[SK_NUM_SKILLS]; /* original display 0..5 */
+	int             nitmodSkillMasks[SK_NUM_SKILLS]; /* original xp unlock bits */
 	int				skillpoints[SK_NUM_SKILLS];	// filled OOB by +wstats
 
 	char			disguiseName[MAX_QPATH];
@@ -622,6 +623,17 @@ typedef struct weaponInfo_s {
 
 	qhandle_t		handsModel;			// the hands don't actually draw, they just position the weapon
 	float foreShorten;
+	/* Shared weaponDef value used by predicted movement. Zero keeps the
+	 * native ET movement scale, matching the original Nitmod sentinel. */
+	float movementSpeedScale;
+	qboolean customRecoilEnabled;
+	int customRecoilDuration;
+	float customRecoilYaw, customRecoilPitch;
+	qboolean noMidclipReload;
+	int spreadScaleAdd, spreadScaleAddRand;
+	float spreadRatio;
+	int velocityToSpread, viewChangeToSpread;
+	char killMessage[64], killMessage2[64];
 	int weaponIconScale;
 	vec3_t offset;
 	nitmodWeaponSmoke_t flashSmoke;
@@ -1694,6 +1706,7 @@ typedef struct {
 	qhandle_t		limboClassButton2Back_off;
 	qhandle_t		limboClassButton2Wedge_on;
 	qhandle_t		limboClassButton2Wedge_off;
+	qhandle_t		limboClassButtonLevel5_on, limboClassButtonLevel5_off;
 	qhandle_t		limboClassButtons2[NUM_PLAYER_CLASSES];
 
 //	skill_back_on
@@ -1792,7 +1805,7 @@ typedef struct cg_weaponstats_s {
 } cg_weaponstats_t;
 
 typedef struct {
-	char strWS[WS_MAX][MAX_STRING_TOKENS];
+	char strWS[26][MAX_STRING_TOKENS]; // original Nitmod categories
 	char strExtra[2][MAX_STRING_TOKENS];
 	char strRank[MAX_STRING_TOKENS];
 	char strSkillz[SK_NUM_SKILLS][MAX_STRING_TOKENS];
@@ -1807,7 +1820,7 @@ typedef struct {
 } gameStats_t;
 
 typedef struct {
-	char strWS[WS_MAX*2][MAX_STRING_TOKENS];
+	char strWS[26*2][MAX_STRING_TOKENS]; // original Nitmod topshots: 52 rows
 	int cWeapons;
 	int fadeTime;
 	int show;
@@ -1901,7 +1914,7 @@ typedef struct {
 
 	int cursorX;
 	int cursorY;
-	qboolean eventHandling;
+	cgameEvent_t eventHandling;
 	qboolean mouseCaptured;
 	qboolean sizingHud;
 	void *capturedItem;
@@ -2034,7 +2047,7 @@ typedef struct {
 	int					dbLastScoreRequest;
 	int					dbPlayerListOffset;
 	int					dbWeaponListOffset;
-	cg_weaponstats_t	dbWeaponStats[WS_MAX];
+	cg_weaponstats_t	dbWeaponStats[26]; /* Original Nitmod has 26 wire categories. */
 	int				dbHitRegionHits[HR_NUM_HITREGIONS];
 	float				dbHitRegionPercent[HR_NUM_HITREGIONS];
 	int					dbChatMode;
@@ -2095,6 +2108,10 @@ extern	vmCvar_t		cg_bobyaw;
 extern	vmCvar_t		cg_swingSpeed;
 extern	vmCvar_t		cg_shadows;
 extern	vmCvar_t		cg_gibs;
+void CG_CheckLocalSounds(playerState_t *ps, playerState_t *ops);
+void CG_StartShakeCamera(float strength);
+void CG_ShakeCamera(void);
+float CG_CameraShakeFraction(void);
 extern	vmCvar_t		cg_draw2D;
 extern	vmCvar_t		cg_drawFPS;
 extern	vmCvar_t		cg_drawSnapshot;
@@ -2418,6 +2435,10 @@ void CG_InitStatsDebug( void );
 void CG_StatsDebugAddText( const char *text );
 
 void CG_AddLagometerFrameInfo( void );
+void CG_DrawLagometer( float y );
+void CG_NitmodSnapshotRateReset(void);
+void CG_NitmodSnapshotRateUpdate(int now, int currentTime, int nextTime, int enabled);
+int CG_NitmodSnapshotRate(void);
 void CG_AddLagometerSnapshotInfo( snapshot_t *snap );
 void CG_CenterPrint( const char *str, int y, int charWidth );
 void CG_PriorityCenterPrint( const char *str, int y, int charWidth, int priority );		// NERVE - SMF
@@ -2532,6 +2553,7 @@ qboolean CG_MountedTankIsBrowning(const centity_t *cent);
 qhandle_t CG_NitmodBrassModel(int weapon);
 int CG_NitmodWeaponIconScale(int weapon);
 void CG_NitmodShortenWeapon(const weaponInfo_t *weapon, refEntity_t *hand);
+float CG_NitmodWeaponMovementScale(int weapon);
 void CG_NitmodWeaponOffset(const weaponInfo_t *weapon, const vec3_t userOffset, vec3_t result);
 qboolean CG_NitmodFlashSmokeParams(const weaponInfo_t *weapon, int weaponNum, int age, nitmodWeaponSmoke_t *smoke);
 void CG_NitmodEmitFlashSmoke(const weaponInfo_t *weapon, int weaponNum, int age, vec3_t origin);
@@ -2725,6 +2747,8 @@ void CG_RumbleEfx ( float pitch, float yaw );
 void InitSmokeSprites( void );
 void CG_RenderSmokeGrenadeSmoke( centity_t *cent, const weaponInfo_t *weapon );
 void CG_AddSmokeSprites( void );
+void CG_DrawWarmup(void);
+void CG_NitmodSmokeSpriteStyle(int weapon, float *size, vec4_t color);
 
 //
 // cg_snapshot.c
@@ -3400,6 +3424,7 @@ void				CG_LimboPanel_GetWeaponCardIconData	( weapon_t weap, qhandle_t* shader, 
 void				CG_LimboPanel_RequestObjective		( void );
 void				CG_LimboPanel_RequestWeaponStats	( void );
 qboolean			CG_LimboPanel_Draw					( void );
+void CG_LimboPanel_UpdateCursor(void);
 team_t				CG_LimboPanel_GetTeam				( void );
 team_t				CG_LimboPanel_GetRealTeam			( void );
 bg_character_t*		CG_LimboPanel_GetCharacter			( void );
@@ -3553,6 +3578,8 @@ void CG_Debreifing2_MissionTitle_Draw( panel_button_t* button );
 void CG_Debreifing2_Mission_Draw( panel_button_t* button );
 void CG_Debreifing2_Maps_Draw( panel_button_t* button );
 void CG_Debreifing2_Awards_Draw( panel_button_t* button );
+qboolean CG_NitmodParseRoundAwards(const char *text);
+const char *CG_NitmodRoundAward(int index, const char **winner, int *team);
 void CG_PanelButtonsRender_Window( panel_button_t* button );
 void CG_PanelButtonsRender_Button( panel_button_t* button );
 

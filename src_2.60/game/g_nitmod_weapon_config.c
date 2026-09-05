@@ -35,6 +35,10 @@ int G_NITMOD_ConfiguredNoReload(void) {
     return weaponCvarsRegistered ? trackedWeaponCvars[9].integer : 0;
 }
 
+unsigned int G_NITMOD_ConfiguredMedicOptions(void) {
+    return weaponCvarsRegistered ? (unsigned int)trackedWeaponCvars[8].integer : 0;
+}
+
 int G_NITMOD_ReadMedicOptions( unsigned int *options ) {
     char text[MAX_CVAR_VALUE_STRING];
     int value;

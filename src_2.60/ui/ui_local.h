@@ -8,8 +8,14 @@
 #include "../game/bg_public.h"
 #include "ui_shared.h"
 qboolean UI_NitmodMenuAction(const char *name);
+qboolean UI_NitmodSystemSettings(const char *name);
+qboolean UI_NitmodProfileSettings(const char *name);
+qboolean UI_NitmodRedirectAddress(const char *text, char *out, int size);
+qboolean UI_NitmodFoundPlayerAddress(char *out, int size);
 qboolean UI_NitmodPlayerSelectionValid(void);
 void UI_NitmodRefreshPlayers(void);
+qboolean UI_GameTypeForCatalogRow(int index, int *game);
+qboolean UI_SelectedNetGameType(int *game);
 qboolean UI_OwnerDrawVisible(int flags);
 
 extern vmCvar_t	ui_ffa_fraglimit;
@@ -376,6 +382,9 @@ void			UI_LoadArenas(void);
 void			UI_LoadCampaigns(void);
 mapInfo*		UI_FindMapInfoByMapname( const char* name );
 void			UI_ReadableSize ( char *buf, int bufsize, int value );
+int UI_DownloadCounter(const char *name);
+int UI_DownloadPercent(int count, int size);
+int UI_DownloadRate(int count, int started, int now);
 void			UI_PrintTime ( char *buf, int bufsize, int time );
 void			Text_Paint_Ext( float x, float y, float scalex, float scaley, vec4_t color, const char *text, float adjust, int limit, int style, fontInfo_t* font );
 
@@ -780,13 +789,16 @@ typedef struct {
 	char *lines[MAX_SERVERSTATUS_LINES][4];
 	char text[MAX_SERVERSTATUS_TEXT];
 	char pings[MAX_CLIENTS * 3];
+	char gameTypeName[48];
 	int numLines;
 } serverStatusInfo_t;
 void UI_ParseServerStatus(serverStatusInfo_t *info, const char *address);
 int UI_GetServerStatusInfo(const char *address, serverStatusInfo_t *info);
 int UI_QueryServerStatus(const char *address, serverStatusInfo_t *info);
+int UI_GetConnectedLocalServerStatus(const char *address, serverStatusInfo_t *info);
 void UI_BuildFindPlayerList(qboolean force);
 int UI_ServerHumanCount(const char *status, const char *master);
+void UI_ServerPopulationText(int server, const char *master, char *out, int size);
 int UI_CompareBrowserServers(int first, int second);
 void UI_DrawDescriptionText(const rectDef_t *rect, float scale, vec4_t color, float textX, float textY, int style, int align, const char *text, int stars);
 void UI_DrawCampaignDescription(rectDef_t *rect, float scale, vec4_t color, float textX, float textY, int style, int align, qboolean net);
@@ -803,6 +815,7 @@ const char *UI_CatalogNextString(const char *buffer, int capacity, int *offset);
 qboolean UI_CatalogScriptPath(const char *name, char *path, int capacity);
 void UI_SortCatalog(uiCatalog_t catalog);
 void UI_LoadCampaignsFromFile(const char *filename);
+qboolean UI_NitmodCampaignVisible(int flags);
 void UI_OrderCampaigns(void);
 void UI_Update(const char *name);
 

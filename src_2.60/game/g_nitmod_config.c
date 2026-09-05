@@ -5,6 +5,7 @@
 #include "g_local.h"
 #include "g_nitmod_config.h"
 #include "g_nitmod_restrictions.h"
+#include "g_nitmod_legacy_cvars.h"
 #include "nitmod_announcements.h"
 #include "nitmod_spree.h"
 #include "nitmod_config_store.h"
@@ -13,9 +14,16 @@ static nitmodConfigStore_t nitmodConfigStore;
 static unsigned int nitmodClientCapabilities[MAX_CLIENTS];
 static nitmodSimpleConfig_t nitmodSimpleConfig;
 static nitmodGameState_t nitmodGameState;
+static int nitmodMapCycleCount;
 static nitmodKillSpree_t nitmodKillSpree[MAX_CLIENTS];
 
 static void G_NITMOD_SendConfigString( int clientNum, int index, qboolean sendEmpty );
+
+int G_NITMOD_DynamiteTimer( void ) {
+	int timer = G_NITMOD_LegacyCvarInteger("n_dynamiteTimer", 30000);
+	nitrox_ClampInt(&timer, 5000.0f, 60000.0f);
+	return timer;
+}
 
 static qboolean G_NITMOD_IsValidClient( int clientNum ) {
 	return clientNum >= 0 && clientNum < MAX_CLIENTS;
@@ -212,16 +220,18 @@ void nitrox_stripLeadingSpaces( char *text ) {
 	}
 }
 
-/* nitmod_SoundEvent constructs an EV_GENERAL_SOUND temp entity at the source
- * gentity's current origin.  ET 2.60's G_Sound is that same typed primitive.
- * The original additionally recycled 32 entities when events were more than
- * 300 ms apart; that allocation optimization does not affect the wire event
- * and is intentionally left to the engine's normal temp-entity lifecycle. */
+/* Original nitmod_SoundEvent uses private wire event 100, whose eventParm is
+ * still an ordinary CS_SOUNDS index.  Keep the shared source tree ABI-safe by
+ * emitting a named internal event; cgame accepts both this event from the
+ * reconstructed qagame and wire 100 from an original Nitmod server. */
 void NITMOD_PlaySoundEvent( gentity_t *source, int soundIndex ) {
+	gentity_t *event;
+
 	if( !source || soundIndex <= 0 ) {
 		return;
 	}
-	G_Sound( source, soundIndex );
+	event = G_TempEntity( source->r.currentOrigin, EV_NITMOD_SOUND );
+	event->s.eventParm = soundIndex;
 }
 
 /* Typed port of nitmod_Sound_Global: an EV_GLOBAL_SOUND temp entity carries
@@ -333,6 +343,8 @@ void G_NITMOD_ClientCapabilities( int clientNum, int protocolVersion, unsigned i
 	nitmod_SendNCS( clientNum );
 	nitmod_SendChargeTimes( clientNum );
 	nitmod_SendTeamScores( clientNum );
+	nitmod_SendSkillLevels( clientNum );
+	nitmod_SendClassHealth( clientNum );
 	if( level.intermissiontime ) {
 		nitmod_SendMapEndStats( clientNum );
 	}
@@ -582,12 +594,25 @@ void nitmod_RefreshBaseSettings( void ) {
 	nitmodGameState_t state = nitmodGameState;
 
 	simple.filterCams = g_filtercams.integer;
+	simple.spectatorNames = g_spectatorNames.integer;
 	simple.doubleJump = g_doubleJump.integer;
+	simple.missileCams = G_NITMOD_LegacyCvarInteger( "g_missileCams", 0 );
 	simple.war = G_NITMOD_ConfiguredWarMode();
 	simple.noReload = G_NITMOD_ConfiguredNoReload();
+	simple.misc = G_NITMOD_LegacyCvarInteger( "g_misc", 0 );
+	simple.proneDelay = G_NITMOD_LegacyCvarInteger( "n_proneDelay", 0 );
+	simple.dynamiteTimer = G_NITMOD_DynamiteTimer();
+	simple.crouchStandDelay = G_NITMOD_LegacyCvarInteger( "n_crouchStandDelay", 0 );
+	simple.standCrouchDelay = G_NITMOD_LegacyCvarInteger( "n_standCrouchDelay", 0 );
 	state.doubleJumpHeight = g_DJHeight.value;
 	G_NITMOD_RefreshWeaponSnapshot( &state );
 	state.gravity = g_gravity.integer;
+	state.mapCount = G_NITMOD_MapCycleCount();
+	state.resetXPMapCount = (g_XPSave.integer & 4) ? 0 : g_resetXPMapCount.integer;
+	state.dmOptions = g_DMOptions.integer;
+	state.tdmOptions = G_NITMOD_LegacyCvarInteger( "g_TDMOptions", 0 );
+	state.adrenaline = G_NITMOD_LegacyCvarInteger( "g_adrenaline", 0 );
+	state.keepAwards = G_NITMOD_LegacyCvarInteger( "jp_keepAwards", 0 );
 	state.maxSoldiers = team_maxSoldiers.integer;
 	state.maxMedics = team_maxMedics.integer;
 	state.maxEngineers = team_maxEngineers.integer;
@@ -595,6 +620,36 @@ void nitmod_RefreshBaseSettings( void ) {
 	state.maxCovertops = team_maxCovertops.integer;
 	nitmod_SetSimpleConfig( &simple );
 	nitmod_SetGameState( &state );
+}
+
+qboolean G_NITMOD_MapCycleEnabled( void ) {
+	return g_resetXPMapCount.integer > 0 &&
+		(g_gametype.integer == GT_WOLF_MAPVOTE ||
+		 (g_gametype.integer == GT_WOLF_TDM &&
+		  (G_NITMOD_LegacyCvarInteger("g_TDMOptions", 0) & 8)) ||
+		 (g_gametype.integer == GT_WOLF_DM && (g_DMOptions.integer & 0x4000)));
+}
+
+void G_NITMOD_SetMapCycleCount( int count ) {
+	int limit = g_resetXPMapCount.integer;
+	if(count < 0) count = 0;
+	if(limit > 0 && count >= limit) count = 0;
+	nitmodMapCycleCount = count;
+}
+
+int G_NITMOD_MapCycleCount( void ) {
+	return G_NITMOD_MapCycleEnabled() ? nitmodMapCycleCount : 0;
+}
+
+qboolean G_NITMOD_MapCycleResetsXP( void ) {
+	return !(g_XPSave.integer & 4) && G_NITMOD_MapCycleEnabled() &&
+		nitmodMapCycleCount == 0;
+}
+
+void G_NITMOD_AdvanceMapCycle( void ) {
+	if(!G_NITMOD_MapCycleEnabled()) return;
+	G_NITMOD_SetMapCycleCount(nitmodMapCycleCount + 1);
+	nitmod_RefreshBaseSettings();
 }
 
 void nitmod_SimpleCS( int clientNum ) {
@@ -649,6 +704,46 @@ void nitmod_SendTeamScores( int clientNum ) {
 	}
 	trap_SendServerCommand( clientNum, va( "tsc %i %i",
 		level.teamScores[TEAM_AXIS], level.teamScores[TEAM_ALLIES] ) );
+}
+
+void nitmod_SendSkillLevels( int clientNum ) {
+	static const char *keys[SK_NUM_SKILLS] = { "B", "E", "M", "F", "L", "S", "C" };
+	static const char *names[SK_NUM_SKILLS] = {
+		"skill_battlesense", "skill_engineer", "skill_medic", "skill_fieldops",
+		"skill_lightweapons", "skill_soldier", "skill_covertops"
+	};
+	char info[MAX_INFO_STRING] = "";
+	char value[MAX_CVAR_VALUE_STRING];
+	int skill;
+	if(!G_NITMOD_ClientSupports(clientNum, NITMOD_FEATURE_SIMPLE_CS)) return;
+	for(skill = 0; skill < SK_NUM_SKILLS; ++skill) {
+		trap_Cvar_VariableStringBuffer(names[skill], value, sizeof(value));
+		Info_SetValueForKey(info, keys[skill], value);
+	}
+	trap_SendServerCommand(clientNum, va("sl %s", info));
+}
+
+/* Original Nitmod publishes this table through private configstring 39.
+ * Native ET 2.60 owns that slot as CS_FILTERCAMS, so reconstructed peers use
+ * a negotiated command and leave the engine configstring namespace intact. */
+void nitmod_SendClassHealth( int clientNum ) {
+	int i;
+
+	if( clientNum < 0 ) {
+		for( i = 0; i < MAX_CLIENTS; ++i ) {
+			nitmod_SendClassHealth( i );
+		}
+		return;
+	}
+	if( !G_NITMOD_ClientSupports( clientNum, NITMOD_FEATURE_CLASS_HEALTH ) ) {
+		return;
+	}
+	trap_SendServerCommand( clientNum, va( "nch %i %i %i %i %i",
+		G_NITMOD_ClassMaxHealth( PC_SOLDIER ),
+		G_NITMOD_ClassMaxHealth( PC_MEDIC ),
+		G_NITMOD_ClassMaxHealth( PC_ENGINEER ),
+		G_NITMOD_ClassMaxHealth( PC_FIELDOPS ),
+		G_NITMOD_ClassMaxHealth( PC_COVERTOPS ) ) );
 }
 
 void nitmod_TeamScores( void ) {

@@ -73,10 +73,18 @@ g_nitmod_war.c
 g_nitmod_restrictions.c
 g_nitmod_weapon_policy.c
 g_nitmod_weapon_config.c
+g_nitmod_legacy_cvars.c
+g_nitmod_banners.c
+g_nitmod_omnibot.c
 g_nitmod_weapon_adapter.c
 g_nitmod_class_command.c
+g_nitmod_campaign_vote.c
+g_nitmod_team_vote.c
+g_nitmod_mapvote.c
+g_nitmod_surrender.c
 g_nitmod_loadout.c
 g_nitmod_canister.c
+g_nitmod_poison.c
 g_nitmod_pickup.c
 nitmod_weapon_definition.c
 g_nitmod_weapon_definition.c
@@ -95,6 +103,7 @@ g_nitmod_teamcount.c
 g_nitmod_equipment.c
 g_nitmod_rifle.c
 nitmod_score.c
+nitmod_skills.c
 nitmod_air.c
 g_nitmod_map_cleanup.c
 g_nitmod_mine_sweep.c

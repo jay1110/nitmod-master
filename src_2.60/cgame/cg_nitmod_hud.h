@@ -16,6 +16,7 @@ extern vmCvar_t cg_HUDBackgroundColor, cg_HUDBorderColor, cg_HUDAlpha;
 extern vmCvar_t cg_notificationTime, cg_notificationFadeTime;
 void CG_NitmodNotificationStart(const char *text, int now);
 const char *CG_NitmodNotificationText(void);
+qboolean CG_NitmodNotificationActive(void);
 float CG_NitmodNotificationAlpha(int now, float hold, float fade);
 void CG_NitmodDrawNotification(void);
 qboolean CG_NitmodKillPrint(const char *text, qboolean teammate, int now);
@@ -48,6 +49,9 @@ void CG_NitmodDrawCenterPrint(void);
 qboolean CG_NitmodParseHudColor(const char *text, float alpha, vec4_t color);
 void CG_NitmodHudColors(vec4_t background, vec4_t border);
 void CG_NitmodHudReset(void);
+void CG_NitmodDrawSpectatorInstruction(int row, const char *text);
+void CG_NitmodDrawWoundedInstruction(int row, const char *text);
+qboolean CG_NitmodDrawFollow(void);
 extern vmCvar_t cg_drawHUDStats;
 /* Original wire persistant slots; never use these as native PERS_* aliases. */
 enum { NITMOD_PERS_KILLS = 3, NITMOD_PERS_DEATHS = 4,

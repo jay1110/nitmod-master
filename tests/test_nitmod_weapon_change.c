@@ -144,7 +144,7 @@ static int TestLeaningReload(void) {
             }
         }
     }
-    CHECK(count == 4212 && started > 0);
+    CHECK(count == 4644 && started > 0);
     return 0;
 }
 
@@ -261,7 +261,7 @@ static int TestAlternateReloadInput(void) {
             ++count;
         }
     }
-    CHECK(count == 6336);
+    CHECK(count == 6912);
     return 0;
 }
 
@@ -392,7 +392,7 @@ static int TestTransitionTimerBoundaries(void) {
             ++count;
         }
     }
-    CHECK(count == 3168);
+    CHECK(count == 3456);
     return 0;
 }
 
@@ -523,7 +523,7 @@ static int TestNativeAmmoConsumption(void) {
             ++count;
         }
     }
-    CHECK(count == 4224);
+    CHECK(count == 4608);
     return 0;
 }
 
@@ -713,7 +713,7 @@ static int TestNativeReloadFinish(void) {
             CHECK(!bodyCalls && !conditionCalls && !badBoundary);
         }
     }
-    CHECK(count == 6336);
+    CHECK(count == 6912);
     return 0;
 }
 
@@ -1156,7 +1156,7 @@ static int TestOrdinarySwitches(void) {
             } else CHECK(state.aimSpreadScale == 17 && state.aimSpreadScaleFloat == 19.0f);
         }
     }
-    CHECK(count == 38128);
+    CHECK(count == 44656);
     return 0;
 }
 

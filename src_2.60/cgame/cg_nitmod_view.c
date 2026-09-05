@@ -3,6 +3,81 @@
 #include "cg_nitmod_view.h"
 
 void CG_Zoom(void);
+void CG_DrawMiscGamemodels(void);
+
+static centity_t *nitmodMissileCamera;
+
+void CG_NitmodMissileCameraBeginFrame(void) {
+	nitmodMissileCamera = NULL;
+}
+
+/* Original CG_Missile, ELF 0x65bde..0x65c99: remember the local player's
+ * currently rendered panzer, mortar or rifle-grenade projectile according to
+ * the server's g_missileCams mask.  This is deliberately based only on typed
+ * entityState fields so it also consumes snapshots from an original server. */
+void CG_NitmodMissileCameraTrack(centity_t *cent) {
+	const entityState_t *state;
+	int option;
+
+	if(!cent || !cg.snap || !NITMOD_UsesOriginalProtocol()) return;
+	state = &cent->currentState;
+	if(state->eType != ET_MISSILE || state->clientNum != cg.snap->ps.clientNum) return;
+
+	switch(state->weapon) {
+	case WP_PANZERFAUST: option = 1; break;
+	case WP_MORTAR:
+	case WP_MORTAR_SET: option = 2; break;
+	case WP_GPG40:
+	case WP_M7: option = 4; break;
+	default: return;
+	}
+	if(NITMOD_SimpleConfig()->missileCams & option) nitmodMissileCamera = cent;
+}
+
+/* Original CG_DrawMissileCamera, ELF 0x7ee70.  Render a compact 4:3 view from
+ * 32 units ahead of the projectile and then restore the main refdef. */
+void CG_NitmodDrawMissileCamera(void) {
+	refdef_t camera;
+	refdef_t *mainView;
+	vec3_t forward;
+	float x = 16, y = 160, width = 160, height = 120;
+
+	if(!nitmodMissileCamera || !cg_drawCam.integer || cg.demoPlayback ||
+	   !cg.snap || !cg.refdef_current || (cg.snap->ps.eFlags & EF_MOUNTEDTANK)) return;
+
+	mainView = cg.refdef_current;
+	camera = *mainView;
+	CG_AdjustFrom640(&x, &y, &width, &height);
+	camera.x = (int)x; camera.y = (int)y;
+	camera.width = (int)width; camera.height = (int)height;
+	VectorCopy(nitmodMissileCamera->lerpOrigin, camera.vieworg);
+	AnglesToAxis(nitmodMissileCamera->lerpAngles, camera.viewaxis);
+	VectorCopy(camera.viewaxis[0], forward);
+	VectorMA(camera.vieworg, 32, forward, camera.vieworg);
+	camera.time = cg.time;
+
+	trap_R_SaveViewParms();
+	cg.refdef_current = &camera;
+	trap_R_ClearScene();
+	CG_SetupFrustum();
+	CG_DrawSkyBoxPortal(qfalse);
+	if(!cg.hyperspace) {
+		CG_AddPacketEntities();
+		CG_AddMarks();
+		CG_AddParticles();
+		CG_AddLocalEntities();
+		CG_AddSmokeSprites();
+		CG_AddAtmosphericEffects();
+		CG_AddFlameChunks();
+		CG_AddTrails();
+		CG_PB_RenderPolyBuffers();
+		CG_DrawMiscGamemodels();
+	}
+	trap_SetClientLerpOrigin(camera.vieworg[0], camera.vieworg[1], camera.vieworg[2]);
+	trap_R_RenderScene(&camera);
+	cg.refdef_current = mainView;
+	trap_R_RestoreViewParms();
+}
 
 /* Inlined in original CG_CalcViewValues (ELF 0xbc2b0). */
 void CG_NitmodZoomSway(int time, float zoom, const playerState_t *state, vec3_t angles) {

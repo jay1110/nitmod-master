@@ -2,6 +2,7 @@
 // -------------------------------
 //
 #include "g_local.h"
+#include "g_nitmod_legacy_cvars.h"
 #include "../../pak/ui/menudef.h"	// For vote options
 
 
@@ -21,15 +22,51 @@ static const char *ACTIVATED = "ACTIVATED";
 static const char *DEACTIVATED = "DEACTIVATED";
 static const char *ENABLED = "ENABLED";
 static const char *DISABLED = "DISABLED";
+void G_voteDisableMessage(gentity_t *ent, const char *cmd);
 
-static const char *gameNames[] = {
-	"Single Player",
-	"Cooperative",
-	"Objective",
-	"Stopwatch",
-	"Campaign",
-	"Last Man Standing"
-};
+/* Original G_Poll_v, ELF 0xe8f30: concatenate argv[2..], require two
+ * characters, and perform no action when the vote passes. The original
+ * permission-6 override is not available yet: disabled means denied even
+ * for a player referee; a trusted console invocation remains allowed. */
+static int G_NITMOD_PollVote(gentity_t *ent, unsigned int index,
+    char *arg, char *arg2, qboolean referee) {
+	char question[VOTE_MAXSTRING], token[VOTE_MAXSTRING + 1];
+	int argc, argument;
+	size_t length, i;
+	(void)index; (void)referee;
+	if(!arg) return G_OK;
+	if(ent && !vote_allow_poll.integer) {
+		G_voteDisableMessage(ent, arg);
+		return G_INVALID;
+	}
+	argc = trap_Argc();
+	question[0] = 0;
+	length = 0;
+	for(argument = 2; argument < argc; ++argument) {
+		size_t part;
+		trap_Argv(argument, token, sizeof(token));
+		part = strlen(token);
+		if(part >= VOTE_MAXSTRING || length + part + (argument > 2) >= VOTE_MAXSTRING)
+			return G_INVALID;
+		if(argument > 2) question[length++] = ' ';
+		memcpy(question + length, token, part + 1);
+		length += part;
+	}
+	/* The question is later embedded in quoted reliable commands. Reject
+     * unsafe or truncated input instead of corrupting that command stream. */
+	if(!arg2 || length < 2 || length >= VOTE_MAXSTRING) return G_INVALID;
+	for(i = 0; i < length; ++i) {
+		unsigned char c = (unsigned char)question[i];
+		if(c < 32 || c == 127 || c == '"' || c == '\\' || c == ';') return G_INVALID;
+	}
+	Q_strncpyz(arg2, question, VOTE_MAXSTRING);
+	return G_OK;
+}
+
+static const char *G_GametypeName(int gametype)
+{
+	return BG_NitmodGametypeName(gametype, qfalse);
+}
 
 
 //
@@ -47,6 +84,13 @@ typedef struct {
 
 // VC optimizes for dup strings :)
 static const vote_reference_t aVoteInfo[] = {
+	{ 0x1ff, "surrender", G_NITMOD_SurrenderVote, "Surrender", " ^7\n  Surrender the current round" },
+	{ 0x1ff, "shuffleteams", G_NITMOD_ShuffleVote, "Shuffle Teams randomly AND restart map", " ^7\n  Randomly place players on each team" },
+	{ 0x1ff, "shuffleteams_norestart", G_NITMOD_ShuffleNoRestartVote, "Shuffle Teams randomly without map restart", " ^7\n  Randomly place players on each team" },
+	{ 0x1ff, "swapteamsrestart", G_NITMOD_SwapRestartVote, "Swap Teams AND Restart Map", " ^7\n  Switch the players on each team and restart the current map" },
+	{ 0x1ff, "restartcampaign", G_NITMOD_RestartCampaignVote, "Restart Campaign", " ^7\n  Restarts the current Camapaign" },
+	{ 0x1ff, "nextcampaign", G_NITMOD_NextCampaignVote, "Next Campaign", " ^7\n  Ends the current campaign and starts the next one." },
+	{ 0x1ff, "poll", G_NITMOD_PollVote, "[poll]", " <text>^7\n  Poll majority opinion." },
 	{ 0x1ff, "comp",		 G_Comp_v,			"Load Competition Settings", "^7\n  Loads standard competition settings for the current mode" },
 	{ 0x1ff, "gametype",	 G_Gametype_v,		"Set Gametype to",	" <value>^7\n  Changes the current gametype" },
 	{ 0x1ff, "kick",		 G_Kick_v,			"KICK",				" <player_id>^7\n  Attempts to kick player from server" },
@@ -62,7 +106,7 @@ static const vote_reference_t aVoteInfo[] = {
 	{ 0x1ff, "referee",		 G_Referee_v,		"Referee",			" <player_id>^7\n  Elects a player to have admin abilities" },
 	{ 0x1ff, "shuffleteamsxp", G_ShuffleTeams_v,	"Shuffle Teams by XP",	" ^7\n  Randomly place players on each team, based on XP" },
 	{ 0x1ff, "startmatch",	 G_StartMatch_v,	"Start Match",		" ^7\n  Sets all players to \"ready\" status to start the match" },
-	{ 0x1ff, "swapteams",	 G_SwapTeams_v,		"Swap Teams",		" ^7\n  Switch the players on each team" },
+	{ 0x1ff, "swapteams",	 G_NITMOD_SwapVote,		"Swap Teams WITHOUT Map Restart",		" ^7\n  Switch the players on each team" },
 	{ 0x1ff, "friendlyfire", G_FriendlyFire_v,	"Friendly Fire",	" <0|1>^7\n  Toggles ability to hurt teammates" },
 	{ 0x1ff, "timelimit",	 G_Timelimit_v,		"Timelimit",		" <value>^7\n  Changes the current timelimit" },
 	{ 0x1ff, "unreferee",	 G_Unreferee_v,		"UNReferee",		" <player_id>^7\n  Elects a player to have admin abilities removed" },
@@ -78,7 +122,7 @@ int G_voteCmdCheck(gentity_t *ent, char *arg, char *arg2, qboolean fRefereeCmd)
 {
 	unsigned int i, cVoteCommands = sizeof(aVoteInfo)/sizeof(aVoteInfo[0]);
 
-	for(i=0; i<cVoteCommands; i++) {
+	for(i=0; i<cVoteCommands && aVoteInfo[i].pszVoteName; i++) {
 		if(!Q_stricmp(arg, aVoteInfo[i].pszVoteName)) {
 			int hResult = aVoteInfo[i].pVoteCommand(ent, i, arg, arg2, fRefereeCmd);
 
@@ -144,6 +188,8 @@ void G_voteHelp(gentity_t *ent, qboolean fShowVote)
 // Set disabled votes for client UI
 void G_voteFlags(void)
 {
+	/* Use the explicit original menu bit positions, independent of table
+     * ordering. All original toggle families now have command adapters. */
 	int i, flags = 0;
 	
 	for(i=0; i<numVotesAvailable; i++) {
@@ -287,7 +333,7 @@ void G_GametypeList(gentity_t *ent)
 
 	for(i=GT_WOLF; i<GT_MAX_GAME_TYPE; i++) {
 		if( i != GT_WOLF_CAMPAIGN ) {
-			G_refPrintf(ent, "  %d ^3(%s)", i, gameNames[i]);
+			G_refPrintf(ent, "  %d ^3(%s)", i, G_GametypeName(i));
 		}
 	}
 
@@ -304,11 +350,11 @@ int G_Gametype_v(gentity_t *ent, unsigned int dwVoteIndex, char *arg, char *arg2
 		if(!vote_allow_gametype.integer && ent && !ent->client->sess.referee) {
 			G_voteDisableMessage(ent, arg);
 			G_GametypeList(ent);
-			G_voteCurrentSetting(ent, arg, va("%d (%s)", g_gametype.integer, gameNames[g_gametype.integer]));
+			G_voteCurrentSetting(ent, arg, va("%d (%s)", g_gametype.integer, G_GametypeName(g_gametype.integer)));
 			return(G_INVALID);
 		} else if(G_voteDescription(ent, fRefereeCmd, dwVoteIndex)) {
 			G_GametypeList(ent);
-			G_voteCurrentSetting(ent, arg, va("%d (%s)", g_gametype.integer, gameNames[g_gametype.integer]));
+			G_voteCurrentSetting(ent, arg, va("%d (%s)", g_gametype.integer, G_GametypeName(g_gametype.integer)));
 			return(G_INVALID);
 		}
 
@@ -319,12 +365,12 @@ int G_Gametype_v(gentity_t *ent, unsigned int dwVoteIndex, char *arg, char *arg2
 		}
 
 		if(i == g_gametype.integer) {
-			G_refPrintf(ent, "\n^3Gametype^5 is already set to %s!", gameNames[i]);
+			G_refPrintf(ent, "\n^3Gametype^5 is already set to %s!", G_GametypeName(i));
 			return(G_INVALID);
 		}
 
 		Com_sprintf(level.voteInfo.vote_value, VOTE_MAXSTRING, "%s", arg2);
-		Com_sprintf(arg2, VOTE_MAXSTRING, "%s", gameNames[i]);
+		Com_sprintf(arg2, VOTE_MAXSTRING, "%s", G_GametypeName(i));
 
 	// Vote action (vote has passed)
 	} else {
@@ -399,7 +445,7 @@ int G_Mute_v(gentity_t *ent, unsigned int dwVoteIndex, char *arg, char *arg2, qb
 			return(G_INVALID);
 		}
 
-		if(level.clients[pid].sess.muted) {
+		if(G_NITMOD_ClientMuted(&g_entities[pid])) {
 			G_refPrintf(ent, "Player is already muted!");
 			return(G_INVALID);
 		}
@@ -414,9 +460,11 @@ int G_Mute_v(gentity_t *ent, unsigned int dwVoteIndex, char *arg, char *arg2, qb
 		// Mute a player
 		if( level.clients[pid].sess.referee != RL_RCON ) {
 			trap_SendServerCommand( pid, va( "cpm \"^3You have been muted\"") );
-			level.clients[pid].sess.muted = qtrue;
-			AP(va("cp \"%s\n^3has been muted!\n\"", level.clients[pid].pers.netname));
-			ClientUserinfoChanged( pid );
+			int duration = G_NITMOD_LegacyCvarInteger("g_defaultMute", 3600);
+			if(duration < 60) duration = 60;
+			G_NITMOD_SetClientMute(&g_entities[pid], qtrue, duration);
+			AP(va("cp \"%s\n^3has been muted for %d seconds!\n\"",
+				level.clients[pid].pers.netname, duration));
 		} else {
 			G_Printf( "Cannot mute a referee.\n" );
 		}
@@ -447,7 +495,7 @@ int G_UnMute_v(gentity_t *ent, unsigned int dwVoteIndex, char *arg, char *arg2, 
 			return(G_INVALID);
 		}
 
-		if(!level.clients[pid].sess.muted) {
+		if(!G_NITMOD_ClientMuted(&g_entities[pid])) {
 			G_refPrintf(ent, "Player is not muted!");
 			return(G_INVALID);
 		}
@@ -462,9 +510,8 @@ int G_UnMute_v(gentity_t *ent, unsigned int dwVoteIndex, char *arg, char *arg2, 
 		// Mute a player
 		if( level.clients[pid].sess.referee != RL_RCON ) {
 			trap_SendServerCommand( pid, va( "cpm \"^3You have been un-muted\"") );
-			level.clients[pid].sess.muted = qfalse;
+			G_NITMOD_SetClientMute(&g_entities[pid], qfalse, 0);
 			AP(va("cp \"%s\n^3has been un-muted!\n\"", level.clients[pid].pers.netname));
-			ClientUserinfoChanged( pid );
 		} else {
 			G_Printf( "Cannot un-mute a referee.\n" );
 		}
@@ -548,12 +595,13 @@ int G_MapRestart_v(gentity_t *ent, unsigned int dwVoteIndex, char *arg, char *ar
 {
 	// Vote request (vote is being initiated)
 	if(arg) {
-		if(trap_Argc() > 2) {
-			if(!Q_stricmp(arg2, "?")) {
-				G_refPrintf(ent, "Usage: ^3%s %s%s\n", ((fRefereeCmd) ? "\\ref" : "\\callvote"), arg, aVoteInfo[dwVoteIndex].pszVoteHelp);
-				return(G_INVALID);
-			}
+		/* Original permission-6 override is deliberately not inferred from
+         * ET referee status until the Nitmod permission owner is ported. */
+		if(ent && !vote_allow_maprestart.integer) {
+			G_voteDisableMessage(ent, arg);
+			return G_INVALID;
 		}
+		if(trap_Argc() != 2 && G_voteDescription(ent, fRefereeCmd, dwVoteIndex)) return G_INVALID;
 
 	// Vote action (vote has passed)
 	} else {
@@ -648,6 +696,12 @@ int G_Nextmap_v(gentity_t *ent, unsigned int dwVoteIndex, char *arg, char *arg2,
 			// Load in the nextcampaign
 			trap_SendConsoleCommand(EXEC_APPEND, "vstr nextcampaign\n");
 			AP("cp \"^3*** Loading nextcampaign! ***\n\"");
+		} else if( g_gametype.integer == GT_WOLF_MAPVOTE &&
+			(g_mapVoteFlags.integer & 16) ) {
+			/* Original Nitmod turns a successful nextmap vote into the normal
+			 * end-of-map flow so clients can choose the replacement map. */
+			LogExit("Nextmap vote passed!");
+			AP("chat \"^3*** Nextmap vote passed! Choose a new map! ***\" -2");
 		} else {
 			// Load in the nextmap
 			trap_SendConsoleCommand(EXEC_APPEND, "vstr nextmap\n");

@@ -11,6 +11,18 @@ int main( void ) {
         10,10,10,10,10,10,10,10,10,10,10,10,10,10,10,10,10,10,10
     };
     int levels[7], code, rest, skill, total, rank, count = 1;
+    {
+        const char *invalid[] = {"", "-1", "11", "2147483648", "abc", "1x", NULL};
+        char text[16]; int i;
+        for(i = 0; i < 11; ++i) {
+            sprintf(text, "%d", i); rank = 99;
+            CHECK(NITMOD_ParseRank(text, &rank) && rank == i);
+        }
+        for(i = 0; i < sizeof(invalid)/sizeof(invalid[0]); ++i) {
+            rank = 99; CHECK(!NITMOD_ParseRank(invalid[i], &rank) && rank == 99);
+        }
+        CHECK(!NITMOD_ParseRank("1", NULL));
+    }
     for( skill = 0; skill < 7; skill++ ) count *= 6;
     for( code = 0; code < count; code++ ) {
         rest = code;

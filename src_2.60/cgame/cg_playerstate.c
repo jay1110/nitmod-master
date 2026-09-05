@@ -326,10 +326,12 @@ void CG_CheckLocalSounds( playerState_t *ps, playerState_t *ops ) {
 	}
 
 	// timelimit warnings
-	if ( cgs.timelimit > 0 && cgs.gamestate == GS_PLAYING) {
-		int		msec;
+	/* Original Nitmod suppresses objective-mode countdowns in TDM and DM. */
+	if ( cgs.gametype != 7 && cgs.gametype != 8 &&
+	     cgs.timelimit > 0 && cgs.gamestate == GS_PLAYING) {
+		double		msec;
 
-		msec = cg.time - cgs.levelStartTime;
+		msec = (double)cg.time - cgs.levelStartTime;
 
 		if ( cgs.timelimit > 5 && !( cg.timelimitWarnings & 1 ) && (msec > (cgs.timelimit - 5) * 60 * 1000) &&
 			( msec < (cgs.timelimit-5)*60*1000+1000 ) ) {

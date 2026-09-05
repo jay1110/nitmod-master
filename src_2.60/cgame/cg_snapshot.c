@@ -258,6 +258,8 @@ static void CG_TransitionSnapshot( void ) {
 	}
 
 	// execute any server string commands before transitioning entities
+	CG_NitmodSnapshotRateUpdate(cg.time, cg.snap->serverTime, cg.nextSnap->serverTime,
+		cg_lagometer.integer & 2);
 	CG_ExecuteNewServerCommands( cg.nextSnap->serverCommandSequence );
 
 	// if we had a map_restart, set everthing with initial

@@ -310,7 +310,7 @@ void CG_Bleed( vec3_t origin, int entityNum ) {
 	int i,j;
 	centity_t *cent;
 
-	if( !cg_blood.integer ) {
+	if( !cg_gibs.integer || !cg.snap || entityNum < 0 || entityNum >= MAX_GENTITIES ) {
 		return;
 	}
 
@@ -386,7 +386,7 @@ void CG_LaunchGib( centity_t *cent, vec3_t origin, vec3_t angles, vec3_t velocit
 	refEntity_t		*re;
 	int i;
 
-	if ( !cg_blood.integer ) {
+	if ( !cg_gibs.integer || !cent ) {
 		return;
 	}
 
@@ -396,7 +396,7 @@ void CG_LaunchGib( centity_t *cent, vec3_t origin, vec3_t angles, vec3_t velocit
 	le->leType = LE_FRAGMENT;
 	le->startTime = cg.time;
 	// le->endTime = le->startTime + 60000 + random() * 60000;
-	le->endTime = le->startTime + 20000 + (crandom() * 5000);
+	le->endTime = le->startTime + 40000 + (crandom() * 5000);
 	le->breakCount = breakCount;
 	le->sizeScale = sizeScale;
 
@@ -643,7 +643,7 @@ void CG_GibPlayer( centity_t *cent, vec3_t playerOrigin, vec3_t gdir )
 		NULL
 	};
 
-	if( cg_blood.integer ) {
+	if( cg_gibs.integer ) {
 		// Rafael
 		for( i = 0; i < MAXJUNCTIONS; i++ )
 			newjunction[i] = qfalse;
@@ -1407,6 +1407,19 @@ static qboolean CG_SmokeSpritePhysics( smokesprite_t *smokesprite, const float d
 	return( qtrue );
 }
 
+/* Nitmod poison gas uses the compact smoke profile with a green tint. Keep
+ * normalized renderer colours here; feeding byte-range values into the stock
+ * float-to-byte path caused architecture-dependent overflow and black smoke. */
+void CG_NitmodSmokeSpriteStyle(int weapon, float *size, vec4_t color) {
+	if(weapon == WP_POISON_BOMB || weapon == WP_POISON_MINE) {
+		*size = 7.f;
+		Vector4Set(color, .15f, .8f, .1f, .25f);
+	} else {
+		*size = 16.f;
+		Vector4Set(color, .35f, .35f, .35f, .8f);
+	}
+}
+
 qboolean CG_SpawnSmokeSprite( centity_t *cent, float dist ) {
 	smokesprite_t *smokesprite = AllocSmokeSprite();
 
@@ -1417,11 +1430,7 @@ qboolean CG_SpawnSmokeSprite( centity_t *cent, float dist ) {
 		VectorCopy( cent->origin2, smokesprite->pos );		
 		VectorCopy( bytedirs[rand()%NUMVERTEXNORMALS], smokesprite->dir );
 		smokesprite->dir[2] *= .5f;
-		smokesprite->size = 16.f;
-		smokesprite->colour[0] = .35f; // + crandom() * .1f;
-		smokesprite->colour[1] = smokesprite->colour[0];
-		smokesprite->colour[2] = smokesprite->colour[0];
-		smokesprite->colour[3] = .8f;
+		CG_NitmodSmokeSpriteStyle(cent->currentState.weapon, &smokesprite->size, smokesprite->colour);
 
 		// Advance sprite
 		if( !CG_SmokeSpritePhysics( smokesprite, dist ) ) {

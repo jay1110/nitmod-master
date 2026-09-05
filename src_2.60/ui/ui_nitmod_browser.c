@@ -6,6 +6,13 @@ static qboolean browserHumanKnown[MAX_GLOBAL_SERVERS];
 static int browserHumanStarted[MAX_GLOBAL_SERVERS];
 static qboolean browserHumanPending[MAX_GLOBAL_SERVERS];
 
+static int UI_ServerGametype( const char *info ) {
+	int gametype;
+	if( !NITMOD_ParseProtocolInteger(Info_ValueForKey(info ? info : "", "gametype"), &gametype) ||
+		gametype >= GT_MAX_GAME_TYPE ) return -1;
+	return gametype;
+}
+
 /* Original population precedence: status humans, ET Legacy master humans,
  * otherwise positive-ping player records. No player name is parsed as a key. */
 int UI_ServerHumanCount(const char *status, const char *master) {
@@ -129,6 +136,29 @@ UI_BuildServerDisplayList
  * outstanding, 0 that it is absent, and 1 that it is present. */
 static int nitmodNxacStatus[MAX_GLOBAL_SERVERS];
 static int nitmodNxacStatusSource = -1;
+/* Original UI_FeederItemText case 2: humans(+bots)/capacity. Rendering must
+ * not allocate status requests; consume only this source's resolved cache. */
+void UI_ServerPopulationText(int server, const char *master, char *out, int size) {
+    int clients = atoi(Info_ValueForKey(master, "clients"));
+    int capacity = atoi(Info_ValueForKey(master, "sv_maxclients"));
+    int humans;
+    clients = clients < 0 ? 0 : clients > MAX_CLIENTS ? MAX_CLIENTS : clients;
+    capacity = capacity < 0 ? 0 : capacity > MAX_CLIENTS ? MAX_CLIENTS : capacity;
+    humans = clients;
+    if(nitmodNxacStatusSource == ui_netSource.integer && server >= 0 &&
+       server < MAX_GLOBAL_SERVERS && browserHumanKnown[server]) {
+        humans = browserHumans[server];
+    } else if(strstr(Info_ValueForKey(master, "version"), "ET Legacy") &&
+              *Info_ValueForKey(master, "humans")) {
+        humans = UI_ServerHumanCount("", master);
+    }
+    /* Status and master replies can describe different instants. */
+    humans = humans < 0 ? 0 : humans > clients ? clients : humans;
+    if(humans != clients)
+        Com_sprintf(out, size, "^7%i^9(+%i)/%i", humans, clients - humans, capacity);
+    else
+        Com_sprintf(out, size, "^7%i^9/%i", clients, capacity);
+}
 /* One contribution per engine server index, including filtered servers as in
  * the original total. Favorites and pending replies can revisit an index. */
 static int nitmodBrowserPlayers[MAX_GLOBAL_SERVERS];
@@ -340,7 +370,7 @@ void UI_BuildServerDisplayList(qboolean force) {
 
 			trap_Cvar_Update( &ui_joinGameType );
 			if( ui_joinGameType.integer != -1 ) {
-				game = atoi(Info_ValueForKey(info, "gametype"));
+				game = UI_ServerGametype(info);
 				if( game != ui_joinGameType.integer ) {
 					trap_LAN_MarkServerVisible( ui_netSource.integer, i, qfalse );
 					continue;

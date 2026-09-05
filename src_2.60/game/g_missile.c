@@ -1,6 +1,9 @@
 #include "g_local.h"
 #include "g_nitmod_config.h"
 #include "g_nitmod_entities.h"
+#include "nitmod_weapon_defaults.h"
+#include "g_nitmod_weapon_definition.h"
+#include "g_nitmod_legacy_cvars.h"
 
 #define	MISSILE_PRESTEP_TIME	50
 
@@ -11,6 +14,7 @@ extern void SP_target_smoke (gentity_t *ent);
 
 void M_think (gentity_t *ent);
 void G_ExplodeMissile( gentity_t *ent );
+static void G_NITMOD_CreateMissileCamera(gentity_t *owner, gentity_t *missile);
 
 /*
 ================
@@ -94,7 +98,7 @@ void G_BounceMissile( gentity_t *ent, trace_t *trace ) {
 		if( trace->plane.normal[2] > 0.2 && VectorLengthSquared( relativeDelta ) < SQR(40) )
 		{
 //----(SA)	make the world the owner of the dynamite, so the player can shoot it after it stops moving
-			if(ent->s.weapon == WP_DYNAMITE || ent->s.weapon == WP_LANDMINE || ent->s.weapon == WP_SATCHEL || ent->s.weapon == WP_TRIPMINE || ent->s.weapon == WP_SMOKE_BOMB)
+			if(ent->s.weapon == WP_DYNAMITE || ent->s.weapon == WP_LANDMINE || ent->s.weapon == WP_POISON_MINE || ent->s.weapon == WP_SATCHEL || ent->s.weapon == WP_TRIPMINE || ent->s.weapon == WP_SMOKE_BOMB)
 				ent->r.ownerNum = ENTITYNUM_WORLD;
 //----(SA)	end
 			G_SetOrigin( ent, trace->endpos );
@@ -374,7 +378,7 @@ void G_ExplodeMissile( gentity_t *ent ) {
 
 	if (etype == ET_MISSILE || etype == ET_BOMB) {
 
-		if( ent->s.weapon == WP_LANDMINE ) {
+		if( ent->s.weapon == WP_LANDMINE || ent->s.weapon == WP_POISON_MINE ) {
 			mapEntityData_t	*mEnt;
 
 			if((mEnt = G_FindMapEntityData(&mapEntityData[0], ent-g_entities)) != NULL) {
@@ -445,7 +449,7 @@ void G_ExplodeMissile( gentity_t *ent ) {
 		// give big weapons the shakey shakey
 		if (ent->s.weapon == WP_DYNAMITE || ent->s.weapon == WP_PANZERFAUST || ent->s.weapon == WP_GRENADE_LAUNCHER ||
 			ent->s.weapon == WP_GRENADE_PINEAPPLE || ent->s.weapon == WP_MAPMORTAR || ent->s.weapon == WP_ARTY || ent->s.weapon == WP_SMOKE_MARKER
-			|| ent->s.weapon == WP_LANDMINE || ent->s.weapon == WP_SATCHEL || ent->s.weapon == WP_TRIPMINE /*|| ent->s.weapon == WP_SMOKE_BOMB*/
+			|| ent->s.weapon == WP_LANDMINE || ent->s.weapon == WP_POISON_MINE || ent->s.weapon == WP_SATCHEL || ent->s.weapon == WP_TRIPMINE /*|| ent->s.weapon == WP_SMOKE_BOMB*/
 			) {		
 
 			gentity_t* tent = G_TempEntity(ent->r.currentOrigin, EV_SHAKE);
@@ -589,7 +593,7 @@ void G_RunMissile( gentity_t *ent ) {
 	trace_t		tr;
 	int			impactDamage;
 
-	if( ent->s.weapon == WP_LANDMINE || ent->s.weapon == WP_DYNAMITE || ent->s.weapon == WP_SATCHEL ) {
+	if( ent->s.weapon == WP_LANDMINE || ent->s.weapon == WP_POISON_MINE || ent->s.weapon == WP_DYNAMITE || ent->s.weapon == WP_SATCHEL ) {
 		Landmine_Check_Ground( ent );
 
 		if ( ent->s.groundEntityNum == -1 ) {
@@ -605,7 +609,7 @@ void G_RunMissile( gentity_t *ent ) {
 
 	if( (ent->clipmask & CONTENTS_BODY) && (ent->s.weapon == WP_DYNAMITE || ent->s.weapon == WP_ARTY || ent->s.weapon == WP_SMOKE_MARKER
 		|| ent->s.weapon == WP_GRENADE_LAUNCHER || ent->s.weapon == WP_GRENADE_PINEAPPLE
-		|| ent->s.weapon == WP_LANDMINE || ent->s.weapon == WP_SATCHEL || ent->s.weapon == WP_SMOKE_BOMB
+		|| ent->s.weapon == WP_LANDMINE || ent->s.weapon == WP_POISON_MINE || ent->s.weapon == WP_SATCHEL || ent->s.weapon == WP_SMOKE_BOMB
 		) ) {
 
 		if( !ent->s.pos.trDelta[0] && !ent->s.pos.trDelta[1] && !ent->s.pos.trDelta[2] ) {
@@ -761,7 +765,7 @@ void G_RunMissile( gentity_t *ent ) {
 		else
 			impactDamage = 20;	// "grenade"/"dynamite"		// probably adjust this based on velocity
 
-		if( ent->s.weapon == WP_DYNAMITE || ent->s.weapon == WP_LANDMINE || ent->s.weapon == WP_SATCHEL ) {
+		if( ent->s.weapon == WP_DYNAMITE || ent->s.weapon == WP_LANDMINE || ent->s.weapon == WP_POISON_MINE || ent->s.weapon == WP_SATCHEL ) {
 			if( ent->s.pos.trType != TR_STATIONARY )
 				G_MissileImpact( ent, &tr, impactDamage );
 		} else {
@@ -1348,8 +1352,13 @@ void LandMineTrigger(gentity_t* self) {
 	/* Original ELF 0x8de73/0x8de93 retains body collision on triggering. */
 	self->r.contents = CONTENTS_BODY;
 	trap_LinkEntity( self );
-	self->nextthink = level.time + FRAMETIME;
-	self->think = LandminePostThink;
+	if(self->s.weapon == WP_POISON_MINE) {
+		self->nextthink = level.time + 1000;
+		self->think = weapon_smokeBombExplode;
+	} else {
+		self->nextthink = level.time + FRAMETIME;
+		self->think = LandminePostThink;
+	}
 	self->s.teamNum += 8;
 	// rain - communicate trigger time to client
 	self->s.time = level.time;
@@ -1410,6 +1419,21 @@ G_TripMinePrime
 void G_TripMinePrime(gentity_t* ent) {
 	ent->think = G_TripMineThink;
 	ent->nextthink = level.time + 500;
+}
+
+void G_NITMOD_RemoveTripmines(gentity_t *owner) {
+	int i;
+
+	if(!owner) return;
+	for(i = level.maxclients; i < level.num_entities; ++i) {
+		gentity_t *mine = &g_entities[i];
+		if(!mine->inuse || mine->s.weapon != WP_TRIPMINE || mine->parent != owner)
+			continue;
+		/* Detach attribution before freeing, matching the original cleanup. */
+		mine->parent = NULL;
+		mine->r.ownerNum = ENTITYNUM_NONE;
+		G_FreeEntity(mine);
+	}
 }
 
 /*107     11      20      0       0       0       0       //fire gren 
@@ -1581,7 +1605,7 @@ gentity_t *fire_grenade (gentity_t *self, vec3_t start, vec3_t dir, int grenadeW
 		bolt->free = DynaFree;
 	}
 
-	if( grenadeWPID == WP_LANDMINE ) {
+	if( grenadeWPID == WP_LANDMINE || grenadeWPID == WP_POISON_MINE ) {
 		noExplode = qtrue;
 		bolt->nextthink = level.time + 15000;
 		bolt->think = DynaSink;
@@ -1621,6 +1645,37 @@ gentity_t *fire_grenade (gentity_t *self, vec3_t start, vec3_t dir, int grenadeW
 // jpw
 
 	switch(grenadeWPID) {
+		case WP_POISON_BOMB:
+			bolt->classname = "poison_bomb";
+			bolt->methodOfDeath = MOD_POISON_GAS;
+			bolt->splashMethodOfDeath = MOD_POISON_GAS;
+			bolt->s.eFlags = EF_BOUNCE_HALF | EF_BOUNCE;
+			bolt->parent = self;
+			if(g_damageweapons.integer & 64) {
+				bolt->health = 40; bolt->takedamage = qtrue;
+				bolt->r.contents = CONTENTS_CORPSE;
+				VectorSet(bolt->r.mins, -4, -4, 0); VectorSet(bolt->r.maxs, 4, 4, 6);
+				VectorCopy(bolt->r.mins, bolt->r.absmin); VectorCopy(bolt->r.maxs, bolt->r.absmax);
+				bolt->die = G_NITMOD_WeaponDie;
+			}
+			break;
+		case WP_BOMB:
+			/* Original fire_grenade case 48: timed bouncing bomb, MOD 65. */
+			bolt->classname = "bomb";
+			bolt->methodOfDeath = MOD_BOMB;
+			bolt->splashMethodOfDeath = MOD_BOMB;
+			bolt->s.eFlags = EF_BOUNCE_HALF | EF_BOUNCE;
+			if(g_damageweapons.integer & 16) {
+				bolt->health = 40;
+				bolt->takedamage = qtrue;
+				bolt->r.contents = CONTENTS_CORPSE;
+				VectorSet(bolt->r.mins, -11, -11, 0);
+				VectorSet(bolt->r.maxs, 11, 11, 10);
+				VectorCopy(bolt->r.mins, bolt->r.absmin);
+				VectorCopy(bolt->r.maxs, bolt->r.absmax);
+				bolt->die = G_NITMOD_WeaponDie;
+			}
+			break;
 		case WP_GPG40:
 			bolt->classname				= "gpg40_grenade";
 			bolt->splashRadius			= 300;
@@ -1677,16 +1732,25 @@ gentity_t *fire_grenade (gentity_t *self, vec3_t start, vec3_t dir, int grenadeW
 			bolt->methodOfDeath			= MOD_MORTAR;
 			bolt->splashMethodOfDeath	= MOD_MORTAR;
 			bolt->s.eFlags				= 0;
+			/* Original g_mortarBBox toggles a symmetric two-unit trace box.
+			 * Zero deliberately retains point tracing. */
+			if(G_NITMOD_LegacyCvarInteger("g_mortarBBox", 0)) {
+				VectorSet(bolt->r.mins, -2, -2, -2);
+				VectorSet(bolt->r.maxs, 2, 2, 2);
+				VectorCopy(bolt->r.mins, bolt->r.absmin);
+				VectorCopy(bolt->r.maxs, bolt->r.absmax);
+			}
       break;
 		case WP_LANDMINE:
+		case WP_POISON_MINE:
 			bolt->accuracy				= 0;
 			G_NITMOD_RegisterLandmine( bolt );
 			bolt->s.teamNum				= self->client->sess.sessionTeam + 4;
 			bolt->classname				= "landmine";
 			bolt->damage				= 0;
 			bolt->splashRadius			= 225;	// was: 400
-			bolt->methodOfDeath			= MOD_LANDMINE;
-			bolt->splashMethodOfDeath	= MOD_LANDMINE;
+			bolt->methodOfDeath = grenadeWPID == WP_POISON_MINE ? MOD_POISON_GAS_MINE : MOD_LANDMINE;
+			bolt->splashMethodOfDeath = bolt->methodOfDeath;
 			bolt->s.eFlags				= (EF_BOUNCE | EF_BOUNCE_HALF);
 			bolt->health				= 5;
 			bolt->takedamage			= qtrue;
@@ -1757,7 +1821,18 @@ gentity_t *fire_grenade (gentity_t *self, vec3_t start, vec3_t dir, int grenadeW
 
 // JPW NERVE -- blast radius proportional to damage
 	G_NITMOD_ConfigureCanisterKick(bolt);
-	bolt->splashRadius = G_GetWeaponDamage(grenadeWPID);
+	/* Original fire_grenade uses three distinct ammo fields, not damage
+	 * as both explosion strength and radius. Keep the airstrike-marker
+	 * branch's explicit 140/140 override (original weapon 21). */
+	{
+		int damage, splash, radius;
+		if(NITMOD_WeaponBlastDefaults(grenadeWPID, &damage, &splash, &radius)) {
+			G_NITMOD_WeaponDamageOverrides(grenadeWPID, &damage, &splash, &radius);
+			bolt->damage = damage;
+			bolt->splashDamage = grenadeWPID == WP_SMOKE_MARKER ? 140 : splash;
+			bolt->splashRadius = grenadeWPID == WP_SMOKE_MARKER ? 140 : radius;
+		} else bolt->splashRadius = G_GetWeaponDamage(grenadeWPID);
+	}
 // jpw
 
 	bolt->clipmask = MASK_MISSILESHOT;
@@ -1781,6 +1856,12 @@ gentity_t *fire_grenade (gentity_t *self, vec3_t start, vec3_t dir, int grenadeW
 	// RF, record the time for AI
 	bolt->awaitingHelpTime = level.time;
 
+	if(grenadeWPID == WP_MORTAR_SET || grenadeWPID == WP_GPG40 ||
+		grenadeWPID == WP_M7 || grenadeWPID == WP_KAR98 ||
+		grenadeWPID == WP_CARBINE) {
+		G_NITMOD_CreateMissileCamera(self, bolt);
+	}
+
 	return bolt;
 }
 
@@ -1791,8 +1872,146 @@ gentity_t *fire_grenade (gentity_t *self, vec3_t start, vec3_t dir, int grenadeW
 fire_rocket
 =================
 */
+static int G_NITMOD_MissileThinkDelay(void) {
+	int fps = G_NITMOD_LegacyCvarInteger("sv_fps", 20);
+	if(fps < 1) fps = 20;
+	return 1000 / fps;
+}
+
+static void G_NITMOD_CreateMissileCamera(gentity_t *owner, gentity_t *missile) {
+	gentity_t *camera;
+	if(!owner || !owner->client || !missile ||
+		!G_NITMOD_LegacyCvarInteger("g_missileCams", 0)) return;
+	camera = G_Spawn();
+	camera->classname = "missileCam";
+	camera->s.eType = ET_PORTAL;
+	camera->r.svFlags = SVF_PORTAL | SVF_SINGLECLIENT;
+	camera->r.ownerNum = owner->s.number;
+	camera->r.singleClient = owner->s.number;
+	camera->target_ent = missile;
+	trap_LinkEntity(camera);
+}
+
+qboolean G_NITMOD_RunMissileCamera(gentity_t *camera) {
+	gentity_t *owner, *missile;
+	int options, requiredBit;
+	if(!camera || camera->s.eType != ET_PORTAL ||
+		!camera->classname || Q_stricmp(camera->classname, "missileCam")) return qfalse;
+	if(camera->r.ownerNum < 0 || camera->r.ownerNum >= level.maxclients) {
+		G_FreeEntity(camera);
+		return qtrue;
+	}
+	owner = &g_entities[camera->r.ownerNum];
+	missile = camera->target_ent;
+	if(!owner->client || owner->client->pers.connected != CON_CONNECTED ||
+		!missile || !missile->inuse) {
+		G_FreeEntity(camera);
+		return qtrue;
+	}
+
+	switch(missile->s.weapon) {
+	case WP_PANZERFAUST: requiredBit = 1; break;
+	case WP_MORTAR_SET: requiredBit = 2; break;
+	case WP_KAR98:
+	case WP_CARBINE:
+	case WP_GPG40:
+	case WP_M7: requiredBit = 4; break;
+	default:
+		G_FreeEntity(camera);
+		return qtrue;
+	}
+	options = G_NITMOD_LegacyCvarInteger("g_missileCams", 0);
+	if(!(options & requiredBit)) {
+		G_FreeEntity(camera);
+		return qtrue;
+	}
+	VectorCopy(owner->r.currentOrigin, camera->s.origin);
+	G_SetOrigin(camera, owner->r.currentOrigin);
+	VectorCopy(missile->r.currentOrigin, camera->s.origin2);
+	trap_LinkEntity(camera);
+	return qtrue;
+}
+
+static void G_NITMOD_HomingMissileThink(gentity_t *missile) {
+	gentity_t *target = NULL;
+	vec3_t forward, desired, center;
+	float bestDistance = 768.0f;
+	float speed;
+	int i;
+
+	VectorCopy(missile->s.pos.trDelta, forward);
+	VectorNormalize(forward);
+	for(i = 0; i < level.num_entities; ++i) {
+		gentity_t *candidate = &g_entities[i];
+		trace_t trace;
+		float distance;
+		if(!candidate->inuse || candidate == missile->parent ||
+			!candidate->takedamage || candidate->health <= 0) continue;
+		if(missile->parent && OnSameTeam(candidate, missile->parent)) continue;
+		VectorAdd(candidate->r.mins, candidate->r.maxs, center);
+		VectorMA(candidate->r.currentOrigin, 0.5f, center, center);
+		VectorSubtract(center, missile->r.currentOrigin, desired);
+		distance = VectorNormalize(desired);
+		if(distance > bestDistance || DotProduct(desired, forward) < 0.9f) continue;
+		trap_Trace(&trace, missile->r.currentOrigin, NULL, NULL,
+			center, ENTITYNUM_NONE, MASK_SHOT);
+		if(trace.entityNum != candidate->s.number) continue;
+		target = candidate;
+		bestDistance = distance;
+	}
+
+	missile->nextthink = level.time + G_NITMOD_MissileThinkDelay();
+	if(target) {
+		VectorAdd(target->r.mins, target->r.maxs, center);
+		VectorMA(target->r.currentOrigin, 0.5f, center, center);
+		VectorSubtract(center, missile->r.currentOrigin, desired);
+		VectorNormalize(desired);
+		VectorMA(forward, 0.05f, desired, desired);
+		VectorNormalize(desired);
+		speed = (float)G_NITMOD_LegacyCvarInteger("g_missileSpeed", 0);
+		if(speed < 1.0f || speed >= 750.0f) speed = 750.0f;
+		VectorScale(desired, speed, missile->s.pos.trDelta);
+		SnapVector(missile->s.pos.trDelta);
+		vectoangles(desired, missile->s.angles);
+	}
+}
+
+static void G_NITMOD_GuidedMissileThink(gentity_t *missile) {
+	gentity_t *owner = missile->parent;
+	vec3_t forward, right, up, aim, muzzle;
+	float distance, speed;
+
+	if(!owner || !owner->client) {
+		G_Printf("Guided_Missile_Think : missile has no owner!\n");
+		missile->nextthink = level.time + G_NITMOD_MissileThinkDelay();
+		return;
+	}
+	AngleVectors(owner->client->ps.viewangles, forward, right, up);
+	VectorCopy(forward, aim);
+	if(!(G_NITMOD_LegacyCvarInteger("g_missileCams", 0) & 1)) {
+		CalcMuzzlePoint(owner, owner->client->ps.weapon, forward, right, up, muzzle);
+		VectorSubtract(muzzle, missile->r.currentOrigin, aim);
+		distance = VectorLength(aim) + 400.0f;
+		VectorMA(aim, distance, forward, aim);
+	}
+	VectorNormalize(aim);
+	missile->s.pos.trType = TR_LINEAR;
+	VectorCopy(missile->r.currentOrigin, missile->s.pos.trBase);
+	missile->s.pos.trTime = level.time - MISSILE_PRESTEP_TIME;
+	speed = (float)G_NITMOD_LegacyCvarInteger("g_missileSpeed", 0);
+	if(speed < 1.0f || speed > 300.0f) speed = 300.0f;
+	VectorScale(aim, speed, missile->s.pos.trDelta);
+	SnapVector(missile->s.pos.trDelta);
+	vectoangles(aim, missile->s.apos.trBase);
+	missile->nextthink = level.time + G_NITMOD_MissileThinkDelay();
+}
+
 gentity_t *fire_rocket (gentity_t *self, vec3_t start, vec3_t dir) {
 	gentity_t	*bolt;
+	int missileSpeed;
+	int missileHealth;
+	int missileGravity;
+	int rocketOptions;
 
 	VectorNormalize (dir);
 
@@ -1812,22 +2031,54 @@ gentity_t *fire_rocket (gentity_t *self, vec3_t start, vec3_t dir) {
 	bolt->damage = G_GetWeaponDamage(WP_PANZERFAUST); // JPW NERVE
 	bolt->splashDamage = G_GetWeaponDamage(WP_PANZERFAUST); // JPW NERVE
 	bolt->splashRadius = 300; //G_GetWeaponDamage(WP_PANZERFAUST);	// Arnout : hardcoded bleh hack
+	G_NITMOD_WeaponDamageOverrides(WP_PANZERFAUST, &bolt->damage, &bolt->splashDamage, &bolt->splashRadius);
 	bolt->methodOfDeath = MOD_PANZERFAUST;
 	bolt->splashMethodOfDeath = MOD_PANZERFAUST;
 //	bolt->clipmask = MASK_SHOT;
 	bolt->clipmask = MASK_MISSILESHOT;
 
-	bolt->s.pos.trType = TR_LINEAR;
+	missileGravity = G_NITMOD_LegacyCvarInteger("g_missileGravity", 0);
+	rocketOptions = G_NITMOD_LegacyCvarInteger("g_rockets", 0);
+	if(self->client && (rocketOptions & 1)) {
+		bolt->think = G_NITMOD_GuidedMissileThink;
+		bolt->nextthink = level.time + 100;
+	} else if(self->client && (rocketOptions & 2)) {
+		bolt->think = G_NITMOD_HomingMissileThink;
+		bolt->nextthink = level.time + 100;
+	}
+	if(self->client && !(rocketOptions & 3) && missileGravity == 1)
+		bolt->s.pos.trType = TR_GRAVITY;
+	else if(self->client && !(rocketOptions & 3) && missileGravity == 2)
+		bolt->s.pos.trType = TR_GRAVITY_LOW;
+	else if(self->client && !(rocketOptions & 3) && missileGravity != 0)
+		bolt->s.pos.trType = TR_GRAVITY_FLOAT;
+	else
+		bolt->s.pos.trType = TR_LINEAR;
 	bolt->s.pos.trTime = level.time - MISSILE_PRESTEP_TIME;		// move a bit on the very first frame
 	VectorCopy( start, bolt->s.pos.trBase );
 // JPW NERVE
-	VectorScale(dir,2500,bolt->s.pos.trDelta);
+	missileSpeed = G_NITMOD_LegacyCvarInteger("g_missileSpeed", 0);
+	VectorScale(dir, missileSpeed > 0 ? missileSpeed : 2500, bolt->s.pos.trDelta);
 // jpw
 	SnapVector( bolt->s.pos.trDelta );			// save net bandwidth
 	VectorCopy (start, bolt->r.currentOrigin);
 
+	/* Original fire_rocket makes missiles damageable only for positive values.
+	 * These bounds and CONTENTS_CORPSE are direct typed mappings of the
+	 * original entity fields, allowing bullets to detonate the rocket. */
+	missileHealth = G_NITMOD_LegacyCvarInteger("g_missileHealth", 5);
+	if(missileHealth > 0) {
+		bolt->health = missileHealth;
+		bolt->takedamage = qtrue;
+		bolt->die = G_MissileDie;
+		bolt->r.contents = CONTENTS_CORPSE;
+		VectorSet(bolt->r.mins, -10, -3, 0);
+		VectorSet(bolt->r.maxs, 10, 3, 6);
+	}
+
 	if(self->client) {
 		bolt->s.teamNum = self->client->sess.sessionTeam;
+		G_NITMOD_CreateMissileCamera(self, bolt);
 	}
 
 	return bolt;

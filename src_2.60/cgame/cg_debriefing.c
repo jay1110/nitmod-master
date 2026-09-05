@@ -1,6 +1,16 @@
 #include "cg_local.h"
+#include "cg_nitmod_hud.h"
 #include "cg_nitmod_config.h"
 #include "cg_nitmod_mapvote.h"
+
+static int CG_Debriefing_ClientLimit(void) {
+	if(!NITMOD_UsesOriginalProtocol()) return MAX_CLIENTS;
+	return cgs.maxclients > 0 && cgs.maxclients <= MAX_CLIENTS ? cgs.maxclients : 0;
+}
+
+static int CG_Debriefing_WeaponStatCount(void) {
+	return NITMOD_WeaponStatCount();
+}
 
 team_t CG_Debriefing_FindWinningTeam( void );
 team_t CG_Debriefing_FindOveralWinningTeam( void );
@@ -1299,7 +1309,9 @@ void CG_Debriefing_Startup( void ) {
 		trap_S_StartLocalSound( trap_S_RegisterSound( "sound/music/axis_win.wav", qtrue ), CHAN_LOCAL_SOUND );
 	}
 
-	cgs.dbMode = 0;
+	/* Original Nitmod opens map voting only when that protocol page is
+	 * enabled.  Every other intermission starts on the scoreboard. */
+	cgs.dbMode = CG_NitmodMapVoteEnabled() ? 0 : 1;
 }
 
 void CG_Debriefing_Shutdown( void ) {
@@ -1346,7 +1358,20 @@ void CG_Debriefing_InfoRequests( void ) {
 	}
 }
 
-qboolean CG_Debriefing_Draw( void ) {
+static qboolean CG_Debriefing_DrawContent(void);
+qboolean CG_Debriefing_Draw(void) {
+	nitmodHudAnchor_t previous = CG_NitmodHudAnchor(NITMOD_HUD_CENTER);
+	qboolean result;
+	/* Debriefing owns logical panel coordinates, unlike the limbo's full-width
+	 * cursor. Draw, hover tests and click tests must share that same position. */
+	cgDC.cursorx = cgs.cursorX;
+	cgDC.cursory = cgs.cursorY;
+	result = CG_Debriefing_DrawContent();
+	CG_NitmodHudAnchor(previous);
+	return result;
+}
+
+static qboolean CG_Debriefing_DrawContent(void) {
 	int i;
 
 	if( !cgs.dbShowing ) {
@@ -1368,16 +1393,15 @@ qboolean CG_Debriefing_Draw( void ) {
 		CG_NitmodMapVoteRequest();
 
 	switch( cgs.dbMode ) {
-		case 1:
+		case 2:
 			BG_PanelButtonsRender( teamDebriefPanelButtons );
 			BG_PanelButtonsRender( chatPanelButtons );
 
 			CG_DrawPic( cgDC.cursorx, cgDC.cursory, 32, 32, cgs.media.cursorIcon );
 
 			break;
-		case 3: // separate original Nitmod scoreboard
 		case 0:
-			if( cgs.dbMode == 0 && CG_NitmodMapVoteEnabled() ) {
+			if( CG_NitmodMapVoteEnabled() ) {
 				CG_NitmodMapVoteDraw();
 			} else {
 				CG_DrawScoreboard();
@@ -1387,12 +1411,17 @@ qboolean CG_Debriefing_Draw( void ) {
 
 			CG_DrawPic( cgDC.cursorx, cgDC.cursory, 32, 32, cgs.media.cursorIcon );
 			break;
-		case 2:
+		case 1:
+			CG_DrawScoreboard();
+			BG_PanelButtonsRender( chatPanelButtons );
+			CG_DrawPic( cgDC.cursorx, cgDC.cursory, 32, 32, cgs.media.cursorIcon );
+			break;
+		case 3:
 			for( i = 0 ; i < MAX_CLIENTS; i++ ) {
 				cgs.dbSortedClients[i] = i;
 			}
 
-			qsort( cgs.dbSortedClients, MAX_CLIENTS, sizeof(int), CG_SortPlayersByXP );
+			qsort( cgs.dbSortedClients, CG_Debriefing_ClientLimit(), sizeof(int), CG_SortPlayersByXP );
 
 			BG_PanelButtonsRender( debriefPanelButtons );
 
@@ -1407,14 +1436,19 @@ qboolean CG_Debriefing_Draw( void ) {
 
 qboolean CG_DebriefingPlayerList_KeyDown( panel_button_t* button, int key ) {
 	if( key == K_MOUSE1 ) {
-		int pos	= (( cgs.cursorY - DH_HEADING_Y ) / 12) + cgs.dbPlayerListOffset;
-		if( pos < 0 || pos >= MAX_CLIENTS ) {
+		int limit = CG_Debriefing_ClientLimit();
+		double row = ((double)cgs.cursorY - DH_HEADING_Y) / 12;
+		int pos;
+		if(limit < 1 || limit > MAX_CLIENTS || row < 0 || row >= 24 ||
+			cgs.dbPlayerListOffset < 0 || cgs.dbPlayerListOffset >= limit) return qfalse;
+		pos = (int)row + cgs.dbPlayerListOffset;
+		if( pos < 0 || pos >= limit ) {
 			return qfalse;
 		}
 
 		pos = cgs.dbSortedClients[pos];
 
-		if( !cgs.clientinfo[pos].infoValid ) {
+		if( pos < 0 || pos >= limit || !cgs.clientinfo[pos].infoValid ) {
 			return qfalse;
 		}
 
@@ -1429,8 +1463,9 @@ qboolean CG_DebriefingPlayerList_KeyDown( panel_button_t* button, int key ) {
 
 int CG_Debriefing_GetNextWeaponStat( int pos ) {
 	int i;
+	if(pos < -1 || pos >= CG_Debriefing_WeaponStatCount() - 1) return -1;
 
-	for( i = pos+1; i < WS_MAX; i++ ) {
+	for( i = pos+1; i < CG_Debriefing_WeaponStatCount(); i++ ) {
 		if( cgs.dbWeaponStats[i].numShots ) {
 			return i;
 		}
@@ -1441,8 +1476,11 @@ int CG_Debriefing_GetNextWeaponStat( int pos ) {
 
 void CG_DebriefingPlayerWeaponStats_Draw( panel_button_t* button ) {
 	int i;
-	float y = button->rect.y + 12;
+	float y;
 	int pos = 0;
+	if(!button || !button->font || cgs.dbWeaponListOffset < 0 ||
+		cgs.dbWeaponListOffset >= CG_Debriefing_WeaponStatCount()) return;
+	y = button->rect.y + 12;
 //	float x;
 
 	if( !cgs.dbWeaponStatsRecieved ) {
@@ -1455,7 +1493,8 @@ void CG_DebriefingPlayerWeaponStats_Draw( panel_button_t* button ) {
 	}
 
 	for( i = 0; i < 7 && pos != -1; i++, pos = CG_Debriefing_GetNextWeaponStat( pos ) ) {		
-		CG_Text_Paint_Ext( 18, y, button->font->scalex, button->font->scaley, button->font->colour, aWeaponInfo[pos].pszName, 0, 0, 0, button->font->font );
+		CG_Text_Paint_Ext( 18, y, button->font->scalex, button->font->scaley, button->font->colour,
+			NITMOD_WeaponStatName(pos), 0, 0, 0, button->font->font );
 
 		CG_Text_Paint_Ext( 78, y, button->font->scalex, button->font->scaley, button->font->colour, va( "%i", cgs.dbWeaponStats[pos].numShots ), 0, 0, 0, button->font->font );
 
@@ -1551,25 +1590,32 @@ void CG_DebriefingXPHeader_Draw( panel_button_t* button ) {
 
 void CG_DebriefingPlayerList_Draw( panel_button_t* button ) {
 	int i, j;
-	float y = button->rect.y + 12;
+	int limit = CG_Debriefing_ClientLimit();
+	float y;
 //	float x;
 	score_t* score = NULL;
+	if(!button || !button->font || cgs.dbPlayerListOffset < 0 || cgs.dbPlayerListOffset >= limit) return;
+	y = button->rect.y + 12;
 
 //	CG_FillRect( button->rect.x, button->rect.y, button->rect.w, button->rect.h, colorRed );
 
-	for( i = 0; i + cgs.dbPlayerListOffset < MAX_CLIENTS && i < 24; i++ ) {
-		clientInfo_t* ci = &cgs.clientinfo[cgs.dbSortedClients[i + cgs.dbPlayerListOffset]];
+	for( i = 0; i + cgs.dbPlayerListOffset < limit && i < 24; i++ ) {
+		int client = cgs.dbSortedClients[i + cgs.dbPlayerListOffset];
+		clientInfo_t* ci;
+		if(client < 0 || client >= limit) break;
+		ci = &cgs.clientinfo[client];
 		if( !ci->infoValid ) {
 			break;
 		}
 
-		for( j = 0; j < MAX_CLIENTS; j++ ) {
+		score = NULL;
+		for( j = 0; j < cg.numScores && j < MAX_CLIENTS; j++ ) {
 			if( cg.scores[j].client == cgs.dbSortedClients[i + cgs.dbPlayerListOffset] ) {
 				score = &cg.scores[j];
 				break;
 			}
 		}
-		if( j == MAX_CLIENTS ) {
+		if( !score ) {
 			continue;
 		}
 
@@ -1627,22 +1673,21 @@ void CG_DebriefingPlayerList_Draw( panel_button_t* button ) {
 int QDECL CG_SortPlayersByXP( const void *a, const void *b ) {
 	int ca = *(int*)a;
 	int cb = *(int*)b;
+	qboolean validA = ca >= 0 && ca < MAX_CLIENTS && cgs.clientinfo[ca].infoValid;
+	qboolean validB = cb >= 0 && cb < MAX_CLIENTS && cgs.clientinfo[cb].infoValid;
+	int scoreA, scoreB;
 
-	if( !cgs.clientinfo[cb].infoValid ) {
-		return -1;
+	/* Both invalid entries must compare equal, including self-comparison. */
+	if(!validA || !validB) return validA ? -1 : validB ? 1 : 0;
+	/* Original gametype 8 uses the kills field populated by impkd. */
+	if(NITMOD_UsesOriginalProtocol() && cgs.gametype == 8) {
+		scoreA = cgs.clientinfo[ca].kills;
+		scoreB = cgs.clientinfo[cb].kills;
+	} else {
+		scoreA = cgs.clientinfo[ca].score;
+		scoreB = cgs.clientinfo[cb].score;
 	}
-	if( !cgs.clientinfo[ca].infoValid ) {
-		return 1;
-	}
-
-	if( cgs.clientinfo[cb].score > cgs.clientinfo[ca].score ) {
-		return 1;
-	}
-	if( cgs.clientinfo[ca].score > cgs.clientinfo[cb].score ) {
-		return -1;
-	}
-
-	return 0;
+	return scoreA > scoreB ? -1 : scoreA < scoreB ? 1 : 0;
 }
 
 const char* CG_Debriefing_FullRankNameForClientInfo( clientInfo_t* ci ) {
@@ -1708,10 +1753,11 @@ static qboolean CG_Debriefing_ParsePlayerKillsDeaths( void ) {
 
 static qboolean CG_Debriefing_ParseWeaponStats( void ) {
 	int i;
-	cg_weaponstats_t next[WS_MAX];
+	int count = CG_Debriefing_WeaponStatCount();
+	cg_weaponstats_t next[26] = {0};
 
-	if( trap_Argc() != WS_MAX * 3 + 1 ) return qfalse;
-	for( i = 0; i < WS_MAX; i++ ) {
+	if( trap_Argc() != count * 3 + 1 ) return qfalse;
+	for( i = 0; i < count; i++ ) {
 		if( !CG_Debriefing_ParseIntArg( i * 3 + 1, &next[i].numShots ) ||
 			!CG_Debriefing_ParseIntArg( i * 3 + 2, &next[i].numHits ) ||
 			!CG_Debriefing_ParseIntArg( i * 3 + 3, &next[i].numKills ) ||
@@ -1777,23 +1823,26 @@ int CG_Debriefing_ScrollGetMax( panel_button_t* button ) {
 
 int CG_Debriefing_ScrollGetCount( panel_button_t* button ) {
 	int i, cnt = 0;
+	int limit = CG_Debriefing_ClientLimit();
+	if(!button) return 0;
 
 	switch( button->data[0] ) {
 		case 3:
 			return cgs.nitmodMapVoteCount < 0 ? 0 :
 				cgs.nitmodMapVoteCount > NITMOD_MAX_MAPVOTE_MAPS ? NITMOD_MAX_MAPVOTE_MAPS : cgs.nitmodMapVoteCount;
 		case 0: // player list
-			for( i = 0; i < MAX_CLIENTS; i++ ) {
-				if( !cgs.clientinfo[cgs.dbSortedClients[i]].infoValid ) {
+			for( i = 0; i < limit; i++ ) {
+				int client = cgs.dbSortedClients[i];
+				if( client < 0 || client >= limit || !cgs.clientinfo[client].infoValid ) {
 					return i;
 				}
 			}
-			return MAX_CLIENTS;
+			return limit;
 		case 1:
 			if( !cgs.dbWeaponStatsRecieved ) {
 				return 0;
 			}
-			for( i = 0; i < WS_MAX; i++ ) {
+			for( i = 0; i < CG_Debriefing_WeaponStatCount(); i++ ) {
 				if( cgs.dbWeaponStats[i].numShots ) {
 					cnt++;
 				}
@@ -1869,7 +1918,14 @@ void CG_Debriefing_ScrollCheckOffset( panel_button_t* button ) {
 	}
 }
 
-void CG_Debriefing_MouseEvent( int x, int y ) {
+static void CG_Debriefing_MouseEventContent(int x, int y);
+void CG_Debriefing_MouseEvent(int x, int y) {
+	CG_Debriefing_MouseEventContent(x, y);
+	cgDC.cursorx = cgs.cursorX;
+	cgDC.cursory = cgs.cursorY;
+}
+
+static void CG_Debriefing_MouseEventContent(int x, int y) {
 	panel_button_t* button;
 	button = BG_PanelButtons_GetFocusButton();
 	if(button && button->data[0] == 3 && button->onDraw == CG_Debriefing_Scrollbar_Draw &&
@@ -1880,7 +1936,7 @@ void CG_Debriefing_MouseEvent( int x, int y ) {
 		case 0:
 			if(!CG_NitmodMapVoteEnabled()) break;
 			// Map voting uses the same original scrollbar capture/drag mechanism.
-		case 2:
+		case 3:
 			button = BG_PanelButtons_GetFocusButton();
 			if( button && button->onDraw == CG_Debriefing_Scrollbar_Draw ) {
 				rectDef_t r;
@@ -1986,6 +2042,8 @@ qboolean CG_Debriefing_Scrollbar_KeyUp( panel_button_t* button, int key ) {
 
 void CG_Debriefing_KeyEvent( int key, qboolean down ) {
 	panel_button_t *focus = BG_PanelButtons_GetFocusButton();
+	cgDC.cursorx = cgs.cursorX;
+	cgDC.cursory = cgs.cursorY;
 	if(!down && key == K_MOUSE1 && focus && focus->data[0] == 3 &&
 		focus->onDraw == CG_Debriefing_Scrollbar_Draw) {
 		CG_Debriefing_Scrollbar_KeyUp(focus, key);
@@ -1996,14 +2054,14 @@ void CG_Debriefing_KeyEvent( int key, qboolean down ) {
 		return;
 	}
 	switch( cgs.dbMode ) {
-		case 1:
+		case 2:
 			if( BG_PanelButtonsKeyEvent( key, down, teamDebriefPanelButtons ) ) {
 				return;
 			}
 			break;
 		case 0:
 			break;
-		case 2:
+		case 3:
 			if( BG_PanelButtonsKeyEvent( key, down, debriefPanelButtons ) ) {
 				return;
 			}			
@@ -2072,21 +2130,27 @@ void CG_Debriefing_PlayerSkills_Draw( panel_button_t* button ) {
 void CG_Debriefing_PlayerACC_Draw( panel_button_t* button ) {
 	clientInfo_t* ci = CG_Debriefing_GetSelectedClientInfo();
 	float w;
+	float x;
+	if(!button || !button->font || !ci) return;
 
 	w = CG_Text_Width_Ext( "ACC: ", button->font->scalex, 0, button->font->font );
-	CG_Text_Paint_Ext( button->rect.x - w, button->rect.y, button->font->scalex, button->font->scaley, button->font->colour, "ACC:", 0, 0, ITEM_TEXTSTYLE_SHADOWED, button->font->font );
+	x = button->rect.x + (NITMOD_UsesOriginalProtocol() ? w : 0);
+	CG_Text_Paint_Ext( x - w, button->rect.y, button->font->scalex, button->font->scaley, button->font->colour, "ACC:", 0, 0, ITEM_TEXTSTYLE_SHADOWED, button->font->font );
 
-	CG_Text_Paint_Ext( button->rect.x, button->rect.y, button->font->scalex, button->font->scaley, button->font->colour, va( "%i%%", ci->totalWeapAcc ), 0, 0, ITEM_TEXTSTYLE_SHADOWED, button->font->font );
+	CG_Text_Paint_Ext( x, button->rect.y, button->font->scalex, button->font->scaley, button->font->colour, va( "%i%%", ci->totalWeapAcc ), 0, 0, ITEM_TEXTSTYLE_SHADOWED, button->font->font );
 }
 
 void CG_Debriefing_PlayerXP_Draw( panel_button_t* button ) {
 	clientInfo_t* ci = CG_Debriefing_GetSelectedClientInfo();
 	float w;
+	float x;
+	if(!button || !button->font || !ci) return;
 
 	w = CG_Text_Width_Ext( "XP: ", button->font->scalex, 0, button->font->font );
-	CG_Text_Paint_Ext( button->rect.x - w, button->rect.y, button->font->scalex, button->font->scaley, button->font->colour, "XP:", 0, 0, ITEM_TEXTSTYLE_SHADOWED, button->font->font );
+	x = button->rect.x + (NITMOD_UsesOriginalProtocol() ? w : 0);
+	CG_Text_Paint_Ext( x - w, button->rect.y, button->font->scalex, button->font->scaley, button->font->colour, "XP:", 0, 0, ITEM_TEXTSTYLE_SHADOWED, button->font->font );
 
-	CG_Text_Paint_Ext( button->rect.x, button->rect.y, button->font->scalex, button->font->scaley, button->font->colour, va( "%i", ci->score ), 0, 0, ITEM_TEXTSTYLE_SHADOWED, button->font->font );
+	CG_Text_Paint_Ext( x, button->rect.y, button->font->scalex, button->font->scaley, button->font->colour, va( "%i", ci->score ), 0, 0, ITEM_TEXTSTYLE_SHADOWED, button->font->font );
 }
 
 
@@ -2094,8 +2158,10 @@ void CG_Debriefing_PlayerTime_Draw( panel_button_t* button ) {
 	score_t* score = NULL;
 	int i;
 	float w;
+	float x;
+	if(!button || !button->font || cgs.dbSelectedClient < 0 || cgs.dbSelectedClient >= MAX_CLIENTS) return;
 
-	for( i = 0; i < MAX_CLIENTS; i++ ) {
+	for( i = 0; i < cg.numScores && i < MAX_CLIENTS; i++ ) {
 		if( cg.scores[i].client == cgs.dbSelectedClient ) {
 			score = &cg.scores[i];
 			break;
@@ -2106,20 +2172,22 @@ void CG_Debriefing_PlayerTime_Draw( panel_button_t* button ) {
 	}
 
 	w = CG_Text_Width_Ext( "Time: ", button->font->scalex, 0, button->font->font );
-	CG_Text_Paint_Ext( button->rect.x - w, button->rect.y, button->font->scalex, button->font->scaley, button->font->colour, "Time:", 0, 0, ITEM_TEXTSTYLE_SHADOWED, button->font->font );
+	x = button->rect.x + (NITMOD_UsesOriginalProtocol() ? w : 0);
+	CG_Text_Paint_Ext( x - w, button->rect.y, button->font->scalex, button->font->scaley, button->font->colour, "Time:", 0, 0, ITEM_TEXTSTYLE_SHADOWED, button->font->font );
 
-	CG_Text_Paint_Ext( button->rect.x, button->rect.y, button->font->scalex, button->font->scaley, button->font->colour, va( "%i", score->time ), 0, 0, ITEM_TEXTSTYLE_SHADOWED, button->font->font );
+	CG_Text_Paint_Ext( x, button->rect.y, button->font->scalex, button->font->scaley, button->font->colour, va( "%i", score->time ), 0, 0, ITEM_TEXTSTYLE_SHADOWED, button->font->font );
 }
 
 void CG_Debriefing_PlayerMedals_Draw( panel_button_t* button ) {
 	clientInfo_t* ci = CG_Debriefing_GetSelectedClientInfo();
-	float w, x = button->rect.x;
+	float w, x;
 	int i;
+	if(!button || !button->font || !ci) return;
 
 	w = CG_Text_Width_Ext( "Medals: ", button->font->scalex, 0, button->font->font );
-	CG_Text_Paint_Ext( button->rect.x - w, button->rect.y, button->font->scalex, button->font->scaley, button->font->colour, "Medals:", 0, 0, ITEM_TEXTSTYLE_SHADOWED, button->font->font );
+	x = button->rect.x + (NITMOD_UsesOriginalProtocol() ? w : 0);
+	CG_Text_Paint_Ext( x - w, button->rect.y, button->font->scalex, button->font->scaley, button->font->colour, "Medals:", 0, 0, ITEM_TEXTSTYLE_SHADOWED, button->font->font );
 
-	x = button->rect.x;
 	for( i = 0; i < SK_NUM_SKILLS; i++ ) {
 		if( ci->medals[i] ) {
 			CG_DrawPic( x, button->rect.y - 10, 16, 16, cgs.media.medals[i] );
@@ -2131,34 +2199,29 @@ void CG_Debriefing_PlayerMedals_Draw( panel_button_t* button ) {
 
 void CG_Debriefing_PlayerRank_Draw( panel_button_t* button ) {
 	clientInfo_t* ci = CG_Debriefing_GetSelectedClientInfo();
-	float w;
+	float w, x;
+	if(!button || !button->font || !ci) return;
 
 	w = CG_Text_Width_Ext( "Rank: ", button->font->scalex, 0, button->font->font );
-	CG_Text_Paint_Ext( button->rect.x - w, button->rect.y, button->font->scalex, button->font->scaley, button->font->colour, "Rank:", 0, 0, ITEM_TEXTSTYLE_SHADOWED, button->font->font );
+	x = button->rect.x + (NITMOD_UsesOriginalProtocol() ? w : 0);
+	CG_Text_Paint_Ext( x - w, button->rect.y, button->font->scalex, button->font->scaley, button->font->colour, "Rank:", 0, 0, ITEM_TEXTSTYLE_SHADOWED, button->font->font );
 
-	CG_Text_Paint_Ext( button->rect.x, button->rect.y, button->font->scalex, button->font->scaley, button->font->colour, CG_Debriefing_FullRankNameForClientInfo( ci ), 0, 0, ITEM_TEXTSTYLE_SHADOWED, button->font->font );
+	CG_Text_Paint_Ext( x, button->rect.y, button->font->scalex, button->font->scaley, button->font->colour, CG_Debriefing_FullRankNameForClientInfo( ci ), 0, 0, ITEM_TEXTSTYLE_SHADOWED, button->font->font );
 }
 
 void CG_Debriefing_PlayerName_Draw( panel_button_t* button ) {
 	clientInfo_t* ci = CG_Debriefing_GetSelectedClientInfo();
+	if(!button || !button->font || !ci) return;
 
 	CG_Text_Paint_Ext( button->rect.x, button->rect.y, button->font->scalex, button->font->scaley, button->font->colour, ci->name, 0, 0, ITEM_TEXTSTYLE_SHADOWED, button->font->font );
 }
 
 clientInfo_t* CG_Debriefing_GetSelectedClientInfo( void ) {
-	clientInfo_t* ci;
-
-	if( cgs.dbSelectedClient < 0 || cgs.dbSelectedClient >= MAX_CLIENTS ) {
-		CG_Debrieing_SetSelectedClient( cg.clientNum );
-	}
-	
-	ci = &cgs.clientinfo[cgs.dbSelectedClient];
-	if( !ci->infoValid ) {
-		CG_Debrieing_SetSelectedClient( cg.clientNum );
-		ci = &cgs.clientinfo[cgs.dbSelectedClient];
-	}
-
-	return ci;
+	if(cgs.dbSelectedClient >= 0 && cgs.dbSelectedClient < MAX_CLIENTS &&
+		cgs.clientinfo[cgs.dbSelectedClient].infoValid) return &cgs.clientinfo[cgs.dbSelectedClient];
+	if(cg.clientNum < 0 || cg.clientNum >= MAX_CLIENTS || !cgs.clientinfo[cg.clientNum].infoValid) return NULL;
+	CG_Debrieing_SetSelectedClient(cg.clientNum);
+	return &cgs.clientinfo[cg.clientNum];
 }
 
 void CG_Debrieing_SetSelectedClient( int clientNum ) {
@@ -2603,41 +2666,92 @@ const char* awardNames[NUM_ENDGAME_AWARDS] = {
 	"Welcome Newbie! Award",		// dont get this if any other award given or > 100 xp (this map)
 };
 
+static const char *nitmodRoundAwardTitles[16] = {
+	"Highest Fragger", "Highest XP", "Fat ass (most goombas)", "Best Spree",
+	"Most Headshots", "Highest damage", "I Believe I Can Fly...", "Highest Accuracy",
+	"Jack the Ripper Award", "Most Revives", "Most Heals", "Best Revive Spree",
+	"Panzer Lover", "Best Engineer", "Best CovertOps", "Best FieldOps"
+};
+static struct { char names[1024]; int offsets[16], teams[16]; } nitmodRoundAwards;
+static qhandle_t nitmodRoundAwardIcons[16];
+
+qboolean CG_NitmodParseRoundAwards(const char *text) {
+	char buffer[1024], names[1024], *cursor, *p;
+	int offsets[16], teams[16], i, used = 0;
+	memset(&nitmodRoundAwards, 0, sizeof(nitmodRoundAwards));
+	memset(nitmodRoundAwardIcons, 0, sizeof(nitmodRoundAwardIcons));
+	if(!text || strlen(text) >= sizeof(buffer)) return qfalse;
+	Q_strncpyz(buffer, text, sizeof(buffer));
+	for(p = buffer; *p; ++p) if(*p == ';') *p = '"';
+	cursor = buffer;
+	for(i = 0; i < 16; ++i) {
+		const char *token = COM_Parse(&cursor);
+		int len = strlen(token);
+		if(!cursor || len + 1 > (int)sizeof(names) - used) return qfalse;
+		offsets[i] = used; memcpy(names + used, token, len + 1); used += len + 1;
+		token = COM_Parse(&cursor);
+		if(!NITMOD_ParseProtocolInteger(token, &teams[i]) || teams[i] > TEAM_ALLIES) return qfalse;
+	}
+	if(*COM_Parse(&cursor)) return qfalse;
+	memcpy(nitmodRoundAwards.names, names, used);
+	memcpy(nitmodRoundAwards.offsets, offsets, sizeof(offsets));
+	memcpy(nitmodRoundAwards.teams, teams, sizeof(teams));
+	return qtrue;
+}
+
+const char *CG_NitmodRoundAward(int index, const char **winner, int *team) {
+	if(index < 0 || index >= 16) return NULL;
+	if(winner) *winner = nitmodRoundAwards.names + nitmodRoundAwards.offsets[index];
+	if(team) *team = nitmodRoundAwards.teams[index];
+	return nitmodRoundAwardTitles[index];
+}
+
 void CG_Debreifing2_Awards_Parse( void ) {
-	int i = 0;
+	int i = 0, used = 0;
 	char* cs = (char*)CG_ConfigString( CS_ENDGAME_STATS );
 	const char* token;
 	char* s;
-	int size, len;
+	int len, offsets[NUM_ENDGAME_AWARDS], teams[NUM_ENDGAME_AWARDS];
 	char buffer[sizeof( cgs.dbAwardNamesBuffer )];
+	char names[sizeof( cgs.dbAwardNamesBuffer )];
+	if(NITMOD_UsesOriginalProtocol()) {
+		CG_NitmodParseRoundAwards(cs);
+		cgs.dbAwardsParsed = qtrue;
+		return;
+	}
 
-	Q_strncpyz( buffer, cs, sizeof( cgs.dbAwardNamesBuffer ) );
+	/* Publish only a complete table; malformed packets clear stale awards. */
+	cgs.dbAwardsParsed = qtrue;
+	cgs.dbAwardNamesBuffer[0] = 0;
+	for(i = 0; i < NUM_ENDGAME_AWARDS; ++i) {
+		cgs.dbAwardNames[i] = cgs.dbAwardNamesBuffer;
+		cgs.dbAwardTeams[i] = -1;
+	}
+	if(strlen(cs) >= sizeof(buffer)) return;
+	Q_strncpyz( buffer, cs, sizeof(buffer) );
 	cs = buffer;
 
 	while ((s = strchr( cs, ';' ))) {
 		*s = '"';
 	}
 
-	s = cgs.dbAwardNamesBuffer;
-	size = sizeof( cgs.dbAwardNamesBuffer );
-
 	for( i = 0; i < NUM_ENDGAME_AWARDS; i++ ) {
 		token = COM_Parse( &cs );
-
-		Q_strncpyz( s, token, size );
-
-		cgs.dbAwardNames[ i ] = s;
-
 		len = strlen( token );
-		size -= len;
-		s += len + 1;
-
+		if(!cs || len + 1 > (int)sizeof(names) - used) return;
+		offsets[i] = used;
+		memcpy(names + used, token, len + 1);
+		used += len + 1;
 		token = COM_Parse( &cs );
-
-		cgs.dbAwardTeams[ i ] = atoi( token );
+		if(!NITMOD_ParseProtocolSigned(token, &teams[i]) ||
+			(teams[i] != -1 && teams[i] != TEAM_AXIS && teams[i] != TEAM_ALLIES)) return;
 	}
-
-	cgs.dbAwardsParsed = qtrue;
+	if(*COM_Parse(&cs)) return;
+	memcpy(cgs.dbAwardNamesBuffer, names, used);
+	for(i = 0; i < NUM_ENDGAME_AWARDS; ++i) {
+		cgs.dbAwardNames[i] = cgs.dbAwardNamesBuffer + offsets[i];
+		cgs.dbAwardTeams[i] = teams[i];
+	}
 }
 
 void CG_Debreifing2_Awards_Draw( panel_button_t* button ) {
@@ -2647,6 +2761,22 @@ void CG_Debreifing2_Awards_Draw( panel_button_t* button ) {
 
 	if( !cgs.dbAwardsParsed ) {
 		CG_Debreifing2_Awards_Parse();
+	}
+	if(NITMOD_UsesOriginalProtocol()) {
+		for(i = 0; i < 16; ++i) {
+			const char *winner, *title;
+			int team;
+			title = CG_NitmodRoundAward(i, &winner, &team);
+			if(!team) continue;
+			if(!nitmodRoundAwardIcons[i]) nitmodRoundAwardIcons[i] = trap_R_RegisterShaderNoMip(va("gfx/awards/%d", i));
+			CG_DrawPic(button->rect.x + 4, y + 2, 12, 12,
+				nitmodRoundAwardIcons[i]);
+			CG_Text_Paint_Ext(button->rect.x + 20, y + 12, .18f, .18f, clrTxtBck, title, 0, 0, 0, &cgs.media.limboFont2);
+			CG_DrawPic(button->rect.x + 208, y + 4, 13, 9, team == TEAM_AXIS ? cgs.media.axisFlag : cgs.media.alliedFlag);
+			CG_Text_Paint_Ext(button->rect.x + 226, y + 12, .18f, .18f, clrTxtBck, winner, 0, 0, 0, &cgs.media.limboFont2);
+			y += 12;
+		}
+		return;
 	}
 
 	for( i = 0; i < NUM_ENDGAME_AWARDS; i++ ) {

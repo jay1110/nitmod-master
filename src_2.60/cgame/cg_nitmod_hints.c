@@ -2,6 +2,7 @@
 #include "cg_nitmod_config.h"
 #include "cg_nitmod_hud.h"
 #include "cg_nitmod_hints.h"
+#include "cg_nitmod_debug.h"
 
 vmCvar_t cg_objectiveHints, cg_artilleryHints;
 
@@ -109,6 +110,65 @@ void CG_NitmodDrawCrosshairHealth(int health, int maxHealth, const vec4_t color)
     CG_NitmodHudAnchor(previous);
 }
 
+/* Original CG_UpdateClassesMaxHP / CG_CrosshairClientMaxHealth.
+ * Read the current gamestate, so joins, updates and map resets share one path. */
+qboolean CG_NitmodCanIdentifyDisguise(int client) {
+	if(client < 0 || client >= MAX_CLIENTS) return qfalse;
+	if(!NITMOD_ClientSkillUnlocked(client, SK_SIGNALS, 4)) return qfalse;
+	/* Original cgs+0x2038628 is # argument 8 (currently named keepAwards). */
+	return cgs.clientinfo[client].cls == PC_FIELDOPS ||
+		(NITMOD_UsesOriginalProtocol() && (NITMOD_GameState()->keepAwards & 2));
+}
+
+int CG_NitmodCrosshairMaxHealth(int client) {
+    static const char *keys[] = { "S", "M", "E", "F", "C" };
+    const clientInfo_t *ci;
+    int health, i, viewer, count;
+    if((!NITMOD_UsesOriginalProtocol() && !NITMOD_ServerSupports(NITMOD_FEATURE_CLASS_HEALTH)) ||
+       !cg.snap || client < 0 || client >= MAX_CLIENTS) return 0;
+    ci = &cgs.clientinfo[client];
+    if(!ci->infoValid || ci->cls < PC_SOLDIER || ci->cls > PC_COVERTOPS) return 0;
+    health = NITMOD_ClassMaxHealth(ci->cls);
+    if(health > 0) return health;
+    if(NITMOD_ParseProtocolInteger(Info_ValueForKey(CG_ConfigString(39), keys[ci->cls]), &health) && health > 0)
+        return health;
+    health = 100;
+    viewer = cg.snap->ps.clientNum;
+    count = cgs.maxclients;
+    if(count > MAX_CLIENTS) count = MAX_CLIENTS;
+    if(viewer >= 0 && viewer < MAX_CLIENTS) for(i = 0; i < count; ++i) {
+        if(cgs.clientinfo[i].infoValid && cgs.clientinfo[i].team == cgs.clientinfo[viewer].team &&
+           cgs.clientinfo[i].cls == PC_MEDIC) {
+            health += 10;
+            if(health >= 125) { health = 125; break; }
+        }
+    }
+    if(NITMOD_ClientSkillUnlocked(client, SK_BATTLE_SENSE, 3)) health += 15;
+    if(ci->cls == PC_MEDIC) health = (int)(health * 1.12f);
+    return health;
+}
+
+int CG_NitmodTripminePresentation(const entityState_t *state, byte rgba[4]) {
+    int viewer, local, intensity;
+    qboolean caster;
+    if(!state || !rgba || !NITMOD_UsesOriginalProtocol() || !cg.snap) return 0;
+    viewer = cg.snap->ps.clientNum; local = cg.clientNum;
+    if(viewer < 0 || viewer >= MAX_CLIENTS || local < 0 || local >= MAX_CLIENTS) return 0;
+    caster = cgs.clientinfo[local].team == TEAM_SPECTATOR && cgs.clientinfo[local].nitmodShoutcaster;
+    if(cgs.clientinfo[local].team == TEAM_SPECTATOR && !caster) return 0;
+    if(!state->effect1Time) return 1;
+    intensity = state->effect1Time == 1 ? 50 : 255;
+    if(cgs.clientinfo[viewer].team != state->teamNum && !caster) {
+        if(!NITMOD_ClientSkillUnlocked(viewer, SK_BATTLE_SENSE, 4)) return 1;
+        intensity = 50;
+    }
+    rgba[0] = state->teamNum == TEAM_AXIS ? intensity : 0;
+    rgba[1] = 0;
+    rgba[2] = state->teamNum == TEAM_AXIS ? 0 : intensity;
+    rgba[3] = 255;
+    return 2;
+}
+
 qboolean CG_NitmodDrawCrosshairPlayer(int client, qboolean disguised, int health, int maxHealth, const vec4_t color) {
     const clientInfo_t *ci;
     const char *name;
@@ -162,7 +222,7 @@ qboolean CG_NitmodScanMine(const centity_t *cent) {
     if(!cent || !NITMOD_UsesOriginalProtocol() || !HintClient(&client) ||
        !cg.refdef_current || cg.renderingThirdPerson || cgs.gametype == 8) return qfalse;
     es = &cent->currentState;
-    if(es->weapon != WP_LANDMINE || es->eType != ET_MISSILE ||
+    if((es->weapon != WP_LANDMINE && es->weapon != WP_POISON_MINE) || es->eType != ET_MISSILE ||
        es->teamNum < 0 || es->teamNum >= 4 ||
        cgs.clientinfo[client].team != (es->otherEntityNum2 ? TEAM_AXIS : TEAM_ALLIES)) return qfalse;
     VectorMA(cg.refdef_current->vieworg, 512, cg.refdef_current->viewaxis[0], end);
@@ -206,7 +266,7 @@ qboolean CG_NitmodPrepareMine(const centity_t *cent, refEntity_t *ent, qboolean 
     viewer = cg.snap->ps.clientNum;
     if(viewer < 0 || viewer >= MAX_CLIENTS) return qfalse;
     es = &cent->currentState;
-    if(es->weapon != WP_LANDMINE || es->eType != ET_MISSILE || es->teamNum < 0) return qfalse;
+    if((es->weapon != WP_LANDMINE && es->weapon != WP_POISON_MINE) || es->eType != ET_MISSILE || es->teamNum < 0) return qfalse;
     localTeam = cgs.clientinfo[cg.clientNum].team;
     caster = localTeam == TEAM_SPECTATOR && cgs.clientinfo[cg.clientNum].nitmodShoutcaster;
     if(localTeam == TEAM_SPECTATOR && !caster) return qfalse;
@@ -231,11 +291,14 @@ qboolean CG_NitmodPrepareMine(const centity_t *cent, refEntity_t *ent, qboolean 
         } else if(es->modelindex2) {
             *marker = qtrue;
         } else {
-            /* Original private skill/colored-mine masks are not yet mapped.
-             * Keep the existing ET battle-sense threshold and shader here. */
-            if(cgs.clientinfo[viewer].skill[SK_BATTLE_SENSE] < 4 ||
+            /* Original mine visibility tests the local client's unlock bit. */
+            if(!NITMOD_ClientSkillUnlocked(cg.clientNum, SK_BATTLE_SENSE, 4) ||
                !(DistanceSquared(cent->lerpOrigin, cg.predictedPlayerEntity.lerpOrigin) <= 65536)) return qfalse;
             ent->customShader = cgs.media.genericConstructionShader;
+            {
+                qhandle_t colored = CG_NitmodMineTeamShader(es->teamNum);
+                if(colored) ent->customShader = colored;
+            }
         }
     } else if(es->teamNum >= 8) {
         ent->origin[2] -= 8; ent->oldorigin[2] -= 8;
@@ -312,13 +375,19 @@ qboolean CG_NitmodHintEntity(centity_t *cent) {
     vec3_t delta;
     float distance, wave;
     int client, team, alpha;
-    if(!NITMOD_UsesOriginalProtocol()) return qfalse;
-    if(es->eType != ORIGINAL_EXPLOSIVE_HINT && es->eType != ORIGINAL_BUILD_HINT &&
-       es->eType != ORIGINAL_ARTILLERY_HINT) return qfalse;
+    qboolean original, explosiveHint, buildHint, artilleryHint;
+    if(!NITMOD_UsesNitmodHud()) return qfalse;
+    original = NITMOD_UsesOriginalProtocol();
+    explosiveHint = es->eType == ORIGINAL_EXPLOSIVE_HINT;
+    buildHint = es->eType == (original ? ORIGINAL_BUILD_HINT : ET_CONSTRUCTIBLE_INDICATOR);
+    artilleryHint = es->eType == ORIGINAL_ARTILLERY_HINT;
+    /* Wire 31 is Nitmod's build marker but ET 2.60's ET_MOVERSCALED.
+     * Never consume the latter on a reconstructed server. */
+    if(!explosiveHint && !buildHint && !artilleryHint) return qfalse;
     if(!HintClient(&client)) return qtrue;
     team = cgs.clientinfo[client].team;
     if(team != TEAM_AXIS && team != TEAM_ALLIES) return qtrue;
-    if(es->eType == ORIGINAL_ARTILLERY_HINT) {
+    if(artilleryHint) {
         if(!cg_artilleryHints.integer || es->teamNum != team) return qtrue;
         VectorSubtract(cg.predictedPlayerState.origin, es->pos.trBase, delta);
         distance = VectorLength(delta);
@@ -327,7 +396,7 @@ qboolean CG_NitmodHintEntity(centity_t *cent) {
     }
     if(!cg_objectiveHints.integer || !es->teamNum || !cg.refdef_current ||
        cgs.clientinfo[client].cls != PC_ENGINEER) return qtrue;
-    if(es->eType == ORIGINAL_BUILD_HINT) {
+    if(buildHint) {
         if(es->teamNum != TEAM_SPECTATOR && es->teamNum != cg.snap->ps.persistant[PERS_TEAM]) return qtrue;
     } else if(es->teamNum == team) return qtrue;
     if(!trap_R_inPVS(cg.refdef_current->vieworg, es->pos.trBase)) return qtrue;
@@ -335,7 +404,7 @@ qboolean CG_NitmodHintEntity(centity_t *cent) {
     arrow.reType = icon.reType = RT_SPRITE;
     arrow.radius = 10; icon.radius = 16;
     arrow.customShader = arrowShader;
-    icon.customShader = es->eType == ORIGINAL_BUILD_HINT ? buildShader : cgs.media.dynamiteHintShader;
+    icon.customShader = buildHint ? buildShader : cgs.media.dynamiteHintShader;
     if(icon.customShader <= 0) return qtrue;
     wave = (float)sin((double)cg.time / 250.0);
     alpha = (int)floor((.8 - wave * .5) * 130 + .5);
@@ -362,7 +431,7 @@ void CG_NitmodDrawArtilleryHint(void) {
     nitmodHudAnchor_t previous;
     vec4_t color = {1, 1, 1, 0};
     artilleryPeriod = 0;
-    if(!NITMOD_UsesOriginalProtocol() || !cg_artilleryHints.integer || !period || !cg.time || artilleryShader <= 0) return;
+    if(!NITMOD_UsesNitmodHud() || !cg_artilleryHints.integer || !period || !cg.time || artilleryShader <= 0) return;
     color[3] = ((float)sin((double)cg.time / period) * .5f + .5f) * .5f;
     previous = CG_NitmodHudAnchor(NITMOD_HUD_CENTER);
     trap_R_SetColor(color);

@@ -117,20 +117,28 @@ static const char *CG_NitmodSelfObituary(int cause) {
 qboolean CG_NitmodFormatObituary(int cause, const char *target, const char *attacker,
     qboolean self, qboolean teamkill, char *out, int size) {
     const nitmodObituary_t *entry;
-    const char *single;
+    const char *single, *message, *suffix;
+    int weapon;
     if(!out || size <= 0) return qfalse;
     out[0] = 0;
     if(!target || cause == 57) return qfalse;
     entry = &originalObituaries[cause >= 0 && cause < sizeof(originalObituaries) / sizeof(originalObituaries[0]) ? cause : 0];
+    message = entry->message;
+    suffix = entry->suffix;
+    weapon = CG_NitmodObituaryWeapon(cause);
+    if(weapon > WP_NONE && weapon < WP_NUM_WEAPONS) {
+        if(cg_weapons[weapon].killMessage[0]) message = cg_weapons[weapon].killMessage;
+        if(cg_weapons[weapon].killMessage2[0]) suffix = cg_weapons[weapon].killMessage2;
+    }
     single = self ? CG_NitmodSelfObituary(cause) : NULL;
     if(single) Com_sprintf(out, size, "%s %s", target, single);
     else if(!attacker) Com_sprintf(out, size, "%s %s", target,
-        entry->message && entry->suffix && !*entry->suffix ? entry->message : "^7died");
-    else if(!entry->message || !entry->suffix)
+        message && suffix && !*suffix ? message : "^7died");
+    else if(!message || !suffix)
         Com_sprintf(out, size, "%s ^7died", target);
     else Com_sprintf(out, size, "%s%s %s %s%s",
         teamkill && !self && cause != 23 ? "^1TEAM KILL^7:" : "",
-        target, entry->message, attacker, entry->suffix);
+        target, message, attacker, suffix);
     return qtrue;
 }
 

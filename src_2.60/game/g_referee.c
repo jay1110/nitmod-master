@@ -372,21 +372,19 @@ void G_refMute_cmd(gentity_t *ent, qboolean mute)
 		return;
 	}
 
-	if(player->client->sess.muted == mute) {
+	if(G_NITMOD_ClientMuted(player) == mute) {
 		G_refPrintf(ent, "\"%s^*\" %s\n", player->client->pers.netname, mute ? "is already muted!" : "is not muted!" );
 		return;
 	}
 
 	if( mute ) {
 		CPx(pid, "print \"^5You've been muted\n\"" );
-		player->client->sess.muted = qtrue;
+		G_NITMOD_SetClientMute(player, qtrue, 0);
 		G_Printf( "\"%s^*\" has been muted\n",  player->client->pers.netname );
-		ClientUserinfoChanged( pid );
 	} else {
 		CPx(pid, "print \"^5You've been unmuted\n\"" );
-		player->client->sess.muted = qfalse;
+		G_NITMOD_SetClientMute(player, qfalse, 0);
 		G_Printf( "\"%s^*\" has been unmuted\n",  player->client->pers.netname );
-		ClientUserinfoChanged( pid );
 	}
 }
 

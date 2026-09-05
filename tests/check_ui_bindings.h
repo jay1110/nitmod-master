@@ -1,6 +1,16 @@
 /* Full UI binding lifecycle, with engine-owned key state. */
 extern qboolean Item_Bind_HandleKey(itemDef_t *, int, qboolean);
 extern int BindingIDFromName(const char *);
+extern void Item_Bind_Paint(itemDef_t *);
+static char bindingPaint[128];
+static void BindingKeyName(int key, char *out, int size) {
+    Com_sprintf(out, size, "key%d", key);
+}
+static const char *BindingTranslate(const char *text) { return text; }
+static void BindingPaint(float x, float y, float scale, vec4_t color,
+    const char *text, float adjust, int limit, int style) {
+    Q_strncpyz(bindingPaint, text, sizeof(bindingPaint));
+}
 static char bindingKeys[256][64];
 static int bindingErrors, bindingRestarts;
 static void BindingSet(int key, const char *command) {
@@ -73,6 +83,18 @@ static int CheckBindings(displayContextDef_t *dc) {
            strcmp(bindingKeys['z'], item.cvar)) ++errors;
     }
     if(BindingIDFromName(NULL) != -1 || BindingIDFromName("") != -1) ++errors;
+    dc->keynumToStringBuf = BindingKeyName;
+    dc->translateString = BindingTranslate;
+    dc->drawText = BindingPaint;
+    item.window.flags = WINDOW_HASFOCUS | WINDOW_FOCUSPULSE;
+    memset(bindingKeys, 0, sizeof(bindingKeys));
+    BindingSet('a', item.cvar); BindingSet('b', item.cvar);
+    Item_Bind_Paint(&item);
+    if(strcmp(bindingPaint, "KEY97 or KEY98")) ++errors;
+    item.cvar = NULL;
+    Item_Bind_Paint(&item);
+    if(strcmp(bindingPaint, "(???" ")")) ++errors;
+    Item_Bind_Paint(NULL);
     memset(bindingKeys, 0, sizeof(bindingKeys)); Controls_GetConfig();
     *dc = saved;
     if(errors || bindingErrors) fprintf(stderr, "binding checks: %d state, %d callbacks\n", errors, bindingErrors);

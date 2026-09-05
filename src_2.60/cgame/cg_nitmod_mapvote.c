@@ -9,13 +9,13 @@ qboolean CG_NitmodMapVoteEnabled(void) {
         ((int)cgs.gametype == 8 && (state->dmOptions & 0x4000)));
 }
 
-/* Preserve native internal page IDs: 0 primary, 1 team, 2 player.
- * Page 3 supplies the separate scoreboard when the primary page is voting. */
+/* Original Nitmod page IDs: 0 map vote, 1 scoreboard, 2 team/campaign,
+ * 3 player statistics.  Without map voting the cycle starts at 1. */
 int CG_NitmodNextDebriefPage(int page) {
     if(CG_NitmodMapVoteEnabled()) {
-        switch(page) { case 0: return 3; case 3: return 1; case 1: return 2; default: return 0; }
+        return page >= 0 && page < 3 ? page + 1 : 0;
     }
-    return page >= 0 && page < 2 ? page + 1 : 0;
+    return page >= 1 && page < 3 ? page + 1 : 1;
 }
 
 /* Original # arguments 19/20: zero-based map index and XP-reset cycle size. */
@@ -52,6 +52,17 @@ static panel_button_t mapVoteScrollbar = {
     CG_Debriefing_Scrollbar_KeyDown, CG_Debriefing_Scrollbar_KeyUp,
     CG_Debriefing_Scrollbar_Draw, NULL
 };
+
+static qboolean CG_NitmodMapVoteNameSafe( const char *name ) {
+	int i;
+	if( !name || !*name ) return qfalse;
+	for( i = 0; name[i]; ++i ) {
+		unsigned char c = (unsigned char)name[i];
+		if( i >= MAX_QPATH - 1 || !( Q_isalphanumeric(c) || c == '_' || c == '-' || c == '.' ) )
+			return qfalse;
+	}
+	return qtrue;
+}
 
 void CG_NitmodMapVoteScrollRect(rectDef_t *rect) {
     if(!rect) return;
@@ -136,6 +147,7 @@ void CG_NitmodMapVoteRequest( void ) {
 void CG_NitmodParseMapVoteList( void ) {
 	int argc = trap_Argc();
 	int records;
+	int multi;
 	int i;
 
 	cgs.nitmodMapVoteCount = 0;
@@ -164,17 +176,30 @@ void CG_NitmodParseMapVoteList( void ) {
 			records, NITMOD_MAX_MAPVOTE_MAPS );
 		records = NITMOD_MAX_MAPVOTE_MAPS;
 	}
-	cgs.nitmodMapVoteMulti = atoi( CG_Argv(1) ) != 0;
+	if( !NITMOD_ParseProtocolInteger(CG_Argv(1), &multi) || multi > 1 ) {
+		CG_Printf( "^3Nitmod: malformed immaplist mode\n" );
+		return;
+	}
+	cgs.nitmodMapVoteMulti = multi != 0;
 	for( i = 0; i < records; ++i ) {
 		arenaInfo_t arena;
 		int arg = 2 + i * 4;
+		int id, lastPlayed, timesPlayed;
 
 		memset( &arena, 0, sizeof(arena) );
+		if( !CG_NitmodMapVoteNameSafe(CG_Argv(arg)) ||
+			!NITMOD_ParseProtocolInteger(CG_Argv(arg + 1), &id) ||
+			!NITMOD_ParseProtocolSigned(CG_Argv(arg + 2), &lastPlayed) || lastPlayed < -1 ||
+			!NITMOD_ParseProtocolInteger(CG_Argv(arg + 3), &timesPlayed) ) {
+			CG_Printf( "^3Nitmod: malformed immaplist record %d\n", i + 1 );
+			CG_NitmodMapVoteReset();
+			return;
+		}
 		Q_strncpyz( cgs.nitmodMapVoteNames[i], CG_Argv(arg),
 			sizeof(cgs.nitmodMapVoteNames[i]) );
-		cgs.nitmodMapVoteIds[i] = atoi( CG_Argv(arg + 1) );
-		cgs.nitmodMapVoteLastPlayed[i] = atoi( CG_Argv(arg + 2) );
-		cgs.nitmodMapVoteTimesPlayed[i] = atoi( CG_Argv(arg + 3) );
+		cgs.nitmodMapVoteIds[i] = id;
+		cgs.nitmodMapVoteLastPlayed[i] = lastPlayed;
+		cgs.nitmodMapVoteTimesPlayed[i] = timesPlayed;
 		if( CG_FindArenaInfo( va( "scripts/%s.arena",
 			cgs.nitmodMapVoteNames[i] ), cgs.nitmodMapVoteNames[i], &arena ) &&
 			arena.longname[0] ) {
@@ -195,15 +220,19 @@ void CG_NitmodParseMapVoteList( void ) {
 /* Original CG_parseMapVoteTally 0x454e0: one vote total per listed map. */
 void CG_NitmodParseMapVoteTally( void ) {
 	int count = trap_Argc() - 1;
+	int votes[NITMOD_MAX_MAPVOTE_MAPS];
 	int i;
 
 	if( count < 0 ) count = 0;
 	if( count > cgs.nitmodMapVoteCount ) count = cgs.nitmodMapVoteCount;
 	if( count > NITMOD_MAX_MAPVOTE_MAPS ) count = NITMOD_MAX_MAPVOTE_MAPS;
 	for( i = 0; i < count; ++i ) {
-		cgs.nitmodMapVoteVotes[i] = atoi( CG_Argv(i + 1) );
-		if( cgs.nitmodMapVoteVotes[i] < 0 ) cgs.nitmodMapVoteVotes[i] = 0;
+		if( !NITMOD_ParseProtocolInteger(CG_Argv(i + 1), &votes[i]) ) {
+			CG_Printf( "^3Nitmod: malformed imvotetally record %d\n", i + 1 );
+			return;
+		}
 	}
+	for( i = 0; i < count; ++i ) cgs.nitmodMapVoteVotes[i] = votes[i];
 }
 
 void CG_NitmodMapVoteList_f( void ) {

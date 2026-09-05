@@ -33,6 +33,7 @@ def main() -> None:
     game_client = read(root, "game/g_client.c")
     bg_misc = read(root, "game/bg_misc.c")
     bg_pmove = read(root, "game/bg_pmove.c")
+    game_public = read(root, "game/bg_public.h")
     client = read(root, "cgame/cg_nitmod_config.c")
     client_helpers = read(root, "cgame/cg_nitmod.c")
     dispatch = read(root, "cgame/cg_servercmds.c")
@@ -165,8 +166,11 @@ def main() -> None:
             r'void NITMOD_SendChunkedPrint\(.*?!text \|\| !text\[0\].*?character == \'\\n\'.*?character == \'"\'.*?character == \'\\\\\'.*?trap_SendServerCommand',
             "chunked Nitmod print delivery no longer splits and escapes server commands")
     require(server,
-            r'void NITMOD_PlaySoundEvent\(.*?!source \|\| soundIndex <= 0.*?G_Sound\( source, soundIndex \)',
-            "Nitmod spatial sound events no longer use ET's typed temporary-sound primitive")
+            r'void NITMOD_PlaySoundEvent\(.*?!source \|\| soundIndex <= 0.*?G_TempEntity\( source->r\.currentOrigin, EV_NITMOD_SOUND \).*?event->s\.eventParm = soundIndex',
+            "Nitmod spatial sound events no longer preserve the private event/index contract")
+    require(game_public,
+            r'Original Nitmod transports this as 100.*?EV_NITMOD_SOUND',
+            "reconstructed spatial sound event is no longer separated from the original wire ID")
     require(server,
             r'void nitmod_Sound_Global\(.*?G_TempEntity\( vec3_origin, EV_GLOBAL_SOUND \).*?event->s\.eventParm = soundIndex.*?SVF_BROADCAST',
             "Nitmod global sounds no longer use the recovered broadcast event layout")
@@ -212,8 +216,9 @@ def main() -> None:
     require(game_weapon,
             r'usedSyringe && g_gamestate\.integer == GS_PLAYING\s*\)\s*\{\s*ent->client->sess\.aWeaponStats\[WS_SYRINGE\]\.hits\+\+',
             "syringe statistics no longer count only successful revives")
-    if "NITMOD_SendHitSound(" in game_combat:
-        raise AssertionError("generic damage must not emit the unported Sniperwar/private hit events")
+    require(game_combat,
+            r'G_NITMOD_ApplySniperWarHeadshot\(.*?g_war", 0 \) != 2.*?mod != MOD_K43_SCOPE && mod != MOD_GARAND_SCOPE.*?NITMOD_SendHitSound\( attacker->s.number, NITMOD_HIT_SOUND_HEAD \);',
+            "head-hit feedback must remain confined to the typed scoped sniper-war branch")
     require(game_combat,
             r'if\( self->client->ps.pm_type == PM_DEAD \|\| g_gamestate.integer == GS_INTERMISSION \) \{\s*return;\s*\}.*?self->client->ps.pm_type = PM_DEAD;.*?NITMOD_UpdateKillSpree\( self, attacker \)',
             "kill-spree update must follow the duplicate-death/intermission guard")
@@ -246,8 +251,11 @@ def main() -> None:
     require(players, r'if\( newInfo.skill\[i\] > 0 && newInfo.skill\[i\] < NUM_SKILL_LEVELS \).*?cg_skillRewards\[ i \]\[ newInfo.skill\[i\]-1 \]',
             "skill rewards must check both table bounds")
     commands = read(root, "cgame/cg_servercmds.c")
-    if commands.count('if(ci->skill[i] >= 0 && ci->skill[i] < NUM_SKILL_LEVELS - 1)') != 2:
+    if commands.count('int threshold = NITMOD_ClientSkillNextThreshold(i, level);') != 2:
         raise AssertionError("both XP displays must bound next-threshold indices")
+    require(read(root, "cgame/cg_nitmod_config.c"),
+            r'level < NUM_SKILL_LEVELS - 1 \? skillLevels\[level \+ 1\] : -1',
+            "native next-threshold lookup must retain its index bound")
     require(missile, r'qboolean G_ExplodeSatchels\(.*?G_NITMOD_ExplodeSatchels\( ent, G_ExplodeMissile \) \? qtrue : qfalse;',
             "satchel detonation must use the mutation-safe registry adapter")
     require(missile, r'void G_FadeItems\(.*?MOD_SATCHEL.*?G_NITMOD_FadeSatchels\( ent, G_FreeEntity \);.*?MOD_LANDMINE.*?G_NITMOD_FadeLandmines\( ent, NITMOD_FreeFadedLandmine \);',

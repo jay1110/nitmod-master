@@ -1,5 +1,7 @@
 #include "cg_local.h"
+#include "cg_nitmod_hud.h"
 #include "cg_nitmod_config.h"
+#include <limits.h>
 
 #define SOUNDEVENT( sound ) trap_S_StartLocalSound( sound, CHAN_LOCAL_SOUND )
 
@@ -1282,6 +1284,19 @@ void CG_LimboPanel_RenderClassButton( panel_button_t* button ) {
 	int i;
 	float s0, t0, s1, t1;
 	float x, y, w, h;
+	int level, skill;
+	qhandle_t wedgeOn, wedgeOff;
+	if(!button || cg.clientNum < 0 || cg.clientNum >= MAX_CLIENTS ||
+		button->data[1] < PC_SOLDIER || button->data[1] > PC_COVERTOPS) return;
+	skill = BG_ClassSkillForClass(button->data[1]);
+	level = NITMOD_UsesOriginalProtocol() ? cgs.clientinfo[cg.clientNum].nitmodSkillLevels[skill] :
+		cgs.clientinfo[cg.clientNum].skill[skill];
+	wedgeOn = cgs.media.limboClassButton2Wedge_on;
+	wedgeOff = cgs.media.limboClassButton2Wedge_off;
+	if(NITMOD_UsesOriginalProtocol() && level == 5) {
+		if(cgs.media.limboClassButtonLevel5_on > 0) wedgeOn = cgs.media.limboClassButtonLevel5_on;
+		if(cgs.media.limboClassButtonLevel5_off > 0) wedgeOff = cgs.media.limboClassButtonLevel5_off;
+	}
 
 	CG_DrawPic( button->rect.x, button->rect.y, button->rect.w, button->rect.h, cgs.media.limboClassButton2Back_off );
 
@@ -1296,7 +1311,7 @@ void CG_LimboPanel_RenderClassButton( panel_button_t* button ) {
 	}
 
 	for( i = 0; i < 4; i++ ) {
-		if( cgs.clientinfo[cg.clientNum].skill[BG_ClassSkillForClass(button->data[1])] <= i ) {
+		if( level <= i ) {
 			break;
 		}
 
@@ -1323,16 +1338,16 @@ void CG_LimboPanel_RenderClassButton( panel_button_t* button ) {
 		CG_AdjustFrom640( &x, &y, &w, &h );
 
 		if( CG_LimboPanel_GetTeam() == TEAM_SPECTATOR ) {
-			trap_R_DrawStretchPic( x, y, w, h, s0, t0, s1, t1, cgs.media.limboClassButton2Wedge_off );
+			trap_R_DrawStretchPic( x, y, w, h, s0, t0, s1, t1, wedgeOff );
 		} else {
 			if( button->data[1] == CG_LimboPanel_GetClass() ) {
-				trap_R_DrawStretchPic( x, y, w, h, s0, t0, s1, t1, cgs.media.limboClassButton2Wedge_on );
+				trap_R_DrawStretchPic( x, y, w, h, s0, t0, s1, t1, wedgeOn );
 			} else if( BG_CursorInRect( &button->rect ) ) {
 				trap_R_SetColor( clr3 );
-				trap_R_DrawStretchPic( x, y, w, h, s0, t0, s1, t1, cgs.media.limboClassButton2Wedge_on );
+				trap_R_DrawStretchPic( x, y, w, h, s0, t0, s1, t1, wedgeOn );
 				trap_R_SetColor( NULL );
 			} else {
-				trap_R_DrawStretchPic( x, y, w, h, s0, t0, s1, t1, cgs.media.limboClassButton2Wedge_off );
+				trap_R_DrawStretchPic( x, y, w, h, s0, t0, s1, t1, wedgeOff );
 			}
 		}
 	}
@@ -1351,20 +1366,29 @@ void CG_LimboPanel_RenderClassButton( panel_button_t* button ) {
 }
 
 int CG_LimboPanel_GetMaxObjectives( void ) {
+	int count;
 	if( CG_LimboPanel_GetTeam() == TEAM_SPECTATOR ) {
 		return 0;
 	}
 
-	return atoi( Info_ValueForKey( CG_ConfigString( CS_MULTI_INFO ), "numobjectives" ) );
+	if(!NITMOD_ParseProtocolInteger(Info_ValueForKey(CG_ConfigString(CS_MULTI_INFO), "numobjectives"), &count) || count < 0) return 0;
+	return count > MAX_OBJECTIVES ? MAX_OBJECTIVES : count;
+}
+
+static void CG_LimboPanel_ValidateObjective(int max) {
+	if(cgs.ccSelectedObjective < 0 || cgs.ccSelectedObjective > max)
+		cgs.ccSelectedObjective = max; /* overview, never an array index */
 }
 
 qboolean CG_LimboPanel_ObjectiveText_KeyDown( panel_button_t* button, int key ) {
 	int max;
+	if(!button) return qfalse;
 
 	if( key == K_MOUSE1 ) {
 		SOUND_SELECT;
 
 		max = CG_LimboPanel_GetMaxObjectives();
+		CG_LimboPanel_ValidateObjective(max);
 
 		if( button->data[7] == 0 ) {
 			if( ++cgs.ccSelectedObjective > max ) {
@@ -1390,6 +1414,8 @@ void CG_LimboPanel_RenderObjectiveText( panel_button_t* button ) {
 	float y;
 	char buffer[1024];
 	int status = 0;
+	if(!button || !button->font || !button->font->font) return;
+	CG_LimboPanel_ValidateObjective(CG_LimboPanel_GetMaxObjectives());
 
 	if( cg_gameType.integer == GT_WOLF_LMS ) {
 		//cs = CG_ConfigString( CS_MULTI_MAPDESC ); 
@@ -2020,13 +2046,21 @@ void CG_LimboPanel_RenderCounterNumber( float x, float y, float w, float h, floa
 
 int CG_LimboPanel_RenderCounter_ValueForButton( panel_button_t* button ) {
 	int i, count = 0;
+	int clientLimit = MAX_CLIENTS;
+
+	if(!button) return 0;
+	if(NITMOD_UsesOriginalProtocol()) {
+		clientLimit = cgs.maxclients;
+		if(clientLimit < 0) clientLimit = 0;
+		if(clientLimit > MAX_CLIENTS) clientLimit = MAX_CLIENTS;
+	}
 
 	switch( button->data[0] ) {
 		case 0: // class counts
 			if( CG_LimboPanel_GetTeam() == TEAM_SPECTATOR || CG_LimboPanel_GetRealTeam() != CG_LimboPanel_GetTeam()) {
 				return 0; // dont give class counts unless we are on that team (or spec)
 			}
-			for( i = 0; i < MAX_CLIENTS; i++ ) {
+			for( i = 0; i < clientLimit; i++ ) {
 				if( !cgs.clientinfo[i].infoValid ) {
 					continue;
 				}
@@ -2038,7 +2072,8 @@ int CG_LimboPanel_RenderCounter_ValueForButton( panel_button_t* button ) {
 			}
 			return count;
 		case 1: // team counts
-			for( i = 0; i < MAX_CLIENTS; i++ ) {
+			if(button->data[1] < 0 || button->data[1] >= 3) return 0;
+			for( i = 0; i < clientLimit; i++ ) {
 				if( !cgs.clientinfo[i].infoValid ) {
 					continue;
 				}
@@ -2055,6 +2090,19 @@ int CG_LimboPanel_RenderCounter_ValueForButton( panel_button_t* button ) {
 		case 3: // respawn time
 			return CG_CalculateReinfTime_Float( qtrue );
 		case 4: // skills
+			if(cg.clientNum < 0 || cg.clientNum >= MAX_CLIENTS) return 0;
+			if(NITMOD_UsesOriginalProtocol()) {
+				int skill;
+				if(button->data[1] == 0) skill = SK_BATTLE_SENSE;
+				else if(button->data[1] == 1) skill = SK_LIGHT_WEAPONS;
+				else if(button->data[1] == 2) {
+					int cls = CG_LimboPanel_GetClass();
+					if(cls < PC_SOLDIER || cls > PC_COVERTOPS) return 0;
+					skill = BG_ClassSkillForClass(cls);
+				} else return 0;
+				count = cgs.clientinfo[cg.clientNum].nitmodSkillLevels[skill];
+				return count >= 0 && count <= 5 ? (1 << count) - 1 : 0;
+			}
 			switch( button->data[1] ) {
 				case 0:
 					count = cgs.clientinfo[cg.clientNum].skill[SK_BATTLE_SENSE];
@@ -2087,7 +2135,11 @@ int CG_LimboPanel_RenderCounter_ValueForButton( panel_button_t* button ) {
 				case 1:
 					return cgs.ccWeaponHits;
 				case 2:
-					return cgs.ccWeaponShots != 0 ? 100 * cgs.ccWeaponHits / cgs.ccWeaponShots : 0;
+					if(cgs.ccWeaponShots > 0 && cgs.ccWeaponHits >= 0) {
+						double percent = 100.0 * cgs.ccWeaponHits / cgs.ccWeaponShots;
+						return percent >= INT_MAX ? INT_MAX : (int)percent;
+					}
+					return 0;
 			}
 	}
 
@@ -2095,7 +2147,7 @@ int CG_LimboPanel_RenderCounter_ValueForButton( panel_button_t* button ) {
 }
 
 int CG_LimboPanel_RenderCounter_RollTimeForButton( panel_button_t* button ) {
-	float diff;
+	double diff;
 	switch( button->data[0] ) {
 		case 0: // class counts
 		case 1: // team counts
@@ -2105,8 +2157,10 @@ int CG_LimboPanel_RenderCounter_RollTimeForButton( panel_button_t* button ) {
 			return 1000.f;
 
 		case 6: // stats
-			diff = Q_fabs( button->data[3] - CG_LimboPanel_RenderCounter_ValueForButton( button ));
-			if( diff < 5 ) {
+			diff = (double)button->data[3] - CG_LimboPanel_RenderCounter_ValueForButton( button );
+			if( diff < 0 ) diff = -diff;
+			// A settled counter still asks for its roll time every frame.
+			if( diff > 0 && diff < 5 ) {
 				return 200.f / diff;
 			} else {
 				return 50.f;
@@ -2114,8 +2168,9 @@ int CG_LimboPanel_RenderCounter_RollTimeForButton( panel_button_t* button ) {
 
 		case 5: // clock
 		case 3: // respawn time
-		case 2: // xp
 			return 50.f;
+		case 2: // xp: original Nitmod uses a faster roller than ET 2.60.
+			return NITMOD_UsesOriginalProtocol() ? 15 : 50;
 	}
 
 	return 1000.f;
@@ -2142,7 +2197,7 @@ int CG_LimboPanel_RenderCounter_NumRollers( panel_button_t* button ) {
 			if( cg_gameType.integer == GT_WOLF_LMS /*|| CG_LimboPanel_GetTeam() == TEAM_SPECTATOR*/ ) {
 				return 0;
 			}
-			return 4;
+			return NITMOD_UsesOriginalProtocol() ? 5 : 4;
 
 		case 6: // stats
 			switch( button->data[1] ) {
@@ -2256,7 +2311,7 @@ void CG_LimboPanelRenderText_SkillsText( panel_button_t* button ) {
 }
 
 #define MAX_ROLLERS 8
-#define COUNTER_ROLLTOTAL (cg.time - button->data[4])
+#define COUNTER_ROLLTOTAL ((double)cg.time - button->data[4])
 // Gordon: this function is mental, i love it :)
 void CG_LimboPanel_RenderCounter( panel_button_t* button ) {
 	float x, w;
@@ -2269,11 +2324,17 @@ void CG_LimboPanel_RenderCounter( panel_button_t* button ) {
 	float counter_rolltime =	CG_LimboPanel_RenderCounter_RollTimeForButton	( button );
 	int num =					CG_LimboPanel_RenderCounter_NumRollers			( button );
 	int value =					CG_LimboPanel_RenderCounter_ValueForButton		( button );
+	if( num <= 0 ) return;
 	if( num > MAX_ROLLERS ) {
 		num = MAX_ROLLERS;
 	}
 
 	CG_LimboPanel_RenderCounter_GetShaders( button, &shaderBack, &shaderRoll, &numimages );
+	if(COUNTER_ROLLTOTAL < 0) {
+		// Rewind/map time reset: settle instead of extrapolating backwards.
+		button->data[3] = button->data[5] = value;
+		button->data[4] = cg.time;
+	}
 
 	if( COUNTER_ROLLTOTAL < counter_rolltime ) {
 		// we're rolling
@@ -2301,10 +2362,10 @@ void CG_LimboPanel_RenderCounter( panel_button_t* button ) {
 		if( button->data[3] != button->data[5] ) {
 			button->data[3] = button->data[5];
 		} else if( value != button->data[3] ) {
-			int maxchange = abs( value - button->data[3] );
-			if( maxchange > CG_LimboPanel_RenderCounter_MaxChangeForButton( button ) ) {
-				maxchange = CG_LimboPanel_RenderCounter_MaxChangeForButton( button );
-			}
+			double distance = (double)value - button->data[3];
+			int maxchange = CG_LimboPanel_RenderCounter_MaxChangeForButton( button );
+			if(distance < 0) distance = -distance;
+			if(distance < maxchange) maxchange = (int)distance;
 
 			if( value > button->data[3] ) {
 				if( CG_LimboPanel_RenderCounter_CountsUp( button ) ) {
@@ -2446,9 +2507,23 @@ void CG_LimboPanel_Init( void ) {
 	BG_PanelButtonsSetup( limboPanelButtons );
 }
 
+void CG_LimboPanel_UpdateCursor(void) {
+	cgDC.cursorx = cgs.cursorX;
+	cgDC.cursory = cgs.cursorY;
+	if(NITMOD_UsesNitmodHud() && cgs.glconfig.vidHeight > 0 &&
+	   (double)cgs.glconfig.vidWidth * 480 > (double)cgs.glconfig.vidHeight * 640) {
+		/* Input uses the full-screen 640-wide space; drawing is centered
+		 * at height/480 scale. Keep margins outside the panel hit boxes. */
+		cgDC.cursorx = 320.f + (cgs.cursorX - 320.f) *
+			(cgs.glconfig.vidWidth * 480.f / (cgs.glconfig.vidHeight * 640.f));
+	}
+}
+
 qboolean CG_LimboPanel_Draw( void ) {
 	static panel_button_t* lastHighlight;
 	panel_button_t* hilight;
+	nitmodHudAnchor_t previous = CG_NitmodHudAnchor(NITMOD_HUD_CENTER);
+	CG_LimboPanel_UpdateCursor();
 //	panel_button_t** buttons = limboPanelButtons;
 
 	hilight = BG_PanelButtonsGetHighlightButton( limboPanelButtons );
@@ -2466,6 +2541,7 @@ qboolean CG_LimboPanel_Draw( void ) {
 
 	trap_R_SetColor( NULL );
 	CG_DrawPic( cgDC.cursorx, cgDC.cursory, 32, 32, cgs.media.cursorIcon );
+	CG_NitmodHudAnchor(previous);
 
 	if( cgs.ccRequestedObjective != -1 ) {
 		if( cg.time - cgs.ccLastObjectiveRequestTime > 1000 ) {
@@ -2488,6 +2564,7 @@ qboolean CG_LimboPanel_Draw( void ) {
 
 void CG_LimboPanel_KeyHandling( int key, qboolean down ) {
 	int b1, b2;
+	CG_LimboPanel_UpdateCursor();
 	if( BG_PanelButtonsKeyEvent( key, down, limboPanelButtons ) ) {
 		return;
 	}
@@ -2668,14 +2745,14 @@ int CG_LimboPanel_WeaponCount_ForSlot( int number ) {
 		}
 		return cnt;
 	} else {
-		if( cgs.clientinfo[cg.clientNum].skill[SK_HEAVY_WEAPONS] >= 4 && CG_LimboPanel_GetClass() == PC_SOLDIER ) {
-			if( cgs.clientinfo[cg.clientNum].skill[SK_LIGHT_WEAPONS] >= 4 ) {
+		if( NITMOD_ClientSkillUnlocked(cg.clientNum, SK_HEAVY_WEAPONS, 4) && CG_LimboPanel_GetClass() == PC_SOLDIER ) {
+			if( NITMOD_ClientSkillUnlocked(cg.clientNum, SK_LIGHT_WEAPONS, 4) ) {
 				return 3;
 			} else {
 				return 2;
 			}
 		} else {
-			if( cgs.clientinfo[cg.clientNum].skill[SK_LIGHT_WEAPONS] >= 4 ) {
+			if( NITMOD_ClientSkillUnlocked(cg.clientNum, SK_LIGHT_WEAPONS, 4) ) {
 				return 2;
 			} else {
 				return 1;
@@ -2730,8 +2807,8 @@ weapon_t CG_LimboPanel_GetWeaponForNumber( int number, int slot, qboolean ignore
 		return classInfo->classWeapons[ number ];
 	} else {
 		if(number >= CG_LimboPanel_WeaponCount_ForSlot(0)) return WP_NONE;
-		if( cgs.clientinfo[cg.clientNum].skill[SK_HEAVY_WEAPONS] >= 4 && CG_LimboPanel_GetClass() == PC_SOLDIER ) {
-			if( cgs.clientinfo[cg.clientNum].skill[SK_LIGHT_WEAPONS] >= 4 ) {
+		if( NITMOD_ClientSkillUnlocked(cg.clientNum, SK_HEAVY_WEAPONS, 4) && CG_LimboPanel_GetClass() == PC_SOLDIER ) {
+			if( NITMOD_ClientSkillUnlocked(cg.clientNum, SK_LIGHT_WEAPONS, 4) ) {
 				if( number == 2 ) {
 					return CG_LimboPanel_GetTeam() == TEAM_AXIS ? WP_MP40 : WP_THOMPSON;
 				}
@@ -2742,7 +2819,7 @@ weapon_t CG_LimboPanel_GetWeaponForNumber( int number, int slot, qboolean ignore
 			}
 		}
 
-		if( cgs.clientinfo[cg.clientNum].skill[SK_LIGHT_WEAPONS] >= 4 ) {
+		if( NITMOD_ClientSkillUnlocked(cg.clientNum, SK_LIGHT_WEAPONS, 4) ) {
 			if( number >= 1 ) {
 				if( CG_LimboPanel_GetClass() == PC_COVERTOPS ) {
 					return CG_LimboPanel_GetTeam() == TEAM_AXIS ? WP_AKIMBO_SILENCEDLUGER : WP_AKIMBO_SILENCEDCOLT;
@@ -2802,8 +2879,8 @@ int CG_LimboPanel_GetSelectedWeaponNum( void ) {
 }
 
 void CG_LimboPanel_RequestWeaponStats( void ) {
-	extWeaponStats_t weapStat = CG_LimboPanel_GetSelectedWeaponStat();
-	if(weapStat == WS_MAX) {
+	int weapStat = NITMOD_WeaponStatForWeapon(CG_LimboPanel_GetSelectedWeapon());
+	if(weapStat < 0) {
 		// Bleh?
 		return;
 	}
@@ -2813,6 +2890,7 @@ void CG_LimboPanel_RequestWeaponStats( void ) {
 
 void CG_LimboPanel_RequestObjective( void ) {
 	int max = CG_LimboPanel_GetMaxObjectives();
+	CG_LimboPanel_ValidateObjective(max);
 
 	if( cgs.ccSelectedObjective != max && CG_LimboPanel_GetTeam() != TEAM_SPECTATOR ) {
 		trap_SendClientCommand( va("obj %i", cgs.ccSelectedObjective) );

@@ -41,17 +41,9 @@ static int		defineBits[NUM_ANIM_CONDITIONS][MAX_ANIM_DEFINES][2];
 static scriptAnimMoveTypes_t	parseMovetype;
 static int	parseEvent;
 
-/* Animation-only vocabulary, not snapshot weapon IDs. Native weapons retain
- * their condition bits. Additional original-Nitmod conditions have distinct
- * bits until their gameplay identities are reconstructed. Never alias them
- * onto native weapons or enlarge the network weapon enum just to parse assets. */
-enum {
-	NITMOD_ANIM_POISON_SYRINGE = WP_NUM_WEAPONS,
-	NITMOD_ANIM_BOMB,
-	NITMOD_ANIM_POISON_BOMB,
-	NITMOD_ANIM_POISON_LANDMINE,
-	NITMOD_ANIM_WEAPON_COUNT
-};
+/* Every supported weapon now has an independent typed inventory and animation
+ * condition bit. Wire IDs are translated before evaluating these conditions. */
+enum { NITMOD_ANIM_WEAPON_COUNT = WP_NUM_WEAPONS };
 typedef char nitmodAnimWeaponBitsFit[(NITMOD_ANIM_WEAPON_COUNT <= 64) ? 1 : -1];
 animStringItem_t weaponStrings[NITMOD_ANIM_WEAPON_COUNT + 1];
 
@@ -550,13 +542,6 @@ void BG_InitWeaponStrings(void)
 			weaponStrings[i].hash = BG_StringHashValue(weaponStrings[i].string);
 		}
 	}
-	weaponStrings[NITMOD_ANIM_POISON_SYRINGE].string = "Poison Syringe";
-	weaponStrings[NITMOD_ANIM_BOMB].string = "Bomb";
-	weaponStrings[NITMOD_ANIM_POISON_BOMB].string = "Poison Bomb";
-	weaponStrings[NITMOD_ANIM_POISON_LANDMINE].string = "Poison Landmine";
-	for (i = WP_NUM_WEAPONS; i < NITMOD_ANIM_WEAPON_COUNT; ++i) {
-		weaponStrings[i].hash = BG_StringHashValue(weaponStrings[i].string);
-	}
 	/* The last zero entry explicitly terminates BG_IndexForString scans. */
 }
 
@@ -578,7 +563,7 @@ void BG_ParseConditionBits( char **text_pp, animStringItem_t *stringTable, int c
 
 	//indexBits = 0;
 	currentString[0] = '\0';
-	memset( result, 0, sizeof(result) );
+	memset( result, 0, sizeof(int) * 2 );
 	memset( tempBits, 0, sizeof(tempBits) );
 
 	while (!endFlag) {
@@ -771,7 +756,7 @@ static void BG_ParseCommands( char **input, animScriptItem_t *scriptItem, animMo
 				BG_AnimParseError( "BG_ParseCommands: exceeded maximum number of animations (%i)", MAX_ANIMSCRIPT_ANIMCOMMANDS );
 			}
 			command = &scriptItem->commands[scriptItem->numCommands++];
-			memset( command, 0, sizeof(command) );
+			memset( command, 0, sizeof(*command) );
 		}
 
 		command->bodyPart[partIndex] = BG_IndexForString( token, animBodyPartsStr, qtrue );

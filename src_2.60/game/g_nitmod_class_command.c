@@ -1,6 +1,24 @@
 #include "g_local.h"
 #include "g_nitmod_teamcount.h"
 
+/* Original Cmd_ResetSetup_f (tail at ELF 0x66383): any of the three
+ * changed latches publishes userinfo, including a class-only cancellation. */
+void Cmd_ResetSetup_f(gentity_t *ent) {
+    clientSession_t *session;
+    int slot, changed;
+    if(!ent || !ent->client || !level.clients) return;
+    for(slot = 0; slot < MAX_CLIENTS; ++slot) if(ent == &g_entities[slot]) break;
+    if(slot == MAX_CLIENTS || ent->client != &level.clients[slot]) return;
+    session = &ent->client->sess;
+    changed = session->latchPlayerType != session->playerType ||
+        session->latchPlayerWeapon != session->playerWeapon ||
+        session->latchPlayerWeapon2 != session->playerWeapon2;
+    session->latchPlayerType = session->playerType;
+    session->latchPlayerWeapon = session->playerWeapon;
+    session->latchPlayerWeapon2 = session->playerWeapon2;
+    if(changed) ClientUserinfoChanged(slot);
+}
+
 /* Native enum arguments, matching this tree's team/loadout protocol.
  * Original binary weapon IDs are not an alternative numbering scheme. */
 void Cmd_SetClass_f( gentity_t *ent, unsigned int dwCommand, qboolean fValue ) {

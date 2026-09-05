@@ -17,6 +17,7 @@ qboolean NITMOD_BuildFilePath( const char *directory, const char *name,
 	const char *extension, char *path, int pathSize );
 void nitrox_ClampFloat( float *value, float minimum, float maximum );
 void nitrox_ClampInt( int *value, float minimum, float maximum );
+int G_NITMOD_DynamiteTimer( void );
 void nitrox_stripLeadingSpaces( char *text );
 /* Spatial one-shot sound used by recovered Nitmod gameplay call sites. */
 void NITMOD_PlaySoundEvent( gentity_t *source, int soundIndex );
@@ -44,9 +45,16 @@ void nitmod_SendMapEndStats( int clientNum );
 void nitmod_SetSimpleConfig( const nitmodSimpleConfig_t *config );
 void nitmod_SetGameState( const nitmodGameState_t *state );
 void nitmod_RefreshBaseSettings( void );
+void G_NITMOD_SetMapCycleCount( int count );
+int G_NITMOD_MapCycleCount( void );
+qboolean G_NITMOD_MapCycleEnabled( void );
+qboolean G_NITMOD_MapCycleResetsXP( void );
+void G_NITMOD_AdvanceMapCycle( void );
 void nitmod_SimpleCS( int clientNum );
 void nitmod_SendNCS( int clientNum );
 void nitmod_SendTeamScores( int clientNum );
+void nitmod_SendSkillLevels( int clientNum );
+void nitmod_SendClassHealth( int clientNum );
 void nitmod_TeamScores( void );
 /* The final wire field is means-of-death (MOD_*), as in the reference ob
  * command; it is zero when an event has no weapon attribution. */

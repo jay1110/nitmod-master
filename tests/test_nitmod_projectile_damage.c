@@ -101,7 +101,9 @@ static int kickTest, kickQueries;
 static int packTest, packLinks;
 static int inactivityTest, inactivityWarnings, inactivityDrops, inactivityPrivate;
 extern qboolean ClientInactivityTimer(gclient_t *client);
+static int goombaXpFixture;
 static int QDECL EngineCallback(int command, ...) {
+    if(goombaXpFixture && command == PB_STAT_REPORT) return 0;
     if(kickTest && command == G_ENTITIES_IN_BOX) {
         va_list args;
         const float *mins, *maxs;
@@ -1305,14 +1307,14 @@ static int CheckMineTransitions(void) {
     static const int times[] = {0, 1000, 200000};
     gentity_t mine, expected;
     static const int latchValues[] = {-3, 0, 7};
-    int timeIndex, team, contents, latch, errors = 0;
+    int timeIndex, team, contents, latch, poison, errors = 0;
     if(offsetof(entityState_t, onFireStart) != 0xfc || offsetof(gentity_t, s) != 0) ++errors;
     for(timeIndex = 0; timeIndex < 3; ++timeIndex)
     for(team = TEAM_AXIS; team <= TEAM_ALLIES; ++team)
     for(contents = 0; contents < 2; ++contents)
-    for(latch = 0; latch < 3; ++latch) {
+    for(latch = 0; latch < 3; ++latch) for(poison = 0; poison < 2; ++poison) {
         memset(&mine, 0, sizeof(mine));
-        mine.s.weapon = WP_LANDMINE; mine.s.eType = ET_MISSILE;
+        mine.s.weapon = poison ? WP_POISON_MINE : WP_LANDMINE; mine.s.eType = ET_MISSILE;
         mine.s.teamNum = team; mine.s.time = -99;
         mine.s.onFireStart = latchValues[latch];
         mine.r.contents = contents ? CONTENTS_CORPSE : CONTENTS_BODY;
@@ -1324,8 +1326,8 @@ static int CheckMineTransitions(void) {
         triggerLink = &mine; triggerLinks = 0;
         LandMineTrigger(&mine);
         expected = triggerExpected;
-        expected.nextthink = level.time + 100;
-        expected.think = LandminePostThink;
+        expected.nextthink = level.time + (poison ? 1000 : 100);
+        expected.think = poison ? weapon_smokeBombExplode : LandminePostThink;
         expected.s.teamNum += 8;
         expected.s.time = level.time;
         expected.s.onFireStart = 1;
@@ -1336,7 +1338,7 @@ static int CheckMineTransitions(void) {
         expected.think = G_ExplodeMissile;
         if(memcmp(&mine, &expected, sizeof(mine))) ++errors;
     }
-    printf("Landmine trigger/post-trigger: 36 typed transition profiles, %d errors\n", errors);
+    printf("Landmine/poison-mine trigger: 72 typed transition profiles, %d errors\n", errors);
     return errors;
 }
 extern void trigger_heal_think(gentity_t *self);
@@ -1577,6 +1579,9 @@ static int CheckCanisterSpawn(void) {
     vmCvar_t savedKick = g_canisterKick, savedDamage = g_damageweapons;
     const int weapons[] = {WP_GRENADE_LAUNCHER, WP_GRENADE_PINEAPPLE,
         WP_SMOKE_MARKER, WP_SMOKE_BOMB, WP_GPG40};
+    const int direct[] = {0, 0, 400, 0, 250};
+    const int splash[] = {250, 250, 140, 0, 250};
+    const int radius[] = {250, 250, 140, 0, 250};
     vec3_t start = {100, 200, 300}, velocity = {10, 20, 30};
     int oldCount = level.num_entities, oldTime = level.time;
     int w, kick, damage, errors = 0;
@@ -1591,6 +1596,8 @@ static int CheckCanisterSpawn(void) {
         g_canisterKick.integer = kick; g_damageweapons.integer = damage ? 13 : 0;
         client.ps.grenadeTimeLeft = 0;
         missile = fire_grenade(&actor, start, velocity, weapons[w]);
+        if(missile->damage != direct[w] || missile->splashDamage != splash[w] ||
+           missile->splashRadius != radius[w]) ++errors;
         if(missile != &g_entities[MAX_CLIENTS] || missile->parent != &actor ||
            missile->r.ownerNum != 3 || missile->s.teamNum != TEAM_AXIS ||
            !VectorCompare(missile->r.currentOrigin, start) ||
@@ -1607,6 +1614,64 @@ static int CheckCanisterSpawn(void) {
            missile->die != (w < 4 && damage ? G_NITMOD_WeaponDie : NULL)) ++errors;
     }
     G_NITMOD_ConfigureCanisterKick(NULL);
+    /* Bomb factory: independent damage/kick flags and cooked/default fuse. */
+    for(kick = 0; kick < 2; ++kick) for(damage = 0; damage < 2; ++damage)
+    for(w = 0; w < 2; ++w) {
+        memset(&g_entities[MAX_CLIENTS], 0, sizeof(gentity_t));
+        g_canisterKick.integer = kick;
+        g_damageweapons.integer = damage ? 16 : 0;
+        client.ps.grenadeTimeLeft = w ? 700 : 0;
+        missile = fire_grenade(&actor, start, velocity, WP_BOMB);
+        if(strcmp(missile->classname, "bomb") || missile->s.weapon != WP_BOMB ||
+           missile->methodOfDeath != MOD_BOMB || missile->splashMethodOfDeath != MOD_BOMB ||
+           missile->damage != 0 || missile->splashDamage != 350 || missile->splashRadius != 300 ||
+           missile->think != G_ExplodeMissile || missile->nextthink != (w ? 1700 : 3500) ||
+           client.ps.grenadeTimeLeft || missile->parent != &actor ||
+           missile->s.eFlags != (EF_BOUNCE | EF_BOUNCE_HALF) ||
+           missile->takedamage != damage ||
+           missile->die != (damage ? G_NITMOD_WeaponDie : NULL) ||
+           missile->r.contents != (damage || kick ? CONTENTS_CORPSE : 0)) ++errors;
+        if((damage || kick) && (missile->r.mins[0] != -11 || missile->r.mins[1] != -11 ||
+           missile->r.mins[2] != 0 || missile->r.maxs[0] != 11 || missile->r.maxs[1] != 11 ||
+           missile->r.maxs[2] != 10 || !VectorCompare(missile->r.mins, missile->r.absmin) ||
+           !VectorCompare(missile->r.maxs, missile->r.absmax))) ++errors;
+        if(damage && missile->health != 40) ++errors;
+    }
+    if(BG_WeaponForMOD(MOD_BOMB) != WP_BOMB) ++errors;
+    for(kick=0;kick<2;++kick) for(damage=0;damage<2;++damage) {
+        memset(&g_entities[MAX_CLIENTS],0,sizeof(gentity_t));
+        g_canisterKick.integer=kick; g_damageweapons.integer=damage ? 64 : 0;
+        missile=fire_grenade(&actor,start,velocity,WP_POISON_BOMB);
+        if(strcmp(missile->classname,"poison_bomb") || missile->methodOfDeath!=MOD_POISON_GAS ||
+           missile->splashMethodOfDeath!=MOD_POISON_GAS || missile->damage!=20 ||
+           missile->splashDamage!=0 || missile->splashRadius!=250 ||
+           missile->takedamage!=damage || missile->die!=(damage ? G_NITMOD_WeaponDie : NULL) ||
+           missile->r.contents!=(damage || kick ? CONTENTS_CORPSE : 0)) ++errors;
+    }
+    if(BG_WeaponForMOD(MOD_POISON_GAS)!=WP_POISON_BOMB) ++errors;
+    /* All typed identities, not just the four legacy spawn cases above.
+     * Collision setup must leave damage, fuse and ownership untouched. */
+    for(w = WP_NONE; w < WP_NUM_WEAPONS; ++w) for(kick = 0; kick < 2; ++kick) {
+        gentity_t actual, expected;
+        int supported = w == WP_GRENADE_LAUNCHER || w == WP_GRENADE_PINEAPPLE ||
+            w == WP_SMOKE_MARKER || w == WP_SMOKE_BOMB || w == WP_BOMB || w == WP_POISON_BOMB;
+        memset(&actual, 0, sizeof(actual));
+        actual.s.weapon = w; actual.parent = &actor; actual.r.ownerNum = 3;
+        actual.think = NormalThink; actual.nextthink = 12345;
+        actual.health = 72; actual.r.contents = CONTENTS_BODY;
+        VectorSet(actual.r.mins, -1, -2, -3); VectorSet(actual.r.maxs, 1, 2, 3);
+        expected = actual;
+        if(kick && supported) {
+            expected.r.contents = CONTENTS_CORPSE;
+            VectorSet(expected.r.mins, w == WP_BOMB ? -11 : -4, w == WP_BOMB ? -11 : -4, 0);
+            VectorSet(expected.r.maxs, w == WP_BOMB ? 11 : 4, w == WP_BOMB ? 11 : 4, w == WP_BOMB ? 10 : 6);
+            VectorCopy(expected.r.mins, expected.r.absmin);
+            VectorCopy(expected.r.maxs, expected.r.absmax);
+        }
+        g_canisterKick.integer = kick;
+        G_NITMOD_ConfigureCanisterKick(&actual);
+        if(memcmp(&actual, &expected, sizeof(actual))) ++errors;
+    }
     g_entities[MAX_CLIENTS] = saved; level.num_entities = oldCount; level.time = oldTime;
     g_canisterKick = savedKick; g_damageweapons = savedDamage;
     return errors;
@@ -1620,17 +1685,15 @@ static int CheckCanisterKick(void) {
     gentity_t saved = g_entities[MAX_CLIENTS];
     gentity_t *missile = &g_entities[MAX_CLIENTS];
     vmCvar_t savedKick = g_canisterKick, savedOwner = g_canisterKickOwner;
-    const int weapons[] = {WP_GRENADE_LAUNCHER, WP_GRENADE_PINEAPPLE,
-        WP_SMOKE_MARKER, WP_SMOKE_BOMB, WP_PANZERFAUST};
     int w, owner, gate, active, changesOwner, admitted, errors = 0, savedTime = level.time;
     memset(&actor, 0, sizeof(actor)); memset(&client, 0, sizeof(client));
     actor.client = &client; actor.s.number = 3;
     client.sess.sessionTeam = TEAM_AXIS;
     level.time = 1000; kickTest = 1;
-    for(w = 0; w < 5; ++w) for(owner = 0; owner < 2; ++owner)
+    for(w = WP_NONE; w < WP_NUM_WEAPONS; ++w) for(owner = 0; owner < 2; ++owner)
     for(gate = 0; gate < 5; ++gate) for(active = 0; active < 2; ++active) {
         memset(missile, 0, sizeof(*missile));
-        missile->s.eType = ET_MISSILE; missile->s.weapon = weapons[w];
+        missile->s.eType = ET_MISSILE; missile->s.weapon = w;
         missile->s.pos.trBase[2] = 7; missile->nextthink = 4000;
         missile->think = NormalThink;
         missile->r.ownerNum = 9; missile->s.teamNum = TEAM_ALLIES;
@@ -1642,8 +1705,9 @@ static int CheckCanisterKick(void) {
         client.ps.eFlags = gate == 4 ? EF_PRONE : 0;
         kickQueries = 0;
         G_CanisterKick(&actor);
-        admitted = gate == 0 && w < 4;
-        changesOwner = admitted && owner && (w != 2 || !active);
+        admitted = gate == 0 && (w == WP_GRENADE_LAUNCHER || w == WP_GRENADE_PINEAPPLE ||
+            w == WP_SMOKE_MARKER || w == WP_SMOKE_BOMB || w == WP_BOMB || w == WP_POISON_BOMB);
+        changesOwner = admitted && owner && (w != WP_SMOKE_MARKER || !active);
         if(kickQueries != (gate == 0) || missile->nextthink != 4000 || missile->think != NormalThink ||
            missile->s.pos.trType != (admitted ? TR_GRAVITY : TR_STATIONARY) ||
            missile->s.pos.trBase[2] != (admitted ? 37 : 7)) ++errors;
@@ -1773,9 +1837,45 @@ static int CheckCorpseDrag(void) {
     return errors;
 }
 
+#include "check_rank_runtime.h"
+#include "check_vote_dispatch.h"
+#include "check_poll_vote.h"
+#include "check_surrender_dispatch.h"
+#include "check_stats_messages.h"
+#include "check_campaign_votes.h"
+#include "check_spectator_names_config.h"
+#include "check_class_health.h"
+#include "check_attack_invulnerability.h"
+#include "check_mover_scale.h"
+#include "check_force_limbo.h"
+#include "check_team_rosters.h"
+#include "check_map_configs.h"
+#include "check_fall_recovery.h"
+#include "check_goomba.h"
+#include "check_special_kill_xp.h"
+#include "check_bomb_launch.h"
 int main(void) {
     int kind, enabled, gate, bypass, splash, i, admitted, damageFlags, profiles = 0, errors = 0;
     if(strcmp(GAMEVERSION, "nitmod")) ++errors;
+    dllEntry(EngineCallback);
+    errors += CheckRankRuntime();
+    errors += CheckVoteDispatch();
+    errors += CheckPollVote();
+    errors += CheckSurrenderDispatch();
+    errors += CheckStatsMessages();
+    errors += CheckCampaignVotes();
+    errors += CheckSpectatorConfiguration();
+    errors += CheckClassHealth();
+    errors += CheckMedicRegenerationOptions();
+    errors += CheckAttackInvulnerability();
+    errors += CheckMoverScale();
+    errors += CheckForceLimbo();
+    errors += CheckTeamRosters();
+    errors += CheckMapConfigs();
+    errors += CheckFallRecovery();
+    dllEntry(EngineCallback);
+    errors += CheckGoomba();
+    errors += CheckSpecialKillXP();
     dllEntry(EngineCallback);
     errors += CheckWeaponPolicyRuntime();
     dllEntry(EngineCallback);
@@ -1793,6 +1893,7 @@ int main(void) {
     errors += CheckPlayerShove();
     errors += CheckCanisterKick();
     errors += CheckCanisterSpawn();
+    errors += CheckBombLaunch();
     errors += CheckBotEngineAdapters();
     errors += CheckBotEntityPosition();
     errors += CheckBotEntityVelocity();

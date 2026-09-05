@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(nitmod_260 C)
+project(nitmod_260 C CXX)
 
 include(CTest)
 
@@ -64,7 +64,9 @@ function(nitmod_module target base_name define)
     target_include_directories(${target} PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}/game"
         "${CMAKE_CURRENT_SOURCE_DIR}/cgame"
-        "${CMAKE_CURRENT_SOURCE_DIR}/ui")
+        "${CMAKE_CURRENT_SOURCE_DIR}/ui"
+        "${CMAKE_CURRENT_SOURCE_DIR}/omnibot/common"
+        "${CMAKE_CURRENT_SOURCE_DIR}/omnibot/et")
     set_target_properties(${target} PROPERTIES
         PREFIX ""
         SUFFIX "${artifact_suffix}"
@@ -141,12 +143,13 @@ if(NITMOD_BUILD_QAGAME)
         game/g_nitmod_mine_contact.c
         game/nitmod_bot_handle.c
         game/g_nitmod_bot_entities.c
-        game/g_nitmod_air.c game/nitmod_air.c game/g_nitmod_score.c game/nitmod_score.c
+        game/g_nitmod_air.c game/nitmod_air.c game/g_nitmod_score.c game/nitmod_score.c game/nitmod_skills.c
         game/g_nitmod_abilities.c game/g_nitmod_adrenaline_grant.c game/g_nitmod_weapons.c game/g_nitmod_war.c
         game/g_nitmod_restrictions.c game/g_nitmod_teamcount.c game/g_nitmod_equipment.c
         game/g_nitmod_rifle.c game/nitmod_weapon_limits.c game/g_nitmod_weapon_policy.c
-        game/g_nitmod_weapon_config.c game/g_nitmod_weapon_adapter.c game/g_nitmod_class_command.c
-        game/g_nitmod_loadout.c game/g_nitmod_pickup.c game/nitmod_weapon_definition.c game/g_nitmod_canister.c
+        game/g_nitmod_weapon_config.c game/g_nitmod_legacy_cvars.c game/g_nitmod_banners.c game/g_nitmod_omnibot.c game/g_nitmod_weapon_adapter.c game/g_nitmod_class_command.c game/g_nitmod_campaign_vote.c game/g_nitmod_team_vote.c game/g_nitmod_mapvote.c game/g_nitmod_surrender.c
+        game/g_nitmod_etbot_interface.cpp omnibot/common/BotLoadLibrary.cpp
+        game/g_nitmod_loadout.c game/g_nitmod_pickup.c game/nitmod_weapon_definition.c game/g_nitmod_canister.c game/g_nitmod_poison.c
         game/g_nitmod_weapon_definition.c game/g_nitmod_weapon_registry.c
         game/nitmod_weapon_paths.c game/nitmod_weapon_recoil.c game/nitmod_weapon_defaults.c
         game/nitmod_weapon_consumption.c game/nitmod_weapon_akimbo.c game/nitmod_weapon_clip.c game/nitmod_weapon_inventory.c game/nitmod_weapon_reload.c)
@@ -184,6 +187,7 @@ if(BUILD_TESTING)
         add_executable(nitmod_ui_bitflag_test ../tests/test_nitmod_ui_bitflag.c ${nitmod_ui_test_sources})
         target_include_directories(nitmod_ui_bitflag_test PRIVATE game cgame ui)
         target_compile_definitions(nitmod_ui_bitflag_test PRIVATE UIDLL=1)
+        target_compile_definitions(nitmod_ui_bitflag_test PRIVATE NITMOD_GAMEINFO_PATH="${CMAKE_CURRENT_SOURCE_DIR}/../pak/gameinfo.txt")
         if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
             target_link_libraries(nitmod_ui_bitflag_test PRIVATE m)
         endif()
@@ -298,6 +302,14 @@ if(BUILD_TESTING)
         target_include_directories(nitmod_class_command_test PRIVATE game)
         set_target_properties(nitmod_class_command_test PROPERTIES C_STANDARD 90 C_STANDARD_REQUIRED ON)
         add_test(NAME nitmod_class_command COMMAND nitmod_class_command_test)
+        add_executable(nitmod_team_votes_test ../tests/test_nitmod_team_votes.c game/g_nitmod_team_vote.c)
+        target_include_directories(nitmod_team_votes_test PRIVATE game)
+        set_target_properties(nitmod_team_votes_test PROPERTIES C_STANDARD 90 C_STANDARD_REQUIRED ON)
+        add_test(NAME nitmod_team_votes COMMAND nitmod_team_votes_test)
+        add_executable(nitmod_surrender_test ../tests/test_nitmod_surrender.c game/g_nitmod_surrender.c)
+        target_include_directories(nitmod_surrender_test PRIVATE game)
+        set_target_properties(nitmod_surrender_test PROPERTIES C_STANDARD 90 C_STANDARD_REQUIRED ON)
+        add_test(NAME nitmod_surrender COMMAND nitmod_surrender_test)
         add_executable(nitmod_weapon_messages_test ../tests/test_nitmod_weapon_messages.c game/nitmod_protocol.c)
         target_include_directories(nitmod_weapon_messages_test PRIVATE game)
         set_target_properties(nitmod_weapon_messages_test PROPERTIES C_STANDARD 90 C_STANDARD_REQUIRED ON)
@@ -535,6 +547,10 @@ if(BUILD_TESTING)
             "${CMAKE_CURRENT_SOURCE_DIR}/../tests/test_client_stats_protocol.py")
         add_test(NAME nitmod_debrief_protocol COMMAND ${Python3_EXECUTABLE} -B
             "${CMAKE_CURRENT_SOURCE_DIR}/../tests/test_debrief_protocol.py")
+        add_test(NAME nitmod_drawgun_contract COMMAND ${Python3_EXECUTABLE} -B
+            "${CMAKE_CURRENT_SOURCE_DIR}/../tests/test_drawgun_contract.py")
+        add_test(NAME nitmod_legacy_cvar_surface COMMAND ${Python3_EXECUTABLE} -B
+            "${CMAKE_CURRENT_SOURCE_DIR}/../tests/test_legacy_cvar_surface.py")
         add_test(NAME nitmod_original_ui_actions COMMAND ${Python3_EXECUTABLE} -B
             "${CMAKE_CURRENT_SOURCE_DIR}/../tests/test_original_ui_actions.py")
         add_test(NAME nitmod_loadpanel_contract COMMAND ${Python3_EXECUTABLE} -B

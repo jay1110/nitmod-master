@@ -18,7 +18,8 @@ assert {key: tokens[key] for key in ('sc', 'tv', 'xp')} == {'sc': 0x59, 'tv': 0x
 source = (root / 'src_2.60/cgame/cg_players.c').read_text()
 assert 'NITMOD_ParseClientExtras(configstring, &newInfo);' in source
 assert 'NITMOD_DecodeClientSkills(v, newInfo.skill, newInfo.nitmodSkillLevels);' in source
-assert 'CG_NITMOD_SkillRewardText(i, shownLevel)' in source
+assert 'CG_NITMOD_SkillRewardText(i, level)' in source
+assert 'NITMOD_NewSkillUnlocks(ci->nitmodSkillMasks[i], newInfo.nitmodSkillMasks[i])' in source
 assert source.count('nativeUpgrade && newInfo.skill[i] == 4') == 2
 debrief = (root / 'src_2.60/cgame/cg_debriefing.c').read_text()
 stars = debrief.split('void CG_Debriefing_PlayerSkills_Draw', 1)[1].split('void CG_Debriefing_PlayerACC_Draw', 1)[0]

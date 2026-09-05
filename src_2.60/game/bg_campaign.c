@@ -14,7 +14,7 @@
 // Campaign File Handling
 
 // Saves
-// FIXME: need byteswapping for macs
+// Explicit little-endian encoding for the original i386 file format.
 
 /* The original i386 campaign.dat is little endian: four-byte ident, one-byte
  * version, then 32-bit counts/hashes and variable-length completed-map lists.
@@ -69,47 +69,41 @@ invalid:
 	return qfalse;
 }
 
-qboolean BG_StoreCampaignSave( const char *filename, cpsFile_t *file, const char *profile ) {
-	fileHandle_t f;
-	long hash;
-	char *ch;
-	int i, j;
+static void BG_CampaignWriteInt(fileHandle_t file, int value) {
+    unsigned int bits = (unsigned int)value;
+    unsigned char bytes[4];
+    int i;
+    for(i = 0; i < 4; ++i) bytes[i] = (unsigned char)(bits >> (8 * i));
+    trap_FS_Write(bytes, sizeof(bytes), file);
+}
 
-	// open the file
-	if( trap_FS_FOpenFile( filename, &f, FS_WRITE ) < 0 ) {
-		return( qfalse );
-	}
-
-	// write the header
-	file->header.ident = CPS_IDENT;
-	file->header.version = CPS_VERSION;
-
-	trap_FS_Write( &file->header.ident, sizeof(int), f );
-	trap_FS_Write( &file->header.version, 1, f );
-	trap_FS_Write( &file->header.numCampaigns, sizeof(int), f );
-
-	// generate hash for profile
-	for( hash = 0, ch = (char *)profile; *ch != '\0'; ch++ ) {
-		hash += (long)(tolower(*ch))*((ch-profile)+119);
-	}
-
-	file->header.profileHash = (int)hash;
-
-	trap_FS_Write( &file->header.profileHash, sizeof(int), f );
-
-	// write the campaigns and maps
-	for( i = 0; i < file->header.numCampaigns; i++ ) {
-		trap_FS_Write( &file->campaigns[i].shortnameHash, sizeof(int), f );
-		trap_FS_Write( &file->campaigns[i].progress, sizeof(int), f );
-
-		// all completed maps
-		for( j = 0; j < file->campaigns[i].progress; j++ ) {
-			trap_FS_Write( &file->campaigns[i].maps[j].mapnameHash, sizeof(int), f );
-		}
-	}
-
-	// done
-	trap_FS_FCloseFile( f );
-
-	return( qtrue );
+qboolean BG_StoreCampaignSave(const char *filename, cpsFile_t *file, const char *profile) {
+    fileHandle_t handle = 0;
+    unsigned int hash = 0, index;
+    unsigned char version = CPS_VERSION;
+    int i, j;
+    /* Validate the entire payload before opening FS_WRITE (which truncates). */
+    if(!filename || !profile || !file || file->header.numCampaigns < 0 ||
+       file->header.numCampaigns > MAX_CAMPAIGNS) return qfalse;
+    for(i = 0; i < file->header.numCampaigns; ++i)
+        if(file->campaigns[i].progress < 0 ||
+           file->campaigns[i].progress > MAX_MAPS_PER_CAMPAIGN) return qfalse;
+    if(trap_FS_FOpenFile(filename, &handle, FS_WRITE) < 0 || !handle) return qfalse;
+    for(index = 0; profile[index]; ++index)
+        hash += (unsigned int)tolower((unsigned char)profile[index]) * (index + 119u);
+    file->header.ident = CPS_IDENT;
+    file->header.version = version;
+    memcpy(&file->header.profileHash, &hash, sizeof(hash));
+    BG_CampaignWriteInt(handle, file->header.ident);
+    trap_FS_Write(&version, 1, handle);
+    BG_CampaignWriteInt(handle, file->header.numCampaigns);
+    BG_CampaignWriteInt(handle, file->header.profileHash);
+    for(i = 0; i < file->header.numCampaigns; ++i) {
+        BG_CampaignWriteInt(handle, file->campaigns[i].shortnameHash);
+        BG_CampaignWriteInt(handle, file->campaigns[i].progress);
+        for(j = 0; j < file->campaigns[i].progress; ++j)
+            BG_CampaignWriteInt(handle, file->campaigns[i].maps[j].mapnameHash);
+    }
+    trap_FS_FCloseFile(handle);
+    return qtrue;
 }

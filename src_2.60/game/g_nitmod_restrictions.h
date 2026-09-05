@@ -51,6 +51,7 @@ void G_NITMOD_RegisterWeaponConfiguration( void );
 int G_NITMOD_UpdateWeaponConfiguration(void);
 int G_NITMOD_ConfiguredWarMode(void);
 int G_NITMOD_ConfiguredNoReload(void);
+unsigned int G_NITMOD_ConfiguredMedicOptions(void);
 int G_NITMOD_ConfiguredWeaponFlags(void);
 typedef struct {
     nitmodWeaponDecision_t decision;

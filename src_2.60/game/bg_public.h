@@ -306,7 +306,7 @@ extern const unsigned int aReinfSeeds[MAX_REINFSEEDS];
 #define CGF_AUTOACTIVATE	0x04
 #define CGF_PREDICTITEMS	0x08
 
-#define MAX_MOTDLINES	6
+#define MAX_MOTDLINES	7
 
 // Multiview settings
 #define MAX_MVCLIENTS				32
@@ -393,8 +393,12 @@ typedef enum {
 	GT_WOLF_STOPWATCH,
 	GT_WOLF_CAMPAIGN,	// Exactly the same as GT_WOLF, but uses campaign roulation (multiple maps form one virtual map)
 	GT_WOLF_LMS,
+	GT_WOLF_MAPVOTE,
+	GT_WOLF_TDM,
+	GT_WOLF_DM,
 	GT_MAX_GAME_TYPE
 } gametype_t;
+const char *BG_NitmodGametypeName( int gametype, qboolean shortName );
 //#define GAMETYPES
 
 // Rafael gameskill
@@ -428,7 +432,10 @@ typedef enum {
 	PM_SPECTATOR,	// still run into walls
 	PM_DEAD,		// no acceleration or turning, but free falling
 	PM_FREEZE,		// stuck in place with no control
-	PM_INTERMISSION	// no movement or status bar
+	PM_INTERMISSION,	// no movement or status bar
+	/* Nitmod 2.3.5 protocol value.  This is a one-frame request; Pmove turns it
+	 * into PM_DEAD + EF_SPARE0 (playing dead), or back into PM_NORMAL. */
+	PM_PLAYDEAD
 } pmtype_t;
 
 typedef enum {
@@ -493,6 +500,10 @@ typedef struct {
 
 	int			proneGroundTime;	// time a prone player last had ground under him
 	float		proneLegsOffset;	// offset legs bounding box
+	/* Nitmod stance transition deadlines. Kept in pmoveExt so prediction and
+	 * server movement retain state without changing the engine ABI. */
+	int		nitmodCrouchStandTime;
+	int		nitmodStandCrouchTime;
 
 	vec3_t		mountedWeaponAngles;	// mortar, mg42 (prone), etc
 
@@ -564,10 +575,25 @@ typedef struct {
 	int nitmodDoubleJump;
 	qboolean nitmodLeanEnabled;
 	qboolean nitmodReloadEnabled;
+	qboolean nitmodAuthoritativeWeapons;
 	int nitmodWarMode;
 	unsigned int nitmodNoReload;
 	int nitmodWeaponFlags;
+	qboolean nitmodCustomRecoilEnabled;
+	int nitmodCustomRecoilDuration;
+	float nitmodCustomRecoilYaw;
+	float nitmodCustomRecoilPitch;
+	qboolean nitmodNoMidclipReload;
+	int nitmodSpreadScaleAdd;
+	int nitmodSpreadScaleAddRand;
+	float nitmodSpreadRatio;
+	/* Original weaponDef tri-state: absent=0, yes=1, no=2. */
+	int nitmodVelocityToSpread;
+	int nitmodViewChangeToSpread;
 	float nitmodDoubleJumpHeight;
+	int nitmodProneDelay;
+	int nitmodCrouchStandDelay;
+	int nitmodStandCrouchDelay;
 } pmove_t;
 
 /* Original playerState slot 0x398: holdable[2], signed lean-button state. */
@@ -605,6 +631,7 @@ typedef enum {
 	STAT_CAPTUREHOLD_RED,			// JPW NERVE - red team score
 	STAT_CAPTUREHOLD_BLUE,			// JPW NERVE - blue team score
 	STAT_XP,						// Gordon: "realtime" version of xp that doesnt need to go thru the scoreboard
+	STAT_NITMOD_MAX_HEALTH,          // effective healing cap; zero means legacy ET rules
 } statIndex_t;
 
 // player_state->persistant[] indexes
@@ -666,6 +693,7 @@ typedef enum {
 
 #define EF_PRONE_MOVING		0x00100000		// player is prone and moving
 #define EF_VIEWING_CAMERA	0x00200000		// player is viewing a camera
+#define NITMOD_EF_POISONED EF_VIEWING_CAMERA
 #define EF_AAGUN_ACTIVE		0x00400000		// Gordon: player is manning an AA gun
 #define EF_SPARE0			0x00800000		// Gordon: freed
 
@@ -834,12 +862,17 @@ typedef enum {
 	WP_AKIMBO_SILENCEDLUGER,// 48
 	WP_MOBILE_MG42_SET,		// 49
 
-	WP_NUM_WEAPONS			// WolfMP: 32 WolfXP: 50
+	WP_BOMB,                // 50: typed Nitmod extension; original wire ID is 48
+	WP_POISON_SYRINGE,       // 51: original wire ID 47
+	WP_POISON_BOMB,          // 52: original wire ID 50
+	WP_POISON_MINE,          // 53: original wire ID 51
+	WP_NUM_WEAPONS
 							// NOTE: this cannot be larger than 64 for AI/player weapons!
 } weapon_t;
 
 // JPW NERVE moved from cg_weapons (now used in g_active) for drop command, actual array in bg_misc.c
 extern int weapBanksMultiPlayer[MAX_WEAP_BANKS_MP][MAX_WEAPS_IN_BANK_MP];
+qboolean PM_NitmodAuthoritativeWeapon(const pmove_t *move);
 // jpw
 
 // TAT 10/4/2002
@@ -1072,6 +1105,10 @@ typedef enum {
 	EV_ARTYMESSAGE,
 	EV_AIRSTRIKEMESSAGE,
 	EV_MEDIC_CALL,
+	/* Internal reconstructed event. Original Nitmod transports this as 100. */
+	EV_NITMOD_SOUND,
+	/* Internal reconstructed event. Original Nitmod transports this as 95. */
+	EV_NITMOD_THROW_KNIFE,
 	EV_MAX_EVENTS	// just added as an 'endcap'
 } entity_event_t;
 
@@ -1472,10 +1509,22 @@ typedef enum {
 
 	// OSP -- keep these 2 entries last
 	MOD_SWITCHTEAM,
+	/* Private reconstructed cause; transported as CRUSH + obituary marker. */
+	MOD_GOOMBA,
+	MOD_BOMB,
+	MOD_POISON_GAS,
+	MOD_POISON_GAS_MINE,
+	MOD_POISON,
 
 	MOD_NUM_MODS
 
 } meansOfDeath_t;
+
+#define NITMOD_OBITUARY_GOOMBA 0x4e470001
+#define NITMOD_OBITUARY_BOMB 0x4e470002
+#define NITMOD_OBITUARY_POISON_GAS 0x4e470003
+#define NITMOD_OBITUARY_POISON_GAS_MINE 0x4e470004
+#define NITMOD_OBITUARY_POISON 0x4e470005
 
 
 //---------------------------------------------------------
@@ -1547,6 +1596,7 @@ int BG_AkimboSidearm( int weaponNum );
 qboolean BG_CanUseWeapon(int classNum, int teamNum, weapon_t weapon);
 
 qboolean	BG_CanItemBeGrabbed( const entityState_t *ent, const playerState_t *ps, int *skill, int teamNum );
+int BG_EffectiveMaxHealth(const playerState_t *ps);
 
 
 // content masks
@@ -2233,11 +2283,12 @@ typedef enum {
 
 	UIMENU_WM_AUTOUPDATE,
 
-	// ydnar: say, team say, etc
-	UIMENU_INGAME_MESSAGEMODE,
-	/* Paired reconstruction extension: retain native chat ID 15. */
+	/* Original Nitmod ABI: class menus occupy 15/16 and chat is 17. */
 	UIMENU_NITMOD_CLASS,
 	UIMENU_NITMOD_CLASSALT,
+
+	// ydnar: say, team say, etc
+	UIMENU_INGAME_MESSAGEMODE,
 } uiMenuCommand_t;
 
 void BG_AdjustAAGunMuzzleForBarrel( vec_t* origin, vec_t* forward, vec_t* right, vec_t* up, int barrel );
@@ -2267,7 +2318,9 @@ int BG_cleanName(const char *pszIn, char *pszOut, unsigned int dwMaxLength, qboo
 void BG_setCrosshair(char *colString, float *col, float alpha, char *cvarName);
 
 // Voting
-#define VOTING_DISABLED		((1 << numVotesAvailable) - 1)
+/* Original Nitmod menu contract: 24 vote bits, including reserved families. */
+#define VOTING_DISABLED 0x00ffffff
+#define ET_VOTING_DISABLED 0x0001ffff
 
 typedef struct {
 	const char	*pszCvar;

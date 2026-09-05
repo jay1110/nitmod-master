@@ -103,7 +103,8 @@ void Tooltip_ComputePosition(itemDef_t *item)
 	//tipRect->w = DC->textWidth( item->toolTipData->text, item->toolTipData->textscale, 0 ) + 6.0f;
 	tipRect->h = DC->multiLineTextHeight( item->toolTipData->text, item->toolTipData->textscale, 0 ) + 9.f;
 	tipRect->w = DC->multiLineTextWidth( item->toolTipData->text, item->toolTipData->textscale, 0 ) + 6.f;
-	if((tipRect->w + tipRect->x) > 635.0f) tipRect->x -= (tipRect->w + tipRect->x) - 635.0f;
+	/* Bounds depend on the parent's final screen position. Keep these
+	 * source coordinates stable; clamp only the resolved rectangle below. */
 
 	item->toolTipData->parent = item->parent;
 	item->toolTipData->type = ITEM_TYPE_TEXT;
@@ -605,13 +606,40 @@ float UI_NitmodWideWidth(const displayContextDef_t *context) {
 	return width > 640 ? width : 640;
 }
 
+/* Typed ports of original Cui_WideX (0x20a50) and Cui_WideXoffset
+ * (0x20a90). They operate in the widened 480-high virtual canvas. */
+float UI_NitmodWideX(const displayContextDef_t *context, float x) {
+	return x * UI_NitmodWideWidth(context) / 640.f;
+}
+
+float UI_NitmodWideXOffset(const displayContextDef_t *context) {
+	return (UI_NitmodWideWidth(context) - 640.f) * .5f;
+}
+
+/* Typed port of original Cui_WideRect (0x209b0). Unlike WideX this returns
+ * physical renderer coordinates. r_mode 11 keeps context->xscale. */
+void UI_NitmodWideRect(const displayContextDef_t *context, rectDef_t *rect) {
+	float xscale;
+
+	if(!context || !rect) return;
+	xscale = context->xscale;
+	if(UI_NitmodWideWidth(context) > 640.f && context->getCVarValue &&
+		context->getCVarValue("r_mode") != 11.f) {
+		xscale *= 640.f / UI_NitmodWideWidth(context);
+	}
+	rect->x *= xscale;
+	rect->w *= xscale;
+	rect->y *= context->yscale;
+	rect->h *= context->yscale;
+}
+
 float UI_NitmodXScale(const displayContextDef_t *context) {
 	return context ? context->xscale * (640.f / UI_NitmodWideWidth(context)) : 1;
 }
 
 #ifdef UIDLL
 static void UI_NitmodPositionItem(menuDef_t *menu, itemDef_t *item) {
-	float offset = (UI_NitmodWideWidth(DC) - 640) * .5f;
+	float offset = UI_NitmodWideXOffset(DC);
 	float x = menu->window.rect.x;
 	rectDef_t source;
 	qboolean full, backdrop, clouds;
@@ -625,11 +653,7 @@ static void UI_NitmodPositionItem(menuDef_t *menu, itemDef_t *item) {
 	else if(backdrop) {
 		/* Preserve the original Cui_WideRect/r_mode 11 special path.
 		 * Transform a copy so repeated layout cannot compound scaling. */
-		float sx = DC->getCVarValue && DC->getCVarValue("r_mode") == 11 ? DC->xscale : UI_NitmodXScale(DC);
-		item->window.rectClient.x *= sx;
-		item->window.rectClient.w *= sx;
-		item->window.rectClient.y *= DC->yscale;
-		item->window.rectClient.h *= DC->yscale;
+		UI_NitmodWideRect(DC, &item->window.rectClient);
 	}
 	if(full && !backdrop) x += offset;
 	Item_SetScreenCoords(item, x, menu->window.rect.y);
@@ -658,11 +682,15 @@ void Item_SetScreenCoords(itemDef_t *item, float x, float y) {
 	if(item->toolTipData) {
 		Item_SetScreenCoords(item->toolTipData, x, y);
 		{
-			float val = (item->toolTipData->window.rect.x + item->toolTipData->window.rect.w) - 635.0f;
-			if(val > 0.0f) {
-				item->toolTipData->window.rectClient.x -= val;
-				item->toolTipData->window.rect.x -= val;
-			}
+			rectDef_t *tip = &item->toolTipData->window.rect;
+			float right = 635.f;
+#ifdef UIDLL
+			right = UI_NitmodWideWidth(DC) - 5.f;
+#endif
+			if(tip->x + tip->w > right) tip->x = right - tip->w;
+			if(tip->x < 5.f) tip->x = 5.f;
+			if(tip->y + tip->h > 475.f) tip->y = 475.f - tip->h;
+			if(tip->y < 5.f) tip->y = 5.f;
 		}
 	}
 
@@ -713,7 +741,7 @@ void Menu_UpdatePosition(menuDef_t *menu) {
 
 #ifdef UIDLL
 	if(x == 16 && menu->window.rect.w == 608)
-		menu->window.rect.x += (UI_NitmodWideWidth(DC) - 640) * .5f;
+		menu->window.rect.x += UI_NitmodWideXOffset(DC);
 #endif
 
     /*if (menu->window.border != 0) {
@@ -1520,7 +1548,11 @@ void Script_NotebookShowpage(itemDef_t *item, qboolean *bAbort, char **args) {
 void Menu_TransitionItemByName(menuDef_t *menu, const char *p, rectDef_t rectFrom, rectDef_t rectTo, int time, float amt) {
 	itemDef_t *item;
 	int i;
-	int count = Menu_ItemsMatchingGroup(menu, p);
+	int count;
+	/* A zero/negative transition divisor otherwise produces inf/NaN geometry,
+	 * which is especially destructive when converted by the WASM renderer. */
+	if(!menu || !p || amt <= 0.0f) return;
+	count = Menu_ItemsMatchingGroup(menu, p);
 	for (i = 0; i < count; i++) {
 		item = Menu_GetMatchingItemByNumber(menu, i, p);
 		if (item != NULL) {
@@ -1528,10 +1560,10 @@ void Menu_TransitionItemByName(menuDef_t *menu, const char *p, rectDef_t rectFro
 			item->window.offsetTime = time;
 			memcpy(&item->window.rectClient, &rectFrom, sizeof(rectDef_t));
 			memcpy(&item->window.rectEffects, &rectTo, sizeof(rectDef_t));
-			item->window.rectEffects2.x = abs(rectTo.x - rectFrom.x) / amt;
-			item->window.rectEffects2.y = abs(rectTo.y - rectFrom.y) / amt;
-			item->window.rectEffects2.w = abs(rectTo.w - rectFrom.w) / amt;
-			item->window.rectEffects2.h = abs(rectTo.h - rectFrom.h) / amt;
+			item->window.rectEffects2.x = fabsf(rectTo.x - rectFrom.x) / amt;
+			item->window.rectEffects2.y = fabsf(rectTo.y - rectFrom.y) / amt;
+			item->window.rectEffects2.w = fabsf(rectTo.w - rectFrom.w) / amt;
+			item->window.rectEffects2.h = fabsf(rectTo.h - rectFrom.h) / amt;
 			Item_UpdatePosition(item);
 		}
 	}
@@ -1663,6 +1695,9 @@ void Script_ToggleCvarBit(itemDef_t *item, qboolean *bAbort, char **args) {
 void Script_Exec(itemDef_t *item, qboolean *bAbort, char **args) {
 	const char *val=NULL;
 	if (String_Parse(args, &val)) {
+		/* Original Nitmod menu typo; preserve pak and fix only this exact
+         * invocation for both original and reconstructed servers. */
+		if(!Q_stricmp(val, "cmd callvote restartcamaign")) val = "cmd callvote restartcampaign";
 		DC->executeText(EXEC_APPEND, va("%s ; ", val));
 	}
 }
@@ -4446,6 +4481,10 @@ char g_nameBind2[32];
 
 char* BindingFromName(const char *cvar) {
 	int b1, b2;
+	if(!cvar || !*cvar) {
+		Q_strncpyz(g_nameBind1, "(???" ")", sizeof(g_nameBind1));
+		return g_nameBind1;
+	}
 
 	DC->getKeysForBinding( cvar, &b1, &b2 );
 
@@ -4501,17 +4540,17 @@ void Item_Slider_Paint(itemDef_t *item) {
 
 void Item_Bind_Paint(itemDef_t *item) {
 	vec4_t newColor, lowLight;
-	float value;
 	int maxChars = 0;
-	menuDef_t *parent = (menuDef_t*)item->parent;
-	editFieldDef_t *editPtr = (editFieldDef_t*)item->typeData;
+	menuDef_t *parent;
+	editFieldDef_t *editPtr;
+	if(!item) return;
+	parent = (menuDef_t*)item->parent;
+	editPtr = (editFieldDef_t*)item->typeData;
 	if (editPtr) {
 		maxChars = editPtr->maxPaintChars;
 	}
 
-	value = (item->cvar) ? DC->getCVarValue(item->cvar) : 0;
-
-	if (item->window.flags & WINDOW_HASFOCUS && item->window.flags & WINDOW_FOCUSPULSE) {
+	if (parent && item->window.flags & WINDOW_HASFOCUS && item->window.flags & WINDOW_FOCUSPULSE) {
 		if (g_bindItem == item) {
 			lowLight[0] = 0.8f * 1.0f;
 			lowLight[1] = 0.8f * 0.0f;
@@ -4541,7 +4580,10 @@ void Item_Bind_Paint(itemDef_t *item) {
 		BindingFromName(item->cvar);
 		DC->drawText(item->textRect.x + item->textRect.w + 8, item->textRect.y, item->textscale, newColor, g_nameBind1, 0, maxChars, item->textStyle);
 	} else {
-		DC->drawText(item->textRect.x, item->textRect.y, item->textscale, newColor, (value != 0) ? "FIXME" : "FIXME", 0, maxChars, item->textStyle);
+		/* Original fallback printed FIXME for label-free binding controls.
+		 * Display the same engine-owned binding as the labelled variant. */
+		BindingFromName(item->cvar);
+		DC->drawText(item->textRect.x, item->textRect.y, item->textscale, newColor, g_nameBind1, 0, maxChars, item->textStyle);
 	}
 }
 

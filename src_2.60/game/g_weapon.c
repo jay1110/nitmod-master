@@ -6,8 +6,15 @@
 */
 
 
+#include <limits.h>
+
 #include "g_local.h"
+#include "g_nitmod_weapon_definition.h"
 #include "g_nitmod_config.h"
+#include "g_nitmod_restrictions.h"
+#include "g_nitmod_etbot_lifecycle.h"
+#include "g_nitmod_legacy_cvars.h"
+#include "g_nitmod_entities.h"
 
 vec3_t	forward, right, up;
 vec3_t	muzzleEffect;
@@ -18,10 +25,71 @@ void Bullet_Fire (gentity_t *ent, float spread, int damage, qboolean distance_fa
 qboolean Bullet_Fire_Extended(gentity_t *source, gentity_t *attacker, vec3_t start, vec3_t end, float spread, int damage, qboolean distance_falloff);
 
 int G_GetWeaponDamage( int weapon ); // JPW
+float G_GetWeaponSpread( int weapon );
+
+/* Original ThrowKnife (qagame) creates an ordinary dropped weapon item rather
+ * than a missile-only visual. Consequently the normal Touch_Item_Auto path can
+ * return it to a player. */
+void G_NITMOD_ThrowKnife(gentity_t *ent) {
+	gitem_t *item;
+	gentity_t *knife;
+	vec3_t direction, velocity;
+	float held, speed;
+
+	if(!ent || !ent->client || ent->s.weapon != WP_KNIFE) return;
+	item = BG_FindItemForWeapon(WP_KNIFE);
+	if(!item) return;
+
+	CalcMuzzlePoints(ent, WP_KNIFE);
+	AngleVectors(ent->client->ps.viewangles, direction, NULL, NULL);
+	direction[0] += crandom() * (G_GetWeaponSpread(WP_KNIFE) / 1000.0f);
+	direction[1] += crandom() * (G_GetWeaponSpread(WP_KNIFE) / 1000.0f);
+	VectorNormalize(direction);
+
+	held = ent->client->ps.grenadeTimeLeft * (1300.0f / 500.0f);
+	speed = held < 350.0f ? 350.0f : held;
+	VectorScale(direction, speed, velocity);
+
+	knife = LaunchItem(item, muzzleEffect, velocity, ent->s.number);
+	if(!knife) return;
+	knife->classname = "knife";
+	knife->parent = ent;
+	knife->r.svFlags |= SVF_BROADCAST;
+	knife->s.clientNum = ent->s.number;
+	knife->s.teamNum = ent->client->sess.sessionTeam;
+	knife->damage = G_GetWeaponDamage(WP_KNIFE);
+	/* Original ThrowKnife constructs an immediately usable ET_ITEM.  Ordinary
+	 * LaunchItem leaves active clear because dropped guns normally require the
+	 * auto-activate path to arm their touch callback first.  A thrown knife is
+	 * already an active pickup and also exposes the standard item use callback. */
+	knife->active = qtrue;
+	knife->use = Use_Item;
+	/* ThrowKnife in the original does not retain the generic dropped-gun
+	 * physics installed by LaunchItem.  These are direct typed mappings of
+	 * its ET_ITEM fields: full bounce, body/corpse collision, one-second
+	 * physics elasticity and a backdated trajectory start. */
+	knife->s.eFlags &= ~EF_BOUNCE_HALF;
+	knife->s.eFlags |= EF_BOUNCE;
+	knife->s.pos.trType = TR_GRAVITY_LOW;
+	knife->s.pos.trTime = level.time - 50;
+	knife->s.pos.trDuration = (int)(speed * 3.0f);
+	knife->physicsObject = qtrue;
+	knife->physicsBounce = 1.0f;
+	knife->clipmask = CONTENTS_SOLID | CONTENTS_MISSILECLIP |
+		CONTENTS_BODY | CONTENTS_CORPSE;
+	/* Pickup_Weapon has a dedicated original WP_KNIFE path; count belongs to
+	 * dropped firearm clip transfer and must remain zero for thrown knives. */
+	knife->count = 0;
+	knife->nextthink = level.time + 20000;
+	knife->s.weapon = WP_KNIFE;
+	ent->client->ps.grenadeTimeLeft = 0;
+}
 
 qboolean G_WeaponIsExplosive( meansOfDeath_t mod )
 {
 	switch( mod ) {
+		case MOD_BOMB:
+			return (G_NITMOD_ConfiguredWeaponFlags() & 16) != 0;
 		case MOD_GRENADE_LAUNCHER:
 		case MOD_GRENADE_PINEAPPLE:
 		case MOD_PANZERFAUST:
@@ -270,7 +338,10 @@ void Weapon_Medic( gentity_t *ent ) {
 	AngleVectors( angles, velocity, NULL, NULL );
 	VectorScale( velocity, 64, offset);
 	offset[2] += ent->client->ps.viewheight/2;
-	VectorScale( velocity, 75, velocity );
+	/* Original Nitmod reads g_throwDistance at the two ordinary pack-launch
+	 * sites.  The engine cvar is intentionally not range-clamped here: zero,
+	 * negative and high values are all observable legacy server policy. */
+	VectorScale( velocity, G_NITMOD_LegacyCvarInteger("g_throwDistance", 75), velocity );
 	velocity[2] += 50 + crandom() * 25;
 
 	VectorCopy( muzzleEffect, tosspos );
@@ -309,11 +380,40 @@ void Weapon_Medic( gentity_t *ent ) {
 G_PlaceTripmine
 ==========
 */
+int G_NITMOD_CountTeamTripmines(team_t team) {
+	int i;
+	int count = 0;
+
+	for(i = level.maxclients; i < level.num_entities; ++i) {
+		const gentity_t *mine = &g_entities[i];
+		if(mine->inuse && mine->s.weapon == WP_TRIPMINE && mine->s.teamNum == team)
+			++count;
+	}
+
+	return count;
+}
+
 void G_PlaceTripmine(gentity_t* ent) {
 	vec3_t start, end;
 	trace_t trace;
 	gentity_t* bomb;
 	vec3_t forward;
+	team_t team;
+	int teamLimit;
+
+	if(!ent || !ent->client)
+		return;
+
+	team = ent->client->sess.sessionTeam;
+	if(team != TEAM_AXIS && team != TEAM_ALLIES)
+		return;
+
+	teamLimit = G_NITMOD_LegacyCvarInteger("team_maxTripmines", 5);
+	if(teamLimit <= G_NITMOD_CountTeamTripmines(team)) {
+		trap_SendServerCommand(ent - g_entities,
+			"cp \"Your team has too many tripmines placed...\" 1");
+		return;
+	}
 
 	VectorCopy( ent->client->ps.origin, start );
 	start[2] += ent->client->ps.viewheight;
@@ -329,6 +429,7 @@ void G_PlaceTripmine(gentity_t* ent) {
 	bomb->s.eType = ET_BOMB;
 	bomb->s.eFlags = 0;
 	bomb->s.weapon = WP_TRIPMINE;
+	bomb->s.teamNum = team;
 	bomb->parent = ent;
 	bomb->think = G_TripMinePrime;
 	bomb->nextthink = level.time + 2000;
@@ -429,7 +530,7 @@ void Weapon_MagicAmmo( gentity_t *ent )  {
 	AngleVectors( angles, velocity, NULL, NULL );
 	VectorScale( velocity, 64, offset);
 	offset[2] += ent->client->ps.viewheight/2;
-	VectorScale( velocity, 75, velocity );
+	VectorScale( velocity, G_NITMOD_LegacyCvarInteger("g_throwDistance", 75), velocity );
 	velocity[2] += 50 + crandom() * 25;
 
 	VectorCopy( muzzleEffect, tosspos );
@@ -475,6 +576,46 @@ void Weapon_MagicAmmo( gentity_t *ent )  {
 
 // START - Mad Doc - TDF
 // took this out of Weapon_Syringe so we can use it from other places
+static void G_NITMOD_RecordRevive( gentity_t *medic ) {
+	int options;
+	int window;
+	int count;
+
+	if( !medic || !medic->client ) return;
+	options = G_NITMOD_LegacyCvarInteger("n_reviveSpreeOptions", 1);
+	count = ++medic->client->nitmodReviveSpree;
+	if( count > medic->client->nitmodBestReviveSpree )
+		medic->client->nitmodBestReviveSpree = count;
+
+	/* Original Nitmod emits a revive-spree tier every five revives. */
+	if( (options & 1) && count >= 5 && !(count % 5) )
+		nitmod_Announce(medic->s.number, count, 4);
+
+	if( !(options & 16) ) {
+		medic->client->nitmodLastReviveTime = level.time;
+		return;
+	}
+
+	window = G_NITMOD_LegacyCvarInteger("n_multiReviveTime", 2000);
+	if( window < 1 ) {
+		medic->client->nitmodMultiReviveCount = 1;
+	} else if( !medic->client->nitmodLastReviveTime ||
+		level.time - medic->client->nitmodLastReviveTime > window ) {
+		medic->client->nitmodMultiReviveCount = 1;
+	} else {
+		++medic->client->nitmodMultiReviveCount;
+	}
+	medic->client->nitmodLastReviveTime = level.time;
+
+	if( medic->client->nitmodMultiReviveCount >= 2 &&
+		medic->client->nitmodMultiReviveCount <= 5 ) {
+		nitmod_Announce(medic->s.number,
+			medic->client->nitmodMultiReviveCount - 2, 5);
+	} else if( medic->client->nitmodMultiReviveCount > 5 ) {
+		medic->client->nitmodMultiReviveCount = 1;
+	}
+}
+
 qboolean ReviveEntity(gentity_t *ent, gentity_t *traceEnt)
 {
 	vec3_t		org;
@@ -542,6 +683,7 @@ qboolean ReviveEntity(gentity_t *ent, gentity_t *traceEnt)
 
 	// DHM - Nerve :: Let the person being revived know about it
 	trap_SendServerCommand( traceEnt-g_entities, va("cp \"You have been revived by [lof]%s[lon] [lof]%s!\n\"", ent->client->sess.sessionTeam == TEAM_ALLIES ? rankNames_Allies[ ent->client->sess.rank ] : rankNames_Axis[ ent->client->sess.rank ], ent->client->pers.netname) );
+	traceEnt->client->pers.nitmodLastReviverClient = ent - g_entities;
 	traceEnt->props_frame_state = ent->s.number;
 
 	// DHM - Nerve :: Mark that the medicine was indeed dispensed
@@ -560,6 +702,8 @@ qboolean ReviveEntity(gentity_t *ent, gentity_t *traceEnt)
 		traceEnt->client->ps.pm_flags |= PMF_TIME_LOCKPLAYER;
 		traceEnt->client->ps.pm_time = 2100;
 	}
+
+	G_NITMOD_RecordRevive(ent);
 
 	// Tell the caller if we actually used a syringe
 	return usedSyringe;
@@ -609,6 +753,7 @@ void Weapon_Syringe(gentity_t *ent) {
 				}
 				if( usedSyringe && ent && ent->client ) {
 					G_LogPrintf("Medic_Revive: %d %d\n", ent - g_entities, traceEnt - g_entities);
+					Bot_Event_Revived(traceEnt - g_entities, ent);
 				}
 
 				if( !traceEnt->isProp ) { // Gordon: flag for if they were teamkilled or not
@@ -942,6 +1087,7 @@ static void HandleEntsThatBlockConstructible( gentity_t *constructor, gentity_t 
 static qboolean TryConstructing( gentity_t *ent ) {
 	gentity_t *check;
 	gentity_t *constructible = ent->client->touchingTOI->target_ent;
+	float constructionStep;
 	int i;
 
 	// no construction during prematch
@@ -1071,7 +1217,19 @@ static qboolean TryConstructing( gentity_t *ent ) {
 		}
 
 		// Give health until it is full, don't continue
-		constructible->s.angles2[0] += (255.f/(constructible->constructibleStats.duration/(float)FRAMETIME));
+		constructionStep = 255.f / (constructible->constructibleStats.duration / (float)FRAMETIME);
+		/* Original TryConstructing (ELF 0x104xxx): when construction XP
+		 * sharing is enabled, award this builder the fraction represented by
+		 * the progress they actually added.  The small bias is part of the
+		 * recovered formula and compensates for the integer progress cutoff. */
+		if( G_NITMOD_LegacyCvarInteger("g_constructiblexpsharing", 0) ) {
+			float points = constructible->constructibleStats.constructxpbonus /
+				(255.f / constructionStep) + 0.01f;
+			G_AddSkillPoints( ent, SK_EXPLOSIVES_AND_CONSTRUCTION, points );
+			G_DebugAddSkillPoints( ent, SK_EXPLOSIVES_AND_CONSTRUCTION, points,
+				"construction sharing." );
+		}
+		constructible->s.angles2[0] += constructionStep;
 		if ( constructible->s.angles2[0] >= 250 ) {
 			constructible->s.angles2[0] = 0;
 			HandleEntsThatBlockConstructible( ent, constructible, qtrue, qfalse );
@@ -1145,8 +1303,10 @@ static qboolean TryConstructing( gentity_t *ent ) {
 
 		AddScore( ent, constructible->accuracy ); // give drop score to guy who built it
 
-		G_AddSkillPoints( ent, SK_EXPLOSIVES_AND_CONSTRUCTION, constructible->constructibleStats.constructxpbonus );
-		G_DebugAddSkillPoints( ent, SK_EXPLOSIVES_AND_CONSTRUCTION, constructible->constructibleStats.constructxpbonus, "finishing a construction" );
+		if( !G_NITMOD_LegacyCvarInteger("g_constructiblexpsharing", 0) ) {
+			G_AddSkillPoints( ent, SK_EXPLOSIVES_AND_CONSTRUCTION, constructible->constructibleStats.constructxpbonus );
+			G_DebugAddSkillPoints( ent, SK_EXPLOSIVES_AND_CONSTRUCTION, constructible->constructibleStats.constructxpbonus, "finishing a construction" );
+		}
 
 		// unlink the objective info to get rid of the indicator for now
 		// Arnout: don't unlink, we still want the location popup. Instead, constructible_indicator_think got changed to free
@@ -1937,12 +2097,18 @@ evilbanigoto:
 				traceEnt->s.effect1Time = level.time;
 
 				// ARM IT!
-				traceEnt->nextthink = level.time + 30000;
+				{
+					int dynamiteTimer = G_NITMOD_DynamiteTimer();
+					traceEnt->nextthink = level.time + dynamiteTimer;
+					traceEnt->s.time = dynamiteTimer;
 				traceEnt->think = G_ExplodeMissile;
 
 				// Gordon: moved down here to prevent two prints when dynamite IS near objective
 
-				trap_SendServerCommand( ent-g_entities, "cp \"Dynamite is now armed with a 30 second timer!\" 1");
+				trap_SendServerCommand(ent-g_entities,
+					va("cp \"Dynamite is now armed with a %i second timer!\" 1",
+						dynamiteTimer / 1000));
+				}
 
 				// check if player is in trigger objective field
 				// NERVE - SMF - made this the actual bounding box of dynamite instead of range, also must snap origin to line up properly
@@ -2074,6 +2240,16 @@ evilbanigoto:
 					}
 				}
 			} else {
+				/* Original Weapon_Engineer g_misc bit 1: an engineer may
+				 * recover their own armed charge, but must not consume a
+				 * teammate's dynamite.  Reject before health/progress changes. */
+				if( (G_NITMOD_LegacyCvarInteger("g_misc", 0) & 1) &&
+					traceEnt->s.teamNum == ent->client->sess.sessionTeam &&
+					traceEnt->parent != ent ) {
+					G_PrintClientSpammyCenterPrint(ent-g_entities,
+						"You cannot defuse a teammate's dynamite!");
+					return;
+				}
 				if (traceEnt->timestamp > level.time)
 					return;
 				if (traceEnt->health >= 248) // have to do this so we don't score multiple times
@@ -2283,34 +2459,88 @@ void G_AirStrikeExplode( gentity_t *self ) {
 }
 
 qboolean G_AvailableAirstrikes( gentity_t* ent ) {
-	if( ent->client->sess.sessionTeam == TEAM_AXIS ) {
-		if( level.axisBombCounter >= 60 * 1000 ) {
-			return qfalse;
-		}
-	} else {
-		if( level.alliedBombCounter >= 60 * 1000 ) {
-			return qfalse;
-		}
-	}
-
-	return qtrue;
+	int team;
+	if( !ent || !ent->client ) return qfalse;
+	team = ent->client->sess.sessionTeam;
+	if( team != TEAM_AXIS && team != TEAM_ALLIES ) return qfalse;
+	return level.nitmodAirstrikeCounter[team - TEAM_AXIS] < 1;
 }
 
 void G_AddAirstrikeToCounters( gentity_t* ent ) {
-	int max = min( 6, 2 * ( ceil( g_heavyWeaponRestriction.integer * G_TeamCount( ent, -1 ) * 0.1f * 10 * 0.01f ) ) );
+	int seconds, team;
+	if( !ent || !ent->client ) return;
+	team = ent->client->sess.sessionTeam;
+	if( team != TEAM_AXIS && team != TEAM_ALLIES ) return;
+	seconds = G_NITMOD_LegacyCvarInteger("team_airstrikeTime", 10);
+	if( seconds < 0 ) seconds = 0;
+	if( seconds > INT_MAX / 1000 ) seconds = INT_MAX / 1000;
+	level.nitmodAirstrikeCounter[team - TEAM_AXIS] += seconds * 1000;
+}
 
-	
+static qboolean G_NITMOD_AvailableArtillery( const gentity_t *ent ) {
+	int team;
+	if( !ent || !ent->client ) return qfalse;
+	team = ent->client->sess.sessionTeam;
+	if( team != TEAM_AXIS && team != TEAM_ALLIES ) return qfalse;
+	return level.nitmodArtilleryCounter[team - TEAM_AXIS] < 1;
+}
 
-	if( ent->client->sess.sessionTeam == TEAM_AXIS ) {
-		level.axisBombCounter += ((60 * 1000) / (float)max);
-	} else {
-		level.alliedBombCounter += ((60 * 1000) / (float)max);
-	}
+static void G_NITMOD_AddArtilleryCounter( const gentity_t *ent ) {
+	int seconds, team;
+	if( !ent || !ent->client ) return;
+	team = ent->client->sess.sessionTeam;
+	if( team != TEAM_AXIS && team != TEAM_ALLIES ) return;
+	seconds = G_NITMOD_LegacyCvarInteger("team_artyTime", 10);
+	if( seconds < 0 ) seconds = 0;
+	if( seconds > INT_MAX / 1000 ) seconds = INT_MAX / 1000;
+	level.nitmodArtilleryCounter[team - TEAM_AXIS] += seconds * 1000;
 }
 
 #define NUMBOMBS 10
 #define BOMBSPREAD 150
 extern void G_SayTo( gentity_t *ent, gentity_t *other, int mode, int color, const char *name, const char *message, qboolean localize );
+
+static int G_NITMOD_FieldOpsSupportCost(const gentity_t *ent) {
+	int team, charge;
+
+	if(!ent || !ent->client) return 0;
+	team = ent->client->sess.sessionTeam;
+	if(team != TEAM_AXIS && team != TEAM_ALLIES) return 0;
+	charge = level.lieutenantChargeTime[team - TEAM_AXIS];
+	return ent->client->sess.skill[SK_SIGNALS] >= 2 ? (int)(charge * 0.66f) : charge;
+}
+
+static void G_NITMOD_ConsumeFieldOpsSupport(gentity_t *ent) {
+	int charge, cost, team;
+
+	if(!ent || !ent->client) return;
+	team = ent->client->sess.sessionTeam;
+	if(team != TEAM_AXIS && team != TEAM_ALLIES) return;
+	charge = level.lieutenantChargeTime[team - TEAM_AXIS];
+	cost = G_NITMOD_FieldOpsSupportCost(ent);
+	if(level.time - ent->client->ps.classWeaponTime > charge)
+		ent->client->ps.classWeaponTime = level.time - charge;
+	ent->client->ps.classWeaponTime += cost;
+}
+
+/* g_fieldOps bit 2 restores a rejected support call completely; bit 4
+ * restores half.  With neither bit set the original consumes the full call. */
+static void G_NITMOD_RefundRejectedFieldOpsSupport(gentity_t *ent) {
+	int options, refund, charge, minimum, team;
+
+	if(!ent || !ent->client) return;
+	team = ent->client->sess.sessionTeam;
+	if(team != TEAM_AXIS && team != TEAM_ALLIES) return;
+	options = G_NITMOD_LegacyCvarInteger("g_fieldOps", 0);
+	if(options & 2) refund = G_NITMOD_FieldOpsSupportCost(ent);
+	else if(options & 4) refund = G_NITMOD_FieldOpsSupportCost(ent) / 2;
+	else return;
+	charge = level.lieutenantChargeTime[team - TEAM_AXIS];
+	minimum = level.time - charge;
+	ent->client->ps.classWeaponTime -= refund;
+	if(ent->client->ps.classWeaponTime < minimum)
+		ent->client->ps.classWeaponTime = minimum;
+}
 
 void weapon_checkAirStrikeThink1( gentity_t *ent ) {
 	if( !weapon_checkAirStrike( ent ) ) {
@@ -2366,6 +2596,7 @@ qboolean weapon_checkAirStrike( gentity_t *ent ) {
 		} else {
 			level.numActiveAirstrikes[1]--; 
 		}
+		G_NITMOD_RefundRejectedFieldOpsSupport(ent->parent);
 		return qfalse; // do nothing, don't hurt anyone 
 	}
 
@@ -2387,6 +2618,7 @@ qboolean weapon_checkAirStrike( gentity_t *ent ) {
 			} else {
 				level.numActiveAirstrikes[1]--;
 			}
+			G_NITMOD_RefundRejectedFieldOpsSupport(ent->parent);
 			return qfalse;
 		}
 	} else {
@@ -2407,6 +2639,7 @@ qboolean weapon_checkAirStrike( gentity_t *ent ) {
 			} else {
 				level.numActiveAirstrikes[1]--;
 			}
+			G_NITMOD_RefundRejectedFieldOpsSupport(ent->parent);
 			return qfalse;
 		}
 	}
@@ -2463,6 +2696,7 @@ void weapon_callAirStrike( gentity_t *ent ) {
 			level.numActiveAirstrikes[1]--;
 		}
 		ent->active = qfalse;
+		G_NITMOD_RefundRejectedFieldOpsSupport(ent->parent);
 		return;
 	}
 
@@ -2656,13 +2890,23 @@ void Weapon_Artillery(gentity_t *ent) {
 		return;
 	}
 
+	/* Original Weapon_Artillery returns before charge consumption and target
+	 * tracing when mode-specific artillery suppression is selected. */
+	if( (g_gametype.integer == GT_WOLF_TDM &&
+		 (G_NITMOD_LegacyCvarInteger("g_TDMOptions", 0) & 4)) ||
+		(g_gametype.integer == GT_WOLF_DM &&
+		 (G_NITMOD_LegacyCvarInteger("g_DMOptions", 0) & 32)) ) {
+		return;
+	}
+
 	// TAT - 10/27/2002 - moved energy check into a func, so I can use same check in bot code
 	if( !ReadyToCallArtillery(ent) ) {
 		return;
 	}
+	G_NITMOD_ConsumeFieldOpsSupport(ent);
 
 	if( ent->client->sess.sessionTeam == TEAM_AXIS ) {
-		if( !G_AvailableAirstrikes( ent ) ) {
+		if( !G_NITMOD_AvailableArtillery( ent ) ) {
 			G_SayTo( ent, ent, 2, COLOR_YELLOW, "Fire Mission: ", "Insufficient fire support.", qtrue );
 			ent->active = qfalse;
 
@@ -2672,10 +2916,11 @@ void Weapon_Artillery(gentity_t *ent) {
 			te->s.eventParm = G_SoundIndex( "axis_hq_airstrike_denied" );
 			te->s.teamNum = ent-g_entities;*/
 
+			G_NITMOD_RefundRejectedFieldOpsSupport(ent);
 			return;
 		}
 	} else {
-		if( !G_AvailableAirstrikes( ent ) ) {
+		if( !G_NITMOD_AvailableArtillery( ent ) ) {
 			G_SayTo( ent, ent, 2, COLOR_YELLOW, "Fire Mission: ", "Insufficient fire support.", qtrue );
 			ent->active = qfalse;
 
@@ -2685,6 +2930,7 @@ void Weapon_Artillery(gentity_t *ent) {
 			te->s.eventParm = G_SoundIndex( "allies_hq_airstrike_denied" );
 			te->s.teamNum = ent-g_entities;*/
 
+			G_NITMOD_RefundRejectedFieldOpsSupport(ent);
 			return;
 		}
 	}
@@ -2697,8 +2943,10 @@ void Weapon_Artillery(gentity_t *ent) {
 	VectorMA (muzzlePoint, 8192, forward, end);
 	trap_Trace (&trace, muzzlePoint, NULL, NULL, end, ent->s.number, MASK_SHOT);
 
-	if (trace.surfaceFlags & SURF_NOIMPACT)
+	if (trace.surfaceFlags & SURF_NOIMPACT) {
+		G_NITMOD_RefundRejectedFieldOpsSupport(ent);
 		return;
+	}
 
 	VectorCopy(trace.endpos,pos);
 	VectorCopy(pos,bomboffset);
@@ -2719,10 +2967,11 @@ void Weapon_Artillery(gentity_t *ent) {
 		te->s.teamNum = ent->s.clientNum;*/
 
 //		te->s.effect1Time = 1;	// don't buffer
+		G_NITMOD_RefundRejectedFieldOpsSupport(ent);
 		return;
 	}
 
-	G_AddAirstrikeToCounters( ent );
+	G_NITMOD_AddArtilleryCounter( ent );
 
 	G_SayTo( ent, ent, 2, COLOR_YELLOW, "Fire Mission: ", "Firing for effect!", qtrue );
 
@@ -2818,6 +3067,9 @@ void Weapon_Artillery(gentity_t *ent) {
 		bomb->s.pos.trDelta[2] = 0;
 		SnapVector( bomb->s.pos.trDelta );			// save net bandwidth
 		VectorCopy (bomb->s.pos.trBase, bomb->r.currentOrigin);
+		if( i == 1 ) {
+			G_NITMOD_SpawnArtilleryHint( bomb );
+		}
 
 // build arty falling sound effect in front of bomb drop
 		bomb2 = G_Spawn();
@@ -2836,15 +3088,6 @@ void Weapon_Artillery(gentity_t *ent) {
 		VectorCopy(bomb->s.pos.trBase,bomb2->s.pos.trBase);
 		VectorCopy(bomb->s.pos.trDelta,bomb2->s.pos.trDelta);
 		VectorCopy(bomb->s.pos.trBase,bomb2->r.currentOrigin);
-	}
-
-	if( ent->client->sess.skill[SK_SIGNALS] >= 2 ) {
-		if (level.time - ent->client->ps.classWeaponTime > level.lieutenantChargeTime[ent->client->sess.sessionTeam-1])
-			ent->client->ps.classWeaponTime = level.time - level.lieutenantChargeTime[ent->client->sess.sessionTeam-1];
-		
-		ent->client->ps.classWeaponTime += 0.66f * level.lieutenantChargeTime[ent->client->sess.sessionTeam-1];
-	} else {
-		ent->client->ps.classWeaponTime = level.time;
 	}
 
 	// OSP -- weapon stats
@@ -2874,6 +3117,16 @@ void weapon_smokeBombExplode( gentity_t *ent ) {
 
 	lived = level.time - ent->grenadeExplodeTime;
 	ent->nextthink = level.time + FRAMETIME;
+	if((ent->s.weapon == WP_POISON_BOMB || ent->s.weapon == WP_POISON_MINE) &&
+		ent->s.effect1Time > 24) {
+		int radius = ent->splashRadius;
+		G_NITMOD_WeaponDamageOverrides(ent->s.weapon, NULL, NULL, &radius);
+		G_RadiusDamage(ent->r.currentOrigin, ent, ent->parent,
+			G_GetWeaponDamage(ent->s.weapon), radius, ent,
+			ent->s.weapon == WP_POISON_MINE ? MOD_POISON_GAS_MINE : MOD_POISON_GAS);
+		ent->s.effect2Time = 0;
+		ent->nextthink = level.time + 800;
+	}
 
 	if( lived < SMOKEBOMB_GROWTIME ) {
 		// Just been thrown, increase radius
@@ -2939,6 +3192,9 @@ void SnapVectorTowards( vec3_t v, vec3_t to ) {
 // KLUDGE/FIXME: also modded #defines below to become macros that call this fn for minimal impact elsewhere
 //
 int G_GetWeaponDamage( int weapon ) {
+		int overrideDamage = 0;
+		G_NITMOD_WeaponDamageOverrides(weapon, &overrideDamage, NULL, NULL);
+		if(overrideDamage) return overrideDamage;
 		switch (weapon) {
 		default:
 			return 1;
@@ -2992,7 +3248,13 @@ int G_GetWeaponDamage( int weapon ) {
 
 
 float G_GetWeaponSpread( int weapon ) {
+	float spread;
+	if(G_NITMOD_WeaponSpreadOverride(weapon, &spread)) return spread;
 	switch (weapon) {
+		case WP_KNIFE:
+		case WP_PANZERFAUST:
+		case WP_POISON_SYRINGE:
+			return 0;
 		case WP_LUGER:
 		case WP_SILENCER:
 		case WP_AKIMBO_LUGER:
@@ -3213,6 +3475,10 @@ Bullet_Fire
 */
 void Bullet_Fire (gentity_t *ent, float spread, int damage, qboolean distance_falloff) {
 	vec3_t		end;
+	/* Resolve once before the penetration/ricochet recursion. Zero/missing
+	 * definitions preserve the caller's existing weapon damage. */
+	G_NITMOD_WeaponDamageOverrides(ent->s.weapon, &damage, NULL, NULL);
+	distance_falloff = G_NITMOD_WeaponFalloffMode(ent->s.weapon, distance_falloff);
 
 	// Gordon: skill thing should be here Arnout! 
 	switch( ent->s.weapon ) {
@@ -3508,6 +3774,7 @@ gentity_t *weapon_grenadelauncher_fire (gentity_t *ent, int grenType) {
 	vec3_t		viewpos;
 	float		upangle = 0, pitch;			//	start with level throwing and adjust based on angle
 	vec3_t		tosspos;
+	vec3_t launchMins, launchMaxs;
 	qboolean	underhand = qtrue;
 
 	pitch = ent->s.apos.trBase[0];
@@ -3548,7 +3815,7 @@ gentity_t *weapon_grenadelauncher_fire (gentity_t *ent, int grenType) {
 		upangle *= 900;
 	else if (grenType == WP_SMOKE_MARKER)
 		upangle *= 900;
-	else if (grenType == WP_SMOKE_BOMB)
+	else if (grenType == WP_SMOKE_BOMB || grenType == WP_BOMB || grenType == WP_POISON_BOMB)
 		upangle *= 900;
 	else	// WP_DYNAMITE // Gordon: or WP_LANDMINE / WP_SATCHEL
 		upangle *= 400;
@@ -3569,12 +3836,16 @@ gentity_t *weapon_grenadelauncher_fire (gentity_t *ent, int grenType) {
 	VectorCopy( ent->s.pos.trBase, viewpos );
 	viewpos[2] += ent->client->ps.viewheight;
 
-	if( grenType == WP_DYNAMITE || grenType == WP_SATCHEL )
-		trap_Trace (&tr, viewpos, tv(-12.f, -12.f, 0.f), tv(12.f, 12.f, 20.f), tosspos, ent->s.number, MASK_MISSILESHOT);
-	else if( grenType == WP_LANDMINE )
-		trap_Trace (&tr, viewpos, tv(-16.f, -16.f, 0.f), tv(16.f, 16.f, 16.f), tosspos, ent->s.number, MASK_MISSILESHOT);
-	else
-		trap_Trace (&tr, viewpos, tv(-4.f, -4.f, 0.f), tv(4.f, 4.f, 6.f), tosspos, ent->s.number, MASK_MISSILESHOT);
+	/* Original launch clearance differs from the bomb's resting/kick bounds.
+	 * Reuse exactly the same box for the startsolid recovery trace. */
+	if(grenType == WP_DYNAMITE || grenType == WP_SATCHEL || grenType == WP_BOMB) {
+		VectorSet(launchMins, -12, -12, 0); VectorSet(launchMaxs, 12, 12, 20);
+	} else if(grenType == WP_LANDMINE || grenType == WP_POISON_MINE) {
+		VectorSet(launchMins, -16, -16, 0); VectorSet(launchMaxs, 16, 16, 16);
+	} else {
+		VectorSet(launchMins, -4, -4, 0); VectorSet(launchMaxs, 4, 4, 6);
+	}
+	trap_Trace(&tr, viewpos, launchMins, launchMaxs, tosspos, ent->s.number, MASK_MISSILESHOT);
 
 	if( tr.startsolid ) {
 		// Arnout: this code is a bit more solid than the previous code
@@ -3582,12 +3853,7 @@ gentity_t *weapon_grenadelauncher_fire (gentity_t *ent, int grenType) {
 		VectorNormalizeFast( viewpos );
 		VectorMA( ent->r.currentOrigin, -24.f, viewpos, viewpos ); 
 
-		if( grenType == WP_DYNAMITE || grenType == WP_SATCHEL )
-			trap_Trace (&tr, viewpos, tv(-12.f, -12.f, 0.f), tv(12.f, 12.f, 20.f), tosspos, ent->s.number, MASK_MISSILESHOT);
-		else if( grenType == WP_LANDMINE )
-			trap_Trace (&tr, viewpos, tv(-16.f, -16.f, 0.f), tv(16.f, 16.f, 16.f), tosspos, ent->s.number, MASK_MISSILESHOT);
-		else
-			trap_Trace (&tr, viewpos, tv(-4.f, -4.f, 0.f), tv(4.f, 4.f, 6.f), tosspos, ent->s.number, MASK_MISSILESHOT);
+		trap_Trace(&tr, viewpos, launchMins, launchMaxs, tosspos, ent->s.number, MASK_MISSILESHOT);
 
 		VectorCopy( tr.endpos, tosspos );
 	} else if( tr.fraction < 1 ) {	// oops, bad launch spot
@@ -3598,8 +3864,9 @@ gentity_t *weapon_grenadelauncher_fire (gentity_t *ent, int grenType) {
 	m = fire_grenade (ent, tosspos, forward, grenType);
 
 	m->damage = 0;	// Ridah, grenade's don't explode on contact
+	if(grenType == WP_BOMB) m->s.effect1Time = 1;
 	
-	if (grenType == WP_LANDMINE) {
+	if (grenType == WP_LANDMINE || grenType == WP_POISON_MINE) {
 		if (ent->client->sess.sessionTeam == TEAM_AXIS) // store team so we can generate red or blue smoke
 			m->s.otherEntityNum2 = 1;
 		else
@@ -3609,6 +3876,11 @@ gentity_t *weapon_grenadelauncher_fire (gentity_t *ent, int grenType) {
 	// Arnout: override for smoke gren
 	if( grenType == WP_SMOKE_BOMB ) {
 		m->s.effect1Time = 16;
+		m->think = weapon_smokeBombExplode;
+	}
+	if(grenType == WP_POISON_BOMB) {
+		m->s.effect1Time = 16;
+		m->s.effect2Time = 1;
 		m->think = weapon_smokeBombExplode;
 	}
 
@@ -4050,6 +4322,9 @@ void FireWeapon( gentity_t *ent ) {
 	case WP_MEDIC_SYRINGE:
 		Weapon_Syringe(ent);
 		break;
+	case WP_POISON_SYRINGE:
+		G_NITMOD_PoisonAttack(ent);
+		break;
 	case WP_MEDIC_ADRENALINE:
 		ent->client->ps.classWeaponTime = level.time;
 		Weapon_AdrenalineSyringe(ent);
@@ -4183,10 +4458,13 @@ void FireWeapon( gentity_t *ent ) {
 	case WP_GRENADE_LAUNCHER:
 	case WP_GRENADE_PINEAPPLE:
 	case WP_DYNAMITE:
+	case WP_BOMB:
 	case WP_LANDMINE:
+	case WP_POISON_MINE:
 	case WP_SATCHEL:
 	case WP_SMOKE_BOMB:
-		if( ent->s.weapon == WP_SMOKE_BOMB || ent->s.weapon == WP_SATCHEL ) {
+	case WP_POISON_BOMB:
+		if( ent->s.weapon == WP_SMOKE_BOMB || ent->s.weapon == WP_POISON_BOMB || ent->s.weapon == WP_SATCHEL ) {
 			if( level.time - ent->client->ps.classWeaponTime > level.covertopsChargeTime[ent->client->sess.sessionTeam-1] ) {
 				ent->client->ps.classWeaponTime = level.time - level.covertopsChargeTime[ent->client->sess.sessionTeam-1];
 			}
@@ -4198,7 +4476,7 @@ void FireWeapon( gentity_t *ent ) {
 			}
 		}
 
-		if( ent->s.weapon == WP_LANDMINE ) {
+		if( ent->s.weapon == WP_LANDMINE || ent->s.weapon == WP_POISON_MINE ) {
 			if( level.time - ent->client->ps.classWeaponTime > level.engineerChargeTime[ent->client->sess.sessionTeam-1] ) {
 				ent->client->ps.classWeaponTime = level.time - level.engineerChargeTime[ent->client->sess.sessionTeam-1];
 			}
@@ -4212,7 +4490,7 @@ void FireWeapon( gentity_t *ent ) {
 			}
 		}
 
-		if (ent->s.weapon == WP_DYNAMITE) {
+		if (ent->s.weapon == WP_DYNAMITE || ent->s.weapon == WP_BOMB) {
 			if( level.time - ent->client->ps.classWeaponTime > level.engineerChargeTime[ent->client->sess.sessionTeam-1] ) {
 				ent->client->ps.classWeaponTime = level.time - level.engineerChargeTime[ent->client->sess.sessionTeam-1];
 			}
@@ -4235,6 +4513,9 @@ void FireWeapon( gentity_t *ent ) {
 	default:
 		break;
 	}
+
+	Bot_Event_FireWeapon(ent - g_entities,
+		Bot_WeaponGameToBot(ent->s.weapon), NULL);
 
 	// OSP
 #ifndef DEBUG_STATS

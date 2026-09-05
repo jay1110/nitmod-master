@@ -32,19 +32,22 @@ assert 'uiInfo.playerIndex >= uiInfo.playerCount' in roster
 assert 'uiInfo.teamIndex >= uiInfo.myTeamCount' in roster
 assert 'key < 0 || key >= (int)(sizeof(menu->onKey)' in main
 
-# Class menu is a paired cgame/UI extension, not a reassignment of ET chat.
+# Original Nitmod ABI assigns class/class-alt to 15/16 and chat to 17.
 console = (root / 'src_2.60/cgame/cg_consolecmds.c').read_text()
 shared = (root / 'src_2.60/game/bg_public.h').read_text()
 assert '{ "classmenu", CG_NitmodClassMenu_f }' in console
 assert 'cg_quickMessageAlt.integer ? UIMENU_NITMOD_CLASSALT : UIMENU_NITMOD_CLASS' in console
 assert 'CG_EventHandling(CGAME_EVENT_NONE, qfalse)' in console
 assert 'UIMENU_INGAME_MESSAGEMODE,' in shared
-assert shared.index('UIMENU_INGAME_MESSAGEMODE,') < shared.index('UIMENU_NITMOD_CLASS,')
+assert shared.index('UIMENU_NITMOD_CLASS,') < shared.index('UIMENU_NITMOD_CLASSALT,')
+assert shared.index('UIMENU_NITMOD_CLASSALT,') < shared.index('UIMENU_INGAME_MESSAGEMODE,')
 for name in ('wm_class', 'wm_classAlt', 'ingame_messagemode4'):
     assert '"' + name + '"' in main
     assert name.lower().encode() in binary.lower()
 assert 'trap_Cvar_VariableValue("cg_messageType") == 4' in main
 assert '{ "messageMode4", CG_MessageMode_f }' in console
+
+# Original Nitmod's decompiled CG_MessageMode_f calls trap_UI_Popup(0x11).
 assert 'else if( !Q_stricmp( cmd, "messagemode4" ) )' in console
 assert 'trap_Cvar_Set( "cg_messageType", "4" )' in console
 send = console.split('static void CG_MessageSend_f', 1)[1].split('static void CG_SetWeaponCrosshair_f', 1)[0]
@@ -66,3 +69,16 @@ sender = console.split('void CG_NitmodSendChat', 1)[1].split('static qboolean CG
 assert 'NITMOD_BuildChatCommand' in sender
 assert 'trap_SendClientCommand(reliable)' in sender
 assert 'trap_SendConsoleCommand' not in sender
+
+# The remaining original vote/referee scalar actions are kept out of the
+# monolithic UI_RunMenuScript dispatcher and reject non-finite conversions.
+actions = (root / 'src_2.60/ui/ui_nitmod_actions.c').read_text()
+for name in ('voteTimelimit', 'refTimelimit', 'voteWarmupDamage',
+             'refWarmupDamage', 'voteInitToggles', 'clientCheckVote'):
+    assert ('"' + name + '"') in actions
+    assert name.encode() + b'\0' in binary
+for fmt in (b'callvote timelimit %f\n', b'ref timelimit %f\n',
+            b'callvote warmupdamage %d\n', b'ref warmupdamage %d\n'):
+    assert fmt + b'\0' in binary
+assert '#include <float.h>' in actions
+assert '#include <limits.h>' in actions

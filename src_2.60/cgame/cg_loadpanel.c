@@ -201,28 +201,7 @@ CG_DrawConnectScreen
 */
 
 const char* CG_LoadPanel_GameTypeName( gametype_t gt ) {
-	/* Original server IDs 7/8 extend ET's gametype enum; display only. */
-	switch( (int)gt ) {
-		case GT_SINGLE_PLAYER:
-			return "Single Player";
-		case GT_COOP:
-			return "Co-op";
-		case GT_WOLF:
-			return "Objective";
-		case GT_WOLF_STOPWATCH:
-			return "Stopwatch";
-		case GT_WOLF_CAMPAIGN:
-			return "Campaign";
-		case GT_WOLF_LMS:
-			return "Last Man Standing";
-		case 6: return "Map Voting";
-		case 7: return "Team Death Match";
-		case 8: return "Death Match";
-		default:
-			break;
-	}
-
-	return "Invalid";
+	return BG_NitmodGametypeName( (int)gt, qfalse );
 }
 
 /* Original CG_DrawConnectScreen 0x7bc00 and loadpanelButtons 0x137800.
@@ -523,7 +502,9 @@ void CG_LoadPanel_RenderCampaignPins( panel_button_t* button ) {
 	s = Info_ValueForKey( buffer, "g_gametype" );
 	gametype = atoi(s);*/
 
-	if( cgs.gametype == GT_WOLF_STOPWATCH || cgs.gametype == GT_WOLF_LMS || cgs.gametype == GT_WOLF ) {
+	if( cgs.gametype == GT_WOLF_STOPWATCH || cgs.gametype == GT_WOLF_LMS ||
+		cgs.gametype == GT_WOLF || cgs.gametype == GT_WOLF_TDM ||
+		cgs.gametype == GT_WOLF_DM ) {
 		float px, py;
 
 		if( !cgs.arenaInfoLoaded ) {

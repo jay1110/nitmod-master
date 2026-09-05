@@ -23,7 +23,8 @@ int NITMOD_ReloadAnimation( int weapon, int fastReloadEnabled ) {
 int NITMOD_ReloadBodyEventRequired( int weapon ) {
     switch( weapon ) {
     case WP_GRENADE_LAUNCHER: case WP_GRENADE_PINEAPPLE: case WP_DYNAMITE:
-    case WP_SMOKE_BOMB: case WP_TRIPMINE:
+    case WP_SMOKE_BOMB: case WP_TRIPMINE: case WP_BOMB:
+    case WP_POISON_BOMB:
         return 0;
     default: return 1;
     }

@@ -13,6 +13,10 @@ map XP and intermission time use the observed original numbering. Native
 versioninfo has no mapped original counterpart and reads empty. Original
 34..39 notifications are not routed to unrelated native callbacks; their
 remaining original-specific handlers are not implemented by this change.
+Later continuation: original slot 39 class health limits are now consumed
+on demand by the crosshair HUD (see client-class-health.md).
+Original slot 34 now supplies the 16 Nitmod round awards and invalidates the
+debrief cache on updates (see client-round-awards.md).
 Native/advertised et260 layouts retain native indices.
 
 Fog parsing rejects incomplete, non-finite, negative, extra-token and invalid

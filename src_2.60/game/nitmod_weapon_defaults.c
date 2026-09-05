@@ -1,5 +1,32 @@
 #include "nitmod_weapon_defaults.h"
 
+int NITMOD_WeaponBlastDefaults(int weapon, int *damage, int *splash, int *radius) {
+    static const struct { int weapon, damage, splash, radius; } blast[] = {
+        {WP_GRENADE_LAUNCHER, 0, 250, 250},
+        {WP_GRENADE_PINEAPPLE, 0, 250, 250},
+        {WP_PANZERFAUST, 400, 400, 300},
+        {WP_DYNAMITE, 0, 400, 400},
+        {WP_LANDMINE, 0, 250, 250},
+        {WP_SATCHEL, 0, 250, 250},
+        {WP_SMOKE_BOMB, 0, 0, 0},
+        {WP_SMOKE_MARKER, 400, 400, 400},
+        {WP_GPG40, 250, 250, 250},
+        {WP_M7, 250, 250, 250},
+        {WP_MORTAR_SET, 400, 400, 400},
+        {WP_BOMB, 0, 350, 300},
+        {WP_TRIPMINE, 0, 300, 300},
+        {WP_POISON_BOMB, 20, 0, 250},
+        {WP_POISON_MINE, 20, 0, 250}
+    };
+    unsigned int i;
+    if(!damage || !splash || !radius) return 0;
+    for(i=0;i<sizeof(blast)/sizeof(blast[0]);++i) if(blast[i].weapon==weapon) {
+        *damage=blast[i].damage; *splash=blast[i].splash; *radius=blast[i].radius;
+        return 1;
+    }
+    return 0;
+}
+
 typedef struct {
     weapon_t weapon;
     int maxammo, uses, maxclip, defaultStartingAmmo, defaultStartingClip;
@@ -52,6 +79,10 @@ static const weaponDefaults_t defaults[] = {
     { WP_AKIMBO_SILENCEDLUGER, 48, 1, 8, 48, 8, 2700, 100, 200, 0, 0 },
     { WP_MOBILE_MG42_SET, 450, 1, 150, 0, 150, 3000, 100, 66, 1500, 300 },
     { WP_TRIPMINE, 1, 0, 1, 1, 1, 100, 100, 100, 0, 0 },
+    { WP_BOMB, 1, 1, 1, 0, 1, 1000, 250, 1600, 0, 0 },
+    { WP_POISON_SYRINGE, 8, 1, 1, 0, 4, 1500, 50, 500, 0, 0 },
+    { WP_POISON_BOMB, 1, 0, 10, 0, 1, 1000, 250, 1600, 0, 0 },
+    { WP_POISON_MINE, 1, 0, 1, 0, 1, 100, 100, 100, 0, 0 },
 };
 int NITMOD_WeaponAutoReloadDefault( int weapon, int *requiresSetting ) {
     unsigned int i;

@@ -1,5 +1,9 @@
 # Original player config extras and spectator roles
 
+Correction: the `xp` vector described below was initially misidentified.
+It carries skill-unlock masks, not XP counters; see client-skill-masks.md.
+The parser now stores it in nitmodSkillMasks and does not overwrite skillpoints.
+
 CG_NewClientInfo in sorted cgame_players.c reads token 0x59 (sc), 0x5a
 (tv) and 0x70 (xp). The names are verified through the hash-pinned original
 ELF wordlist extractor tools/extract_client_tokens.py. Stack members

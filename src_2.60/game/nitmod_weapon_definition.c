@@ -61,6 +61,59 @@ static int *AmmoField( ammotable_t *ammo, const char *name ) {
     return NULL;
 }
 
+/* Only string-valued attributes unwrap the engine's quoted-token marker.
+ * Numeric keys and quoted braces must never become grammar tokens. */
+static const char *ReadString(tokenStream_t *stream) {
+    const char *value = Next(stream);
+    if(!value) return NULL;
+    if(*value == '\1') return value + 1;
+    if(!strcmp(value, "{") || !strcmp(value, "}")) return NULL;
+    return value;
+}
+
+/* BG_RW_ParseDefinition, original ELF 0x35320. Metadata ownership remains
+ * with the caller; parsing does not activate new damage/prediction behavior. */
+static int ReadMetadata(tokenStream_t *stream, const char *key, nitmodWeaponOptions_t *out) {
+    int *integer = NULL, *choice = NULL;
+    float *real = NULL;
+    char *text = NULL;
+    size_t capacity = 0, length;
+    const char *value;
+    if(!out) return -1;
+    if(!strcmp(key, "limboKill")) { out->limboKill = 1; return 1; }
+    if(!strcmp(key, "name")) { text = out->name; capacity = sizeof(out->name); }
+    else if(!strcmp(key, "KillMessage")) { text = out->killMessage; capacity = sizeof(out->killMessage); }
+    else if(!strcmp(key, "KillMessage2")) { text = out->killMessage2; capacity = sizeof(out->killMessage2); }
+    else if(!strcmp(key, "damage")) integer = &out->damage;
+    else if(!strcmp(key, "splashdamage")) integer = &out->splashDamage;
+    else if(!strcmp(key, "splashdamage_radius")) integer = &out->splashRadius;
+    else if(!strcmp(key, "spread")) integer = &out->spread;
+    else if(!strcmp(key, "SpreadScaleAdd")) integer = &out->spreadScaleAdd;
+    else if(!strcmp(key, "SpreadScaleAddRand")) integer = &out->spreadScaleAddRand;
+    else if(!strcmp(key, "minHeadshotDamage")) integer = &out->minHeadshotDamage;
+    else if(!strcmp(key, "movementSpeedScale")) real = &out->movementSpeedScale;
+    else if(!strcmp(key, "HeadshotRatio")) real = &out->headshotRatio;
+    else if(!strcmp(key, "spreadRatio")) real = &out->spreadRatio;
+    else if(!strcmp(key, "HeadshotWeapon")) choice = &out->headshotWeapon;
+    else if(!strcmp(key, "DistanceFalloff")) choice = &out->distanceFalloff;
+    else if(!strcmp(key, "GibbingWeapon")) choice = &out->gibbingWeapon;
+    else if(!strcmp(key, "velocity2spread")) choice = &out->velocityToSpread;
+    else if(!strcmp(key, "viewchange2spread")) choice = &out->viewChangeToSpread;
+    else return -1;
+    if(integer) return ReadInteger(stream, integer);
+    if(real) return ReadFloat(stream, real);
+    value = ReadString(stream);
+    if(!value) return 0;
+    if(choice) {
+        *choice = !strcmp(value, "yes") ? 1 : !strcmp(value, "no") ? 2 : 0;
+        return 1;
+    }
+    length = strlen(value);
+    if(length >= capacity) length = capacity - 1;
+    memcpy(text, value, length); text[length] = 0;
+    return 1;
+}
+
 static int Block( tokenStream_t *stream, int selected, unsigned int *mask,
     ammotable_t *ammo, nitmodWeaponRecoil_t *recoil, nitmodWeaponOptions_t *options ) {
     const char *token = Next(stream);
@@ -72,6 +125,11 @@ static int Block( tokenStream_t *stream, int selected, unsigned int *mask,
         } else if( !strcmp(token, "{") ) {
             if( selected || ++depth > 64 ) return 0;
         } else if( selected ) {
+            int metadata = ReadMetadata(stream, token, options);
+            if(metadata >= 0) {
+                if(!metadata) return 0;
+                continue;
+            }
             if( options && !strcmp(token, "noMidclipReload") ) {
                 options->noMidclipReload = 1;
                 continue;

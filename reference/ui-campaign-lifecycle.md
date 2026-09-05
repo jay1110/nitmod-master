@@ -48,8 +48,9 @@ and invalid counts are skipped/rejected.
 BG_LoadCampaignSave checks file length before every read, version, profile,
 campaign count and progress before array access; all partial output is cleared
 on failure. Explicit little-endian decoding replaces native-endian reads.
-The writer is unchanged, including its existing native-endian portability
-limitation; this change does not claim a completed macOS persistence backend.
+The subsequent writer and campaign-control work is documented in
+ui-campaign-controls-and-persistence.md; the writer now explicitly emits
+little-endian fields. This does not claim a completed macOS persistence backend.
 
 ## Checks
 

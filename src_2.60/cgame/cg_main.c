@@ -1994,6 +1994,10 @@ static void CG_RegisterGraphics( void ) {
 	cgs.media.limboClassButton2Back_off =		trap_R_RegisterShaderNoMip( "gfx/limbo/skill_back_off"			);
 	cgs.media.limboClassButton2Wedge_off =		trap_R_RegisterShaderNoMip( "gfx/limbo/skill_4pieces_off"		);
 	cgs.media.limboClassButton2Wedge_on =		trap_R_RegisterShaderNoMip( "gfx/limbo/skill_4pieces_on"		);
+	if(NITMOD_UsesOriginalProtocol()) {
+		cgs.media.limboClassButtonLevel5_on = trap_R_RegisterShaderNoMip("gfx/limbo/sk_5_on.tga");
+		cgs.media.limboClassButtonLevel5_off = trap_R_RegisterShaderNoMip("gfx/limbo/sk_5_off.tga");
+	}
 	cgs.media.limboClassButtons2[PC_ENGINEER] =		trap_R_RegisterShaderNoMip( "gfx/limbo/skill_engineer"		);
 	cgs.media.limboClassButtons2[PC_SOLDIER] =		trap_R_RegisterShaderNoMip( "gfx/limbo/skill_soldier"		);
 	cgs.media.limboClassButtons2[PC_COVERTOPS] =	trap_R_RegisterShaderNoMip( "gfx/limbo/skill_covops"		);
@@ -2798,7 +2802,9 @@ void CG_Init( int serverMessageNum, int serverCommandSequence, int clientNum, qb
 	cgs.campaignInfoLoaded = qfalse;
 	if( cgs.gametype == GT_WOLF_CAMPAIGN ) {
 		CG_LocateCampaign();
-	} else if( cgs.gametype == GT_WOLF_STOPWATCH || cgs.gametype == GT_WOLF_LMS || cgs.gametype == GT_WOLF ) {
+	} else if( cgs.gametype == GT_WOLF_STOPWATCH || cgs.gametype == GT_WOLF_LMS ||
+		cgs.gametype == GT_WOLF || cgs.gametype == GT_WOLF_TDM ||
+		cgs.gametype == GT_WOLF_DM ) {
 		CG_LocateArena();
 	}
 
@@ -2954,6 +2960,7 @@ void CG_Shutdown( void ) {
 	// like closing files or archiving session data
 
 	CG_EventHandling( CGAME_EVENT_NONE, qtrue );
+	NITMOD_RestoreForcedCvars();
 	CG_NitmodLogShutdown();
 	if(cg.demoPlayback) {
 		trap_Cvar_Set("timescale", "1");

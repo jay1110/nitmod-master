@@ -214,12 +214,16 @@ static void CG_LoadHud_f( void ) {
 
 static void CG_LoadWeapons_f( void ) {
 	int i;
+	int loaded = 0;
 
 	for( i = WP_KNIFE; i < WP_NUM_WEAPONS; i++ ) {
 		// DHM - Nerve :: Only register weapons we use in WolfMP
-		if( BG_WeaponInWolfMP( i ) )
+		if( BG_WeaponInWolfMP( i ) ) {
 			CG_RegisterWeapon( i, qtrue );
+			if(cg_weapons[i].registered) ++loaded;
+		}
 	}	
+	CG_Printf(S_COLOR_GREEN "Nitmod: reloaded %d weapon definitions through the current VFS search path.\n", loaded);
 }
 
 /*
@@ -1039,6 +1043,40 @@ typedef struct {
 	void	(*function)(void);
 } consoleCommand_t;
 
+static void CG_NitmodSkillDebug_f(void) {
+	int i, client = cg.snap ? cg.snap->ps.clientNum : cg.clientNum;
+	const char *info;
+	if(client < 0 || client >= MAX_CLIENTS) return;
+	info = NITMOD_PlayerConfigString(client);
+	CG_Printf("Skill state: client=%d protocol=%s valid=%d\n", client,
+		NITMOD_UsesOriginalProtocol() ? "original-nitmod" : "et260", cgs.clientinfo[client].infoValid);
+	CG_Printf("Server s=[%s]\n", Info_ValueForKey(info, "s"));
+	CG_Printf("Server xp unlock masks=[%s]\n", Info_ValueForKey(info, "xp"));
+	for(i = 0; i < SK_NUM_SKILLS; ++i) {
+		int level = NITMOD_UsesOriginalProtocol() ? cgs.clientinfo[client].nitmodSkillLevels[i] : cgs.clientinfo[client].skill[i];
+		CG_Printf("%s: level=%d native=%d unlocks=0x%x next=%d\n", skillNames[i], level,
+			cgs.clientinfo[client].skill[i], cgs.clientinfo[client].nitmodSkillMasks[i],
+			NITMOD_ClientSkillNextThreshold(i, level));
+	}
+}
+
+static void CG_NitmodWeaponDebug_f(void) {
+	int number = cg.predictedPlayerState.weapon;
+	weaponInfo_t *weapon;
+	if(number <= WP_NONE || number >= WP_NUM_WEAPONS) {
+		CG_Printf("Weapon media: no active weapon (%d)\n", number); return;
+	}
+	weapon = &cg_weapons[number];
+	CG_Printf("Weapon media: native=%d entity=%d registered=%d hands=%d firstPerson=%d thirdPerson=%d missile=%d\n",
+		number, cg.predictedPlayerEntity.currentState.weapon, weapon->registered,
+		weapon->handsModel, weapon->weaponModel[W_FP_MODEL].model,
+		weapon->weaponModel[W_TP_MODEL].model, weapon->missileModel);
+	CG_Printf("Weapon animation: requested=%d current=%d frames=%d/%d idleFrames=%d drawGun=%d noPlayerAnims=%d\n",
+		cg.predictedPlayerState.weapAnim, cg.predictedPlayerEntity.pe.weap.animationNumber,
+		cg.predictedPlayerEntity.pe.weap.oldFrame, cg.predictedPlayerEntity.pe.weap.frame,
+		weapon->weapAnimations[WEAP_IDLE1].numFrames, cg_drawGun.integer, cg_noPlayerAnims.integer);
+}
+
 static consoleCommand_t	commands[] =
  {
 //	{ "obj", CG_Obj_f },
@@ -1051,6 +1089,8 @@ static consoleCommand_t	commands[] =
 	{ "timerSet", CG_NitmodTimerSet },
 	{ "tdminfo", NITMOD_TDMInfo_f },
 	{ "globalstats", CG_NitmodGlobalStats_f },
+	{ "nitmod_skilldebug", CG_NitmodSkillDebug_f },
+	{ "nitmod_weapondebug", CG_NitmodWeaponDebug_f },
 	{ "testmodel", CG_TestModel_f },
 	{ "nextframe", CG_TestModelNextFrame_f },
 	{ "prevframe", CG_TestModelPrevFrame_f },
@@ -1281,4 +1321,15 @@ void CG_InitConsoleCommands( void ) {
 
 	trap_AddCommand ("setweapons");
 	trap_AddCommand ("setclass");		
+
+	/* Original Nitmod cgame command surface. These deliberately have no local
+	 * handler: returning qfalse from CG_ConsoleCommand forwards them to the
+	 * authoritative qagame module while retaining console/bind recognition. */
+	trap_AddCommand ("playdead");
+	trap_AddCommand ("dropobj");
+	trap_AddCommand ("damage");
+	trap_AddCommand ("sslogin");
+	trap_AddCommand ("sslogout");
+	trap_AddCommand ("sclogin");
+	trap_AddCommand ("sclogout");
 }

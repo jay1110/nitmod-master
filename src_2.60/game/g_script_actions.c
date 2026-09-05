@@ -8,6 +8,7 @@
 
 #include "../game/g_local.h"
 #include "g_nitmod_config.h"
+#include "g_nitmod_legacy_cvars.h"
 #include "../game/q_shared.h"
 
 /*
@@ -619,7 +620,7 @@ qboolean G_ScriptAction_FollowSpline( gentity_t* ent, char *params ) {
 			G_Error( "G_Scripting: followspline must have a speed\n" );
 		}
 
-		speed = atof(token);
+		speed = atof(token) * g_moverScale.value;
 
 		while (token[0]) {
 			token = COM_ParseExt( &pString, qfalse );
@@ -1171,7 +1172,7 @@ qboolean G_ScriptAction_GotoMarker( gentity_t *ent, char *params )
 			VectorCopy( vec, ent->movedir );
 			VectorCopy( ent->r.currentOrigin, ent->pos1 );
 			VectorAdd( ent->r.currentOrigin, vec, ent->pos2 );
-			ent->speed = speed;
+			ent->speed = speed * g_moverScale.value;
 			dist = VectorDistance( ent->pos1, ent->pos2 );
 			// setup the movement with the new parameters
 			InitMover(ent);
@@ -3094,7 +3095,19 @@ extern void LogExit( const char *string );
 
 qboolean G_ScriptAction_EndRound( gentity_t *ent, char *params )
 {
+	char cs[MAX_STRING_CHARS];
+	int winner;
 	if( g_gamestate.integer == GS_INTERMISSION ) {
+		return qtrue;
+	}
+	if(g_gametype.integer == GT_WOLF_TDM) {
+		int bonus = G_NITMOD_LegacyCvarInteger("g_TDMObjBonus", 100);
+		trap_GetConfigstring(CS_MULTI_MAPWINNER, cs, sizeof(cs));
+		winner = atoi(Info_ValueForKey(cs, "winner"));
+		if(bonus > 0 && (winner == 0 || winner == 1)) {
+			level.teamScores[winner == 0 ? TEAM_AXIS : TEAM_ALLIES] += bonus;
+			nitmod_TeamScores();
+		}
 		return qtrue;
 	}
 

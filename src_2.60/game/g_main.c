@@ -1,9 +1,15 @@
 #include "g_local.h"
+#include "g_nitmod_omnibot.h"
+#include "g_nitmod_etbot_lifecycle.h"
+#include "g_nitmod_legacy_cvars.h"
 #include <limits.h>
 #include "g_nitmod_config.h"
 #include "g_nitmod_entities.h"
 #include "g_nitmod_restrictions.h"
 #include "g_nitmod_teamcount.h"
+#include "g_nitmod_weapon_definition.h"
+#include "g_nitmod_banners.h"
+#include "g_nitmod_mapvote.h"
 
 // Include the "External"/"Public" components of AI_Team
 #include "../botai/ai_teamX.h"
@@ -90,6 +96,24 @@ vmCvar_t	voteFlags;
 vmCvar_t	g_complaintlimit;		// DHM - Nerve
 vmCvar_t	g_ipcomplaintlimit;
 vmCvar_t	g_filtercams;
+vmCvar_t g_spectatorNames;
+vmCvar_t n_classesMaxHP;
+vmCvar_t g_DMOptions;
+vmCvar_t g_noAttackInvul;
+vmCvar_t g_moverScale;
+vmCvar_t g_mapConfigs;
+vmCvar_t g_goomba, g_goombaFlags;
+vmCvar_t g_forceLimboHealth;
+vmCvar_t g_XPSave, g_XPSaveMaxAge, g_resetXPMapCount;
+vmCvar_t g_maxMapsVotedFor, g_minMapAge, g_mapVoteFlags, g_excludedMaps;
+vmCvar_t vote_allow_poll;
+vmCvar_t vote_allow_maprestart;
+vmCvar_t vote_allow_restartcampaign;
+vmCvar_t vote_allow_nextcampaign;
+vmCvar_t vote_allow_surrender;
+vmCvar_t vote_allow_shuffleteams;
+vmCvar_t vote_allow_shuffleteams_norestart;
+vmCvar_t vote_allow_swapteamsrestart;
 vmCvar_t	g_maxlives;				// DHM - Nerve
 vmCvar_t	g_maxlivesRespawnPenalty;
 vmCvar_t	g_voiceChatsAllowed;	// DHM - Nerve
@@ -151,6 +175,7 @@ vmCvar_t		server_motd2;
 vmCvar_t		server_motd3;
 vmCvar_t		server_motd4;
 vmCvar_t		server_motd5;
+vmCvar_t		server_motd6;
 vmCvar_t		vote_allow_comp;
 vmCvar_t		vote_allow_gametype;
 vmCvar_t		vote_allow_kick;
@@ -210,6 +235,7 @@ vmCvar_t		url;
 vmCvar_t		g_letterbox;
 vmCvar_t		bot_enable;
 vmCvar_t g_damageweapons;
+vmCvar_t g_poison;
 vmCvar_t n_preciseLandmineTrigger;
 vmCvar_t g_OmniBotFlags;
 
@@ -346,6 +372,23 @@ cvarTable_t		gameCvarTable[] = {
 	{ &g_complaintlimit, "g_complaintlimit", "6", CVAR_ARCHIVE, 0, qtrue },						// DHM - Nerve
 	{ &g_ipcomplaintlimit, "g_ipcomplaintlimit", "3", CVAR_ARCHIVE, 0, qtrue },
 	{ &g_filtercams, "g_filtercams", "0", CVAR_ARCHIVE, 0, qfalse },
+	{ &g_spectatorNames, "g_spectatorNames", "0", 0, 0, qfalse },
+	{ &n_classesMaxHP, "n_classesMaxHP", "0 0 0 0 0", CVAR_ARCHIVE, 0, qfalse },
+	{ &g_DMOptions, "g_DMOptions", "0", 0, 0, qfalse },
+	{ &g_noAttackInvul, "g_noAttackInvul", "0", 0, 0, qfalse },
+	{ &g_moverScale, "g_moverScale", "1.0", 0, 0, qfalse },
+	{ &g_mapConfigs, "g_mapConfigs", "", 0, 0, qfalse },
+	{ &g_goomba, "g_goomba", "10", 0, 0, qfalse },
+	{ &g_goombaFlags, "g_goombaFlags", "25", 0, 0, qfalse },
+	{ &g_forceLimboHealth, "g_forceLimboHealth", "75", 0, 0, qfalse },
+	{ &vote_allow_poll, "vote_allow_poll", "1", 0, 0, qfalse },
+	{ &vote_allow_maprestart, "vote_allow_maprestart", "1", 0, 0, qfalse },
+	{ &vote_allow_restartcampaign, "vote_allow_restartcampaign", "1", 0, 0, qfalse },
+	{ &vote_allow_nextcampaign, "vote_allow_nextcampaign", "1", 0, 0, qfalse },
+	{ &vote_allow_surrender, "vote_allow_surrender", "1", 0, 0, qfalse },
+	{ &vote_allow_shuffleteams, "vote_allow_shuffleteams", "1", 0, 0, qfalse },
+	{ &vote_allow_shuffleteams_norestart, "vote_allow_shuffleteams_norestart", "1", 0, 0, qfalse },
+	{ &vote_allow_swapteamsrestart, "vote_allow_swapteamsrestart", "1", 0, 0, qfalse },
 	{ &g_maxlives, "g_maxlives", "0", CVAR_ARCHIVE|CVAR_LATCH|CVAR_SERVERINFO, 0, qtrue },		// DHM - Nerve
 	{ &g_maxlivesRespawnPenalty, "g_maxlivesRespawnPenalty", "0", CVAR_ARCHIVE|CVAR_LATCH|CVAR_SERVERINFO, 0, qtrue },
 	{ &g_voiceChatsAllowed, "g_voiceChatsAllowed", "4", CVAR_ARCHIVE, 0, qfalse },				// DHM - Nerve
@@ -367,11 +410,20 @@ cvarTable_t		gameCvarTable[] = {
 	{ &g_footstepAudibleRange, "g_footstepAudibleRange", "256", CVAR_CHEAT, 0, qfalse },
 
 	{ &g_scriptName, "g_scriptName", "", CVAR_CHEAT, 0, qfalse },
+	{ &g_XPSave, "g_XPSave", "15", 0, 0, qfalse, qfalse },
+	{ &g_XPSaveMaxAge, "g_XPSaveMaxAge", "86400", 0, 0, qfalse, qfalse },
+	{ &g_resetXPMapCount, "g_resetXPMapCount", "0", 0, 0, qfalse, qfalse },
+	{ &g_maxMapsVotedFor, "g_maxMapsVotedFor", "6", 0, 0, qfalse, qfalse },
+	{ &g_minMapAge, "g_minMapAge", "3", 0, 0, qfalse, qfalse },
+	{ &g_mapVoteFlags, "g_mapVoteFlags", "0", 0, 0, qfalse, qfalse },
+	{ &g_excludedMaps, "g_excludedMaps", "", 0, 0, qfalse, qfalse },
 
 	{ &g_antilag, "g_antilag", "1", CVAR_SERVERINFO | CVAR_ARCHIVE, 0, qfalse },
 
 	//bani - #184
 	{ NULL, "P", "", CVAR_SERVERINFO_NOUPDATE, 0, qfalse, qfalse },
+	{ NULL, "Players_Axis", "", CVAR_ROM, 0, qfalse, qfalse },
+	{ NULL, "Players_Allies", "", CVAR_ROM, 0, qfalse, qfalse },
 
 	{ &refereePassword, "refereePassword", "none", 0, 0, qfalse},
 	{ &g_spectatorInactivity, "g_spectatorInactivity", "0", 0, 0, qfalse, qfalse },
@@ -389,6 +441,7 @@ cvarTable_t		gameCvarTable[] = {
 	{ &server_motd3,	"server_motd3", "", 0, 0, qfalse, qfalse },
 	{ &server_motd4,	"server_motd4", "", 0, 0, qfalse, qfalse },
 	{ &server_motd5,	"server_motd5", "", 0, 0, qfalse, qfalse },
+	{ &server_motd6,	"server_motd6", "", 0, 0, qfalse, qfalse },
 	{ &team_maxPanzers, "team_maxPanzers", "-1", 0, 0, qfalse, qfalse },
 	{ &team_maxplayers, "team_maxplayers", "0", 0, 0, qfalse, qfalse },
 	{ &team_nocontrols, "team_nocontrols", "1", 0, 0, qfalse, qfalse },
@@ -458,6 +511,7 @@ cvarTable_t		gameCvarTable[] = {
 	 * Currently grenade (0x1), satchel (0x2), airstrike marker (0x4)
 	 * and smoke-bomb (0x8) masks are implemented. */
 	{ &g_damageweapons, "g_damageweapons", "0", 0, 0, qfalse, qfalse },
+	{ &g_poison, "g_poison", "0", CVAR_ARCHIVE, 0, qfalse, qfalse },
 	{ &n_preciseLandmineTrigger, "n_preciseLandmineTrigger", "0", CVAR_ARCHIVE, 0, qfalse, qfalse },
 	{ &g_OmniBotFlags, "omnibot_flags", "0", CVAR_ARCHIVE | CVAR_NORESTART, 0, qfalse, qfalse },
 
@@ -485,7 +539,7 @@ qboolean G_SnapshotCallback( int entityNum, int clientNum ) {
 	gentity_t* ent = &g_entities[ entityNum ];
 
 	if( ent->s.eType == ET_MISSILE ) {
-		if( ent->s.weapon == WP_LANDMINE ) {
+		if( ent->s.weapon == WP_LANDMINE || ent->s.weapon == WP_POISON_MINE ) {
 			return G_LandmineSnapshotCallback( entityNum, clientNum );
 		}
 	}
@@ -523,9 +577,15 @@ NITMOD_MODULE_EXPORT int vmMain( int command, int arg0, int arg1, int arg2, int 
 	switch ( command ) {
 	case GAME_INIT:
 		G_NITMOD_ResetBotHandles();
+		Bot_Interface_InitHandles();
+		G_NITMOD_BannersReset();
 		G_InitGame( arg0, arg1, arg2 );
+		if (!Bot_Interface_Init()) {
+			G_Printf(S_COLOR_RED "Unable to initialize Omni-bot.\n");
+		}
 		return 0;
 	case GAME_SHUTDOWN:
+		Bot_Interface_Shutdown();
 		G_ShutdownGame( arg0 );
 		return 0;
 	case GAME_CLIENT_CONNECT:
@@ -547,22 +607,34 @@ NITMOD_MODULE_EXPORT int vmMain( int command, int arg0, int arg1, int arg2, int 
 		return 0;
 	case GAME_RUN_FRAME:
 		G_RunFrame( arg0 );
+		Bot_Interface_Update();
 		return 0;
 	case GAME_CONSOLE_COMMAND:
  		return ConsoleCommand();
 	case BOTAI_START_FRAME:
+		/* ET:Legacy intentionally has no classic AAS/botlib syscall range.
+		 * Omni-bot owns bot thinking when its external adapter is enabled. */
+		if (G_NITMOD_LegacyCvarInteger("omnibot_enable", 0)) {
+			return 0;
+		}
 #ifdef NO_BOT_SUPPORT
 		return 0;
 #else
 		return BotAIStartFrame( arg0 );
 #endif // NO_BOT_SUPPORT
 	case BOT_VISIBLEFROMPOS:
+		if (G_NITMOD_LegacyCvarInteger("omnibot_enable", 0)) {
+			return qfalse;
+		}
 #ifdef NO_BOT_SUPPORT
 		return qfalse;
 #else
 		return BotVisibleFromPos( (float *)arg0, arg1, (float *)arg2, arg3, arg4 );
 #endif // NO_BOT_SUPPORT
 	case BOT_CHECKATTACKATPOS:
+		if (G_NITMOD_LegacyCvarInteger("omnibot_enable", 0)) {
+			return qfalse;
+		}
 #ifdef NO_BOT_SUPPORT
 		return qfalse;
 #else
@@ -1087,7 +1159,7 @@ void G_CheckForCursorHints( gentity_t *ent ) {
 				}
 				case ET_MOVER:
 					if(!Q_stricmp( checkEnt->classname, "script_mover" ) ) {
-						if( G_TankIsMountable( checkEnt, ent ) ) {
+						if( G_TankIsMountable( checkEnt, ent, qfalse ) ) {
 							hintDist = CH_ACTIVATE_DIST;
 							hintType = HINT_ACTIVATE;
 						}
@@ -1293,6 +1365,7 @@ void G_RegisterCvars( void )
 
 	level.server_settings = 0;
 	G_NITMOD_RegisterWeaponConfiguration();
+	G_NITMOD_RegisterLegacyGameplayCvars();
 
 	for (i=0, cv=gameCvarTable; i<gameCvarTableSize; i++, cv++) {
 		trap_Cvar_Register(cv->vmCvar, cv->cvarName, cv->defaultString, cv->cvarFlags);
@@ -1348,6 +1421,9 @@ void G_UpdateCvars( void )
 	qboolean chargetimechanged = qfalse;
 	qboolean nitmodSettingsChanged = qfalse;
 	nitmodSettingsChanged = G_NITMOD_UpdateWeaponConfiguration() ? qtrue : qfalse;
+	if(G_NITMOD_UpdateLegacyGameplayCvars()) {
+		nitmodSettingsChanged = qtrue;
+	}
 
 	for ( i = 0, cv = gameCvarTable ; i < gameCvarTableSize ; i++, cv++ ) {
 		if ( cv->vmCvar ) {
@@ -1355,10 +1431,14 @@ void G_UpdateCvars( void )
 
 			if(cv->modificationCount != cv->vmCvar->modificationCount) {
 				cv->modificationCount = cv->vmCvar->modificationCount;
+				if( cv->vmCvar == &n_classesMaxHP ) {
+					nitmod_SendClassHealth( -1 );
+				}
 				/* These are the currently typed subset of the original NCS
 				 * cvar groups.  The original transmits only on a matching
 				 * modification, rather than polling every server frame. */
-				if( cv->vmCvar == &g_filtercams ||
+				if( cv->vmCvar == &g_filtercams || cv->vmCvar == &g_spectatorNames || cv->vmCvar == &g_DMOptions ||
+					cv->vmCvar == &g_XPSave || cv->vmCvar == &g_resetXPMapCount ||
 					cv->vmCvar == &g_doubleJump || cv->vmCvar == &g_DJHeight ||
 					cv->vmCvar == &g_heavyWeaponRestriction ||
 					cv->vmCvar == &team_maxPanzers ||
@@ -1473,6 +1553,11 @@ void G_UpdateCvars( void )
 						cv->vmCvar == &vote_allow_mutespecs		|| cv->vmCvar == &vote_allow_nextmap		||
 						cv->vmCvar == &vote_allow_pub			|| cv->vmCvar == &vote_allow_referee		||
 						cv->vmCvar == &vote_allow_shuffleteamsxp	|| cv->vmCvar == &vote_allow_swapteams		||
+						cv->vmCvar == &vote_allow_poll || cv->vmCvar == &vote_allow_maprestart ||
+						cv->vmCvar == &vote_allow_restartcampaign || cv->vmCvar == &vote_allow_nextcampaign ||
+						cv->vmCvar == &vote_allow_surrender ||
+						cv->vmCvar == &vote_allow_shuffleteams || cv->vmCvar == &vote_allow_shuffleteams_norestart ||
+						cv->vmCvar == &vote_allow_swapteamsrestart ||
 						cv->vmCvar == &vote_allow_friendlyfire	|| cv->vmCvar == &vote_allow_timelimit		||
 						cv->vmCvar == &vote_allow_warmupdamage	|| cv->vmCvar == &vote_allow_antilag		||
 						cv->vmCvar == &vote_allow_balancedteams	|| cv->vmCvar == &vote_allow_muting
@@ -1647,6 +1732,59 @@ G_InitGame
 
 ============
 */
+/* Engine-relative paths only. Never let map metadata or a malformed setting
+ * inject commands into the two deferred exec calls. No files are modified. */
+static qboolean G_MapConfigPath(const char *text, int capacity, qboolean directory) {
+	int i, component = 0;
+	if(!text || !text[0] || text[0] == '/') return qfalse;
+	for(i = 0; i < capacity; ++i) {
+		unsigned char c = (unsigned char)text[i];
+		if(!c) return component > 0;
+		if(c == '/' && directory) {
+			if(!component) return qfalse;
+			component = 0;
+			continue;
+		}
+		if(!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+		     (c >= '0' && c <= '9') || c == '_' || c == '-' || c == '.')) return qfalse;
+		/* Dot-only and traversal components have no useful config meaning. */
+		if(c == '.' && component == 0 &&
+		   (i + 1 >= capacity || text[i + 1] == '.' || text[i + 1] == '/' || text[i + 1] == '\0')) return qfalse;
+		++component;
+	}
+	return qfalse;
+}
+
+void G_NITMOD_LoadMapConfigs(void) {
+	char defaults[1024], map[1024];
+	if(!g_mapConfigs.string[0]) return;
+	if(!G_MapConfigPath(g_mapConfigs.string, sizeof(g_mapConfigs.string), qtrue) ||
+	   !G_MapConfigPath(level.rawmapname, sizeof(level.rawmapname), qfalse)) {
+		G_Printf("^3Nitmod: invalid g_mapConfigs directory or map name; map configs skipped.\n");
+		return;
+	}
+	Com_sprintf(defaults, sizeof(defaults), "exec %s/default.cfg\n", g_mapConfigs.string);
+	Com_sprintf(map, sizeof(map), "exec %s/%s.cfg\n", g_mapConfigs.string, level.rawmapname);
+	trap_SendConsoleCommand(EXEC_APPEND, defaults);
+	trap_SendConsoleCommand(EXEC_APPEND, map);
+}
+
+void G_NITMOD_LoadMapCycleConfig(void) {
+	char command[1024];
+	int configNumber;
+	if(!g_mapConfigs.string[0] || !G_NITMOD_MapCycleEnabled() ||
+	   !G_MapConfigPath(g_mapConfigs.string, sizeof(g_mapConfigs.string), qtrue)) return;
+	/* Recovered numbering: a fresh cycle executes vote_2, intermediate maps
+	 * advance through vote_N, and the final map executes vote_1. */
+	if(G_NITMOD_MapCycleCount() == 0) configNumber = 2;
+	else if(G_NITMOD_MapCycleCount() + 1 < g_resetXPMapCount.integer)
+		configNumber = G_NITMOD_MapCycleCount() + 2;
+	else configNumber = 1;
+	Com_sprintf(command, sizeof(command), "exec %s/vote_%d.cfg\n",
+		g_mapConfigs.string, configNumber);
+	trap_SendConsoleCommand(EXEC_APPEND, command);
+}
+
 void G_InitGame( int levelTime, int randomSeed, int restart ) {
 	int					i;
 	char				cs[MAX_INFO_STRING];
@@ -1683,6 +1821,8 @@ void G_InitGame( int levelTime, int randomSeed, int restart ) {
 	G_InitMemory();
 	G_NITMOD_ClearConfigStrings();
 	G_NITMOD_ResetTeamPopulation();
+	G_NITMOD_ResetPickupDefinitions();
+	G_NITMOD_LoadMapWeaponDefinitions();
 	/* Seed the capability handshake with registered cvars; a client may
 	 * negotiate before the first G_RunFrame refresh. */
 	nitmod_RefreshBaseSettings();
@@ -1823,7 +1963,9 @@ void G_InitGame( int levelTime, int randomSeed, int restart ) {
 			G_Printf( "Not logging to disk.\n" );
 	}
 
+	G_NITMOD_LoadMapConfigs();
 	G_InitWorldSession();
+	G_NITMOD_LoadMapCycleConfig();
 
 	// DHM - Nerve :: Clear out spawn target config strings
 	trap_GetConfigstring( CS_MULTI_INFO, cs, sizeof(cs) );
@@ -2222,7 +2364,8 @@ void CalculateRanks( void ) {
 				level.numNonSpectatorClients++;
 			
 				// OSP
-				Q_strcat(teaminfo[team], sizeof(teaminfo[team])-1, va("%d ", level.numConnectedClients));
+				if(team >= TEAM_FREE && team < TEAM_NUM_TEAMS)
+					Q_strcat(teaminfo[team], sizeof(teaminfo[team])-1, va("%d ", level.numConnectedClients));
 			
 				// decide if this should be auto-followed
 				if ( level.clients[i].pers.connected == CON_CONNECTED ) {
@@ -2288,6 +2431,10 @@ void CalculateRanks( void ) {
 	trap_SetConfigstring( CS_FIRSTBLOOD, va("%i", level.firstbloodTeam ) );
 	trap_SetConfigstring( CS_ROUNDSCORES1, va("%i", g_axiswins.integer ) );
 	trap_SetConfigstring( CS_ROUNDSCORES2, va("%i", g_alliedwins.integer ) );
+	/* Original CalculateRanks: one-based connected-list positions, built
+	 * before score sorting. Keep the native P slot map as well. */
+	trap_Cvar_Set("Players_Axis", teaminfo[TEAM_AXIS]);
+	trap_Cvar_Set("Players_Allies", teaminfo[TEAM_ALLIES]);
 
 	//bani - #184
 	etpro_PlayerInfo();
@@ -2485,6 +2632,9 @@ void ExitLevel (void) {
 	int		i;
 	gclient_t *cl;
 
+	/* Store the next map's cycle position in the world session written below. */
+	G_NITMOD_AdvanceMapCycle();
+
 	if( g_gametype.integer == GT_WOLF_CAMPAIGN ) {
 		g_campaignInfo_t *campaign = &g_campaigns[level.currentCampaign];
 
@@ -2522,7 +2672,7 @@ void ExitLevel (void) {
 		} else {
 			trap_SendConsoleCommand( EXEC_APPEND, "map_restart 0\n" );
 		}
-	} else {
+	} else if( !G_NITMOD_MapVoteExitLevel() ) {
 		trap_SendConsoleCommand( EXEC_APPEND, "vstr nextmap\n" );
 	}
 	level.changemap = NULL;
@@ -2568,15 +2718,22 @@ void QDECL G_LogPrintf( const char *fmt, ... ) {
 	va_list		argptr;
 	char		string[1024];
 	int			min, tens, sec, l;
+	qtime_t		realTime;
 
-	sec = level.time / 1000;
-
-	min = sec / 60;
-	sec -= min * 60;
-	tens = sec / 10;
-	sec -= tens * 10;
-
-	Com_sprintf( string, sizeof(string), "%i:%i%i ", min, tens, sec );
+	/* Original G_LogPrintf 0x89b70: n_LogCurrentTime switches the prefix
+	 * from elapsed match minutes to a zero-padded wall-clock timestamp. */
+	if(G_NITMOD_LegacyCvarInteger("n_LogCurrentTime", 0)) {
+		trap_RealTime(&realTime);
+		Com_sprintf(string, sizeof(string), "%02i:%02i:%02i ",
+			realTime.tm_hour, realTime.tm_min, realTime.tm_sec);
+	} else {
+		sec = level.time / 1000;
+		min = sec / 60;
+		sec -= min * 60;
+		tens = sec / 10;
+		sec -= tens * 10;
+		Com_sprintf( string, sizeof(string), "%i:%i%i ", min, tens, sec );
+	}
 
 	l = strlen( string );
 
@@ -2819,6 +2976,7 @@ int NITMOD_IntermissionDisplayStart(int now, int durationSeconds) {
 qboolean NITMOD_IntermissionCanExit(void) {
 	int i, humans = 0, ready = 0;
 	if(level.ref_allready) return qtrue;
+	if(!G_NITMOD_MapVoteExitReady()) return qfalse;
 	for(i = 0; i < level.numConnectedClients && i < MAX_CLIENTS; ++i) {
 		int index = level.sortedClients[i];
 		gclient_t *client;
@@ -2884,6 +3042,7 @@ can see the last frag.
 */
 void CheckExitRules( void ) {
 	char	cs[MAX_STRING_CHARS];
+	int		i;
 
 	// if at the intermission, wait for all non-bots to
 	// signal ready, then go to next level
@@ -2898,7 +3057,47 @@ void CheckExitRules( void ) {
 		return;
 	}
 
-	if ( g_timelimit.value && !level.warmupTime ) {
+	/* Original CheckExitRules: Nitmod's two extended frag modes qualify
+	 * before the ordinary objective/maxlives checks. */
+	if(g_gamestate.integer == GS_PLAYING && g_gametype.integer == GT_WOLF_TDM) {
+		int limit = G_NITMOD_LegacyCvarInteger("g_TDMScore", 500);
+		int winner = -1;
+		if(limit > 0 && level.teamScores[TEAM_AXIS] >= limit) winner = 0;
+		else if(limit > 0 && level.teamScores[TEAM_ALLIES] >= limit) winner = 1;
+		if(winner >= 0) {
+			trap_GetConfigstring(CS_MULTI_MAPWINNER, cs, sizeof(cs));
+			Info_SetValueForKey(cs, "winner", winner ? "1" : "0");
+			trap_SetConfigstring(CS_MULTI_MAPWINNER, cs);
+			trap_SendServerCommand(-1, winner ?
+				"print \"^3TDM ^7: ^4Allies ^7win this round.\\n\"" :
+				"print \"^3TDM ^7: ^1Axis ^7win this round.\\n\"");
+			LogExit(winner ? "TDM: Allies win this round." : "TDM: Axis win this round.");
+			return;
+		}
+	}
+	if(g_gamestate.integer == GS_PLAYING && g_gametype.integer == GT_WOLF_DM) {
+		int limit = G_NITMOD_LegacyCvarInteger("g_DMFragLimit", 25);
+		if(limit > 0) for(i = 0; i < level.maxclients && i < MAX_CLIENTS; ++i) {
+			gclient_t *client = &level.clients[i];
+			if(client->pers.connected != CON_CONNECTED || client->sess.sessionTeam == TEAM_SPECTATOR ||
+			   client->sess.game_points < limit) continue;
+			trap_GetConfigstring(CS_MULTI_MAPWINNER, cs, sizeof(cs));
+			Info_SetValueForKey(cs, "winner", "-1");
+			trap_SetConfigstring(CS_MULTI_MAPWINNER, cs);
+			trap_SendServerCommand(-1, va("DM %i", i));
+			trap_SendServerCommand(-1, va("print \"^1Death Match^7: %s ^gwins this round.\\n\"",
+				client->pers.netname));
+			LogExit(va("Death Match: %s wins this round", client->pers.netname));
+			return;
+		}
+	}
+
+	/* Original Nitmod g_TDMOptions bit 16: TDM ignores the ordinary
+	 * timelimit unless the server explicitly enables it. Its score limit is
+	 * still evaluated above regardless of this option. */
+	if ( g_timelimit.value && !level.warmupTime &&
+		(g_gametype.integer != GT_WOLF_TDM ||
+		 (G_NITMOD_LegacyCvarInteger("g_TDMOptions", 0) & 16)) ) {
 		// OSP
 		if((level.timeCurrent - level.startTime) >= (g_timelimit.value * 60000)) {
 		// OSP
@@ -3178,7 +3377,9 @@ CheckVote
 ==================
 */
 void CheckVote( void ) {
+	int votingOptions;
 	if(!level.voteInfo.voteTime || level.voteInfo.vote_fn == NULL || level.time - level.voteInfo.voteTime < 1000) return;
+	votingOptions = G_NITMOD_LegacyCvarInteger("g_voting", 1);
 
 	if(level.time - level.voteInfo.voteTime >= VOTE_TIME) {
 		AP(va("cpm \"^2Vote FAILED! ^3(%s)\n\"", level.voteInfo.voteString));
@@ -3194,7 +3395,12 @@ void CheckVote( void ) {
 			pcnt = 1;
 		}
 
-		if( level.voteInfo.vote_fn == G_Kick_v ) {
+		if( (votingOptions & 1) && level.time - level.voteInfo.voteTime >= 30000 ) {
+			/* Original late-vote rule: abstentions stop counting after 30 seconds. */
+			total = level.voteInfo.voteYes + level.voteInfo.voteNo;
+		} else if( level.voteInfo.vote_fn == G_NITMOD_SurrenderVote ) {
+			total = G_NITMOD_SurrenderVoters();
+		} else if( level.voteInfo.vote_fn == G_Kick_v ) {
 			gentity_t* other = &g_entities[ atoi( level.voteInfo.vote_value ) ];
 			if( !other->client || other->client->sess.sessionTeam == TEAM_SPECTATOR ) {
 				total = level.voteInfo.numVotingClients;
@@ -3222,6 +3428,13 @@ void CheckVote( void ) {
 
 			// Perform the passed vote
 			level.voteInfo.vote_fn(NULL, 0, NULL, NULL, qfalse);
+			if( (votingOptions & 2) && level.voteInfo.callerClientNum >= 0 &&
+				level.voteInfo.callerClientNum < level.maxclients ) {
+				gclient_t *caller = &level.clients[level.voteInfo.callerClientNum];
+				if( caller->pers.connected != CON_DISCONNECTED && caller->pers.voteCount > 0 ) {
+					caller->pers.voteCount--;
+				}
+			}
 
 		} else if(level.voteInfo.voteNo && level.voteInfo.voteNo >= (100-pcnt)*total/100) {
 			// same behavior as a no response vote
@@ -3234,6 +3447,7 @@ void CheckVote( void ) {
 	}
 
 	level.voteInfo.voteTime = 0;
+	level.voteInfo.callerClientNum = -1;
 	trap_SetConfigstring(CS_VOTE_TIME, "");
 }
 
@@ -3762,6 +3976,12 @@ void G_RunEntity( gentity_t* ent, int msec ) {
 		return;
 	}
 
+	/* Nitmod missile portals share ET_PORTAL with multiview but have their own
+	 * typed owner/target contract. Consume them before the MV discriminator. */
+	if( ent->s.eType == ET_PORTAL && G_NITMOD_RunMissileCamera(ent) ) {
+		return;
+	}
+
 	// OSP - multiview
 	if( ent->s.eType == ET_PORTAL && G_smvRunCamera(ent) ) {
 		return;
@@ -3786,6 +4006,41 @@ G_RunFrame
 Advances the non-player objects in the world
 ================
 */
+static void G_NITMOD_RunServerAutomation( void ) {
+	static int crazyGravityDeadline = -1;
+	int crazyGravity = G_NITMOD_LegacyCvarInteger("n_crazyGravity", 0);
+
+	if( crazyGravity == 1 ) {
+		if( crazyGravityDeadline == -1 || crazyGravityDeadline < level.time ) {
+			int minimum = G_NITMOD_LegacyCvarInteger("n_crazyGravityMin", 100);
+			int maximum = G_NITMOD_LegacyCvarInteger("n_crazyGravityMax", 2000);
+			int interval = G_NITMOD_LegacyCvarInteger("n_crazyGravityInterval", 30000);
+			int gravity;
+			if( minimum < 0 ) minimum = 0;
+			if( maximum <= minimum ) maximum = minimum + 1;
+			gravity = minimum + rand() % (maximum - minimum);
+			trap_Cvar_Set("g_gravity", va("%d", gravity));
+			crazyGravityDeadline = level.time + interval;
+			trap_SendServerCommand(-1,
+				va("cpm \"^8crazygravity: ^9gravity changed to ^g%d\"", gravity));
+		}
+	} else if( crazyGravityDeadline != -1 ) {
+		crazyGravityDeadline = -1;
+		trap_Cvar_Set("g_gravity", "800");
+		trap_SendServerCommand(-1,
+			"cpm \"^8crazygravity: ^9gravity changed to ^g800\"");
+	}
+
+	/* Preserve the original minute-of-hour interpretation. The first issued
+	 * quit command terminates the otherwise repeatedly true condition. */
+	{
+		int delay = G_NITMOD_LegacyCvarInteger("g_autoQuitDelay", 0);
+		int minute = (((level.time / 1000) % 86400) % 3600) / 60;
+		if( delay > 0 && delay <= minute && level.numConnectedClients == 0 )
+			trap_SendConsoleCommand(EXEC_NOW, "quit\n");
+	}
+}
+
 void G_RunFrame( int levelTime ) {
 	int			i, msec;
 //	int			pass = 0;
@@ -3817,6 +4072,17 @@ void G_RunFrame( int levelTime ) {
 
 	level.axisBombCounter -= msec;
 	level.alliedBombCounter -= msec;
+	{
+		int teamIndex;
+		for( teamIndex = 0; teamIndex < 2; ++teamIndex ) {
+			level.nitmodAirstrikeCounter[teamIndex] -= msec;
+			level.nitmodArtilleryCounter[teamIndex] -= msec;
+			if( level.nitmodAirstrikeCounter[teamIndex] < 0 )
+				level.nitmodAirstrikeCounter[teamIndex] = 0;
+			if( level.nitmodArtilleryCounter[teamIndex] < 0 )
+				level.nitmodArtilleryCounter[teamIndex] = 0;
+		}
+	}
 
 	if( level.axisBombCounter < 0 ) {
 		level.axisBombCounter = 0;
@@ -3848,6 +4114,7 @@ uebrgpiebrpgibqeripgubeqrpigubqifejbgipegbrtibgurepqgbn%i", level.time )
 
 	// get any cvar changes
 	G_UpdateCvars();
+	G_NITMOD_BannersRunFrame();
 
 	for( i = 0; i < level.num_entities; i++ ) {
 		g_entities[i].runthisframe = qfalse;
@@ -3880,6 +4147,7 @@ uebrgpiebrpgibqeripgubeqrpigubqifejbgipegbrtibgurepqgbn%i", level.time )
 	CheckCvars();
 
 	G_UpdateTeamMapData();
+	G_NITMOD_RunServerAutomation();
 
 	/* Flush extended configstrings after the game state for this frame settles. */
 	nitrox_UpdateConfigstrings();
@@ -3887,6 +4155,12 @@ uebrgpiebrpgibqeripgubeqrpigubqifejbgipegbrtibgurepqgbn%i", level.time )
 	if(level.gameManager) {
 		level.gameManager->s.otherEntityNum = team_maxLandmines.integer - G_CountTeamLandmines(TEAM_AXIS);
 		level.gameManager->s.otherEntityNum2 = team_maxLandmines.integer - G_CountTeamLandmines(TEAM_ALLIES);
+		/* Original Nitmod transports the remaining Axis/Allies tripmine slots
+		 * through the game-manager entity's time/time2 fields. */
+		level.gameManager->s.time = G_NITMOD_LegacyCvarInteger("team_maxTripmines", 5) -
+			G_NITMOD_CountTeamTripmines(TEAM_AXIS);
+		level.gameManager->s.time2 = G_NITMOD_LegacyCvarInteger("team_maxTripmines", 5) -
+			G_NITMOD_CountTeamTripmines(TEAM_ALLIES);
 	}
 
 #ifdef SAVEGAME_SUPPORT

@@ -7,6 +7,13 @@ static const char *args[4] = { "setclass", "2", "23", "2" };
 static int argcValue = 4, calls, refreshes, weapons, prints, orderError, teamResult;
 static int primary, secondary, printedSlot;
 static char selectedTeam[8], printed[128];
+static int publications;
+void ClientUserinfoChanged(int slot) {
+    ++publications;
+    if(slot != 0 || clients[0].sess.latchPlayerType != clients[0].sess.playerType ||
+       clients[0].sess.latchPlayerWeapon != clients[0].sess.playerWeapon ||
+       clients[0].sess.latchPlayerWeapon2 != clients[0].sess.playerWeapon2) orderError = 1;
+}
 int trap_Argc( void ) { return argcValue; }
 void trap_Argv( int n, char *buffer, int size ) {
     strncpy(buffer, n < argcValue ? args[n] : "", size - 1); buffer[size - 1] = 0;
@@ -60,5 +67,29 @@ int main( void ) {
     CHECK( prints == 2 && printedSlot == 0 && !strcmp(printed, "print \"Covert Ops class\n\"") );
     Cmd_SetClass_f(NULL, 0, qfalse);
     CHECK( prints == 2 && !orderError );
+    {
+        int changes;
+        for(changes = 0; changes < 8; ++changes) {
+            clients[0].sess.playerType = PC_MEDIC;
+            clients[0].sess.playerWeapon = WP_MP40;
+            clients[0].sess.playerWeapon2 = WP_LUGER;
+            clients[0].sess.latchPlayerType = changes & 1 ? PC_ENGINEER : PC_MEDIC;
+            clients[0].sess.latchPlayerWeapon = changes & 2 ? WP_PANZERFAUST : WP_MP40;
+            clients[0].sess.latchPlayerWeapon2 = changes & 4 ? WP_COLT : WP_LUGER;
+            before = clients[0]; publications = 0;
+            Cmd_ResetSetup_f(&g_entities[0]);
+            CHECK(publications == !!changes && !orderError);
+            before.sess.latchPlayerType = before.sess.playerType;
+            before.sess.latchPlayerWeapon = before.sess.playerWeapon;
+            before.sess.latchPlayerWeapon2 = before.sess.playerWeapon2;
+            CHECK(!memcmp(&before, &clients[0], sizeof(before)));
+            Cmd_ResetSetup_f(&g_entities[0]);
+            CHECK(publications == !!changes);
+        }
+        publications = 0;
+        Cmd_ResetSetup_f(NULL);
+        Cmd_ResetSetup_f(&g_entities[MAX_CLIENTS]);
+        CHECK(!publications);
+    }
     return 0;
 }

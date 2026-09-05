@@ -79,3 +79,39 @@ static int CheckEntitySound(void) {
     dllEntry(Engine);
     return errors;
 }
+
+static int nitmodEventSoundCalls, nitmodEventSoundEntity, nitmodEventSoundHandle;
+static int QDECL NitmodEventSoundEngine(int command, ...) {
+    va_list args;
+    va_start(args, command);
+    if(command == CG_S_STARTSOUNDVCONTROL) {
+        (void)va_arg(args, const float *);
+        nitmodEventSoundEntity = va_arg(args, int);
+        (void)va_arg(args, int);
+        nitmodEventSoundHandle = va_arg(args, int);
+        (void)va_arg(args, int);
+        ++nitmodEventSoundCalls;
+    } else { va_end(args); exit(2); }
+    va_end(args); return 0;
+}
+
+static int CheckNitmodEventSound(void) {
+    centity_t cent;
+    sfxHandle_t saved = cgs.gameSounds[5];
+    int errors = 0;
+    memset(&cent, 0, sizeof(cent));
+    cent.currentState.number = 17;
+    cent.currentState.eventParm = 5;
+    cgs.gameSounds[5] = 731;
+    dllEntry(NitmodEventSoundEngine);
+    nitmodEventSoundCalls = 0;
+    if(!CG_NitmodExtendedEvent(&cent, 100) || nitmodEventSoundCalls != 1 ||
+       nitmodEventSoundEntity != 17 || nitmodEventSoundHandle != 731) ++errors;
+    if(!CG_NitmodExtendedEvent(&cent, EV_NITMOD_SOUND) || nitmodEventSoundCalls != 2) ++errors;
+    cent.currentState.eventParm = MAX_SOUNDS;
+    if(!CG_NitmodExtendedEvent(&cent, 100) || nitmodEventSoundCalls != 2) ++errors;
+    cgs.gameSounds[5] = saved;
+    dllEntry(Engine);
+    if(errors) fprintf(stderr, "Nitmod event sound failures: %d\n", errors);
+    return errors;
+}

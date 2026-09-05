@@ -752,6 +752,7 @@ void CG_MouseEvent(int x, int y) {
 			if( cgs.eventHandling == CGAME_EVENT_SPEAKEREDITOR ) {
 				CG_SpeakerEditorMouseMove_Handling( x, y );
 			}
+			if(cgs.eventHandling == CGAME_EVENT_GAMEVIEW) CG_LimboPanel_UpdateCursor();
 
 			break;
 		case CGAME_EVENT_DEMO:

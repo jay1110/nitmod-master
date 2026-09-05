@@ -1,6 +1,38 @@
 #include "ui_local.h"
 #include <float.h>
 
+/* UI_OwnerDrawVisible, original sorted ui_ui_misc.c: map-exists flags
+ * test mapCount; playable flags compare the selected map with progress.
+ * Invalid catalog/selection states hide controls instead of indexing memory. */
+qboolean UI_NitmodCampaignVisible(int flags) {
+    const int exists[] = { UI_SHOW_CAMPAIGNMAP1EXISTS, UI_SHOW_CAMPAIGNMAP2EXISTS,
+        UI_SHOW_CAMPAIGNMAP3EXISTS, UI_SHOW_CAMPAIGNMAP4EXISTS,
+        UI_SHOW_CAMPAIGNMAP5EXISTS, UI_SHOW_CAMPAIGNMAP6EXISTS };
+    campaignInfo_t *campaign;
+    int i, map;
+    float selected;
+    if(uiInfo.campaignCount <= 0 || uiInfo.campaignCount > MAX_CAMPAIGNS ||
+       ui_currentCampaign.integer < 0 || ui_currentCampaign.integer >= uiInfo.campaignCount)
+        return qfalse;
+    campaign = &uiInfo.campaignList[ui_currentCampaign.integer];
+    if(campaign->mapCount < 0 || campaign->mapCount > MAX_MAPS_PER_CAMPAIGN)
+        return qfalse;
+    for(i = 0; i < 6; ++i)
+        if((flags & exists[i]) && campaign->mapCount < i + 1) return qfalse;
+    if(flags & (UI_SHOW_SELECTEDCAMPAIGNMAPPLAYABLE | UI_SHOW_SELECTEDCAMPAIGNMAPNOTPLAYABLE)) {
+        selected = trap_Cvar_VariableValue("ui_campaignmap");
+        if(!(selected >= 0 && selected < campaign->mapCount) ||
+           campaign->progress < 0 || campaign->progress > MAX_MAPS_PER_CAMPAIGN)
+            return qfalse;
+        map = (int)selected;
+        if((flags & UI_SHOW_SELECTEDCAMPAIGNMAPPLAYABLE) && map > campaign->progress)
+            return qfalse;
+        if((flags & UI_SHOW_SELECTEDCAMPAIGNMAPNOTPLAYABLE) && map <= campaign->progress)
+            return qfalse;
+    }
+    return qtrue;
+}
+
 /* Original UI_LoadCampaigns (ELF 0x11c10): semicolon-separated load names,
  * first arena match, unknown maps omitted, duplicates retained in order. */
 static qboolean UI_CampaignMaps(campaignInfo_t *campaign, const char *text) {

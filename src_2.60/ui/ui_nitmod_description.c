@@ -1,6 +1,18 @@
 #include "ui_local.h"
 extern displayContextDef_t *DC;
 
+/* The ui_*GameType cvars store rows in gameTypes[], never protocol enum
+ * values.  Keep description selection on the same catalog contract used by
+ * host, vote and map-selection code. */
+static qboolean UI_DescriptionGameType(qboolean net, int *game, int *row) {
+    int selected=net ? ui_netGameType.integer : ui_gameType.integer;
+    if(!game || !row || uiInfo.numGameTypes<=0 || uiInfo.numGameTypes>MAX_GAMETYPES ||
+       selected<0 || selected>=uiInfo.numGameTypes) return qfalse;
+    *row=selected;
+    *game=uiInfo.gameTypes[selected].gtEnum;
+    return *game>=0 && *game<GT_MAX_GAME_TYPE;
+}
+
 /* Shared original description layout: explicit breaks, last-word wrapping,
  * alignment and five-pixel leading. Bound long words before writing, and
  * always consume input even when a word cannot fit the requested width. */
@@ -47,12 +59,17 @@ void UI_DrawDescriptionText(const rectDef_t *rect, float scale, vec4_t color,
 void UI_DrawCampaignDescription(rectDef_t *rect, float scale, vec4_t color,
     float textX, float textY, int style, int align, qboolean net) {
     const char *text=NULL;
+    int game, row;
     int index=net ? ui_currentNetMap.integer : ui_currentMap.integer;
-    if(ui_netGameType.integer==GT_WOLF_CAMPAIGN) {
+    if(!UI_DescriptionGameType(net,&game,&row)) {
+        UI_DrawDescriptionText(rect,scale,color,textX,0,style,align,"^1No text supplied",1);
+        return;
+    }
+    if(game==GT_WOLF_CAMPAIGN) {
         if(uiInfo.campaignCount>=0 && uiInfo.campaignCount<=MAX_CAMPAIGNS &&
            index>=0 && index<uiInfo.campaignCount) text=uiInfo.campaignList[index].campaignDescription;
     } else if(uiInfo.mapCount>=0 && uiInfo.mapCount<=MAX_MAPS && index>=0 && index<uiInfo.mapCount) {
-        text=ui_netGameType.integer==GT_WOLF_LMS ? uiInfo.mapList[index].lmsbriefing : uiInfo.mapList[index].briefing;
+        text=game==GT_WOLF_LMS ? uiInfo.mapList[index].lmsbriefing : uiInfo.mapList[index].briefing;
     }
     if(!text || !*text) text="^1No text supplied";
     /* Original campaign and gametype panels start at rect.y, ignoring textY. */
@@ -61,12 +78,10 @@ void UI_DrawCampaignDescription(rectDef_t *rect, float scale, vec4_t color,
 
 void UI_DrawGametypeDescription(rectDef_t *rect, float scale, vec4_t color,
     float textX, float textY, int style, int align, qboolean net) {
-    int i;
+    int game, row;
     const char *text="Unknown";
-    if(uiInfo.numGameTypes>=0 && uiInfo.numGameTypes<=MAX_GAMETYPES)
-        for(i=0;i<uiInfo.numGameTypes;++i) if(uiInfo.gameTypes[i].gtEnum==ui_netGameType.integer) {
-            text=uiInfo.gameTypes[i].gameTypeDescription; break;
-        }
+    if(UI_DescriptionGameType(net,&game,&row) && uiInfo.gameTypes[row].gameTypeDescription)
+        text=uiInfo.gameTypes[row].gameTypeDescription;
     UI_DrawDescriptionText(rect,scale,color,textX,0,style,align,text,2);
 }
 

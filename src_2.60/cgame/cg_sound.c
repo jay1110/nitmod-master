@@ -392,7 +392,7 @@ static void CG_SoundLoadSoundFiles( void ) {
 		CG_Printf( S_COLOR_RED "WARNING: no sound files found (filelist.txt not found in sound/scripts)\n" );
 		return;
 	}
-	if ( len > sizeof(bigTextBuffer) ) {
+	if ( len >= sizeof(bigTextBuffer) ) {
 		CG_Error( "%s is too big, make it smaller (max = %i bytes)\n", filename, sizeof(bigTextBuffer) );
 	}
 	// load the file into memory
@@ -407,7 +407,12 @@ static void CG_SoundLoadSoundFiles( void ) {
 		if (!token[0]) {
 			break;
 		}
-		Com_sprintf( soundFiles[numSounds++], MAX_QPATH, token );
+		/* Keep one slot for the map-specific entry appended below. */
+		if(numSounds >= MAX_SOUND_FILES - 1) {
+			CG_Printf(S_COLOR_YELLOW "WARNING: sound/scripts/filelist.txt exceeds %d entries; ignoring the remainder\n", MAX_SOUND_FILES - 1);
+			break;
+		}
+		Com_sprintf( soundFiles[numSounds++], MAX_QPATH, "%s", token );
 	}
 
 	// add the map specific soundfile

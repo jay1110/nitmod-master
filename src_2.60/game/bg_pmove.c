@@ -14,6 +14,10 @@
 #include "bg_local.h"
 #include "nitmod_weapon_reload.h"
 #include "nitmod_weapon_clip.h"
+#include "nitmod_weapon_recoil.h"
+#ifdef GAMEDLL
+#include "g_nitmod_weapon_definition.h"
+#endif
 
 #ifdef CGAMEDLL
 #define PM_GameType cg_gameType.integer
@@ -600,6 +604,18 @@ static float PM_CmdScale( usercmd_t *cmd ) {
 	if (pm->ps->pm_type == PM_NOCLIP)
 		scale *= 3;
 
+	/* Original Nitmod applies the selected shared weapon definition before
+	 * native heavy-weapon penalties. Zero means that no override exists. */
+	{
+		float weaponScale = 0.f;
+#ifdef CGAMEDLL
+		weaponScale = CG_NitmodWeaponMovementScale(pm->ps->weapon);
+#elif GAMEDLL
+		weaponScale = G_NITMOD_WeaponMovementScale(pm->ps->weapon);
+#endif
+		if(weaponScale != 0.f) scale *= weaponScale;
+	}
+
 // JPW NERVE -- half move speed if heavy weapon is carried
 // this is the counterstrike way of doing it -- ie you can switch to a non-heavy weapon and move at
 // full speed.  not completely realistic (well, sure, you can run faster with the weapon strapped to your
@@ -831,6 +847,7 @@ Sets mins, maxs, and pm->ps->viewheight
 */
 static qboolean PM_CheckProne (void)
 {
+	int transitionDelay = ((pm->nitmodProneDelay & ~2) == 1) ? 1750 : 750;
 	//Com_Printf( "%i: PM_CheckProne (%i)\n", pm->cmd.serverTime, pm->pmext->proneGroundTime );
 
 	if( !(pm->ps->eFlags & EF_PRONE) ) {
@@ -868,7 +885,8 @@ static qboolean PM_CheckProne (void)
 		//}
 
 		if( ((pm->ps->pm_flags & PMF_DUCKED && pm->cmd.doubleTap == DT_FORWARD) ||
-			(pm->cmd.wbuttons & WBUTTON_PRONE)) && pm->cmd.serverTime - -pm->pmext->proneTime > 750  ) {
+			(pm->cmd.wbuttons & WBUTTON_PRONE)) &&
+			pm->cmd.serverTime - -pm->pmext->proneTime > transitionDelay ) {
 			trace_t trace;
 
 			pm->mins[0] = pm->ps->mins[0];
@@ -900,7 +918,8 @@ static qboolean PM_CheckProne (void)
 			pm->ps->eFlags & EF_MOUNTEDTANK ||
 // zinx - what was the reason for this, anyway? removing fixes bug 424
 //			pm->cmd.serverTime - pm->pmext->proneGroundTime > 450 ||
-			((pm->cmd.doubleTap == DT_BACK || pm->cmd.upmove > 10 || pm->cmd.wbuttons & WBUTTON_PRONE) && pm->cmd.serverTime - pm->pmext->proneTime > 750) ) {
+			((pm->cmd.doubleTap == DT_BACK || pm->cmd.upmove > 10 || pm->cmd.wbuttons & WBUTTON_PRONE) &&
+			 pm->cmd.serverTime - pm->pmext->proneTime > transitionDelay) ) {
 			trace_t trace;
 
 			// see if we have the space to stop prone
@@ -2001,6 +2020,8 @@ Sets mins, maxs, and pm->ps->viewheight
 static void PM_CheckDuck (void)
 {
 	trace_t	trace;
+	qboolean wasDucked;
+	qboolean wantsDuck;
 
 	// Ridah, modified this for configurable bounding boxes
 	pm->mins[0] = pm->ps->mins[0];
@@ -2017,22 +2038,46 @@ static void PM_CheckDuck (void)
 		return;
 	}
 
-	if( (pm->cmd.upmove < 0 && !(pm->ps->eFlags & EF_MOUNTEDTANK) && !(pm->ps->pm_flags & PMF_LADDER) ) || pm->ps->weapon == WP_MORTAR_SET )
+	wasDucked = (pm->ps->pm_flags & PMF_DUCKED) != 0;
+	wantsDuck = ((pm->cmd.upmove < 0 && !(pm->ps->eFlags & EF_MOUNTEDTANK) &&
+		!(pm->ps->pm_flags & PMF_LADDER)) || pm->ps->weapon == WP_MORTAR_SET);
+	/* Original PM_CheckDuck stance-delay pair. User crouch is held off after
+	 * standing, while an existing crouch is retained before standing. Forced
+	 * mortar crouch bypasses the input-side stand-to-crouch delay. */
+	if(wantsDuck && pm->ps->weapon != WP_MORTAR_SET && !wasDucked &&
+		pm->nitmodStandCrouchDelay > 0 &&
+		pm->cmd.serverTime < pm->pmext->nitmodStandCrouchTime)
+		wantsDuck = qfalse;
+
+	if( wantsDuck )
 	{	// duck
 		pm->ps->pm_flags |= PMF_DUCKED;
+		if(!wasDucked) {
+			pm->pmext->nitmodCrouchStandTime = pm->cmd.serverTime +
+				Q_max(0, pm->nitmodCrouchStandDelay);
+			pm->pmext->nitmodStandCrouchTime = 0;
+		}
 	}
 	else
 	{	// stand up if possible
 		if (pm->ps->pm_flags & PMF_DUCKED)
 		{
+			if(pm->nitmodCrouchStandDelay > 0 &&
+				pm->cmd.serverTime < pm->pmext->nitmodCrouchStandTime)
+				goto keep_ducked;
 			// try to stand up
 			pm->maxs[2] = pm->ps->maxs[2];
 			PM_TraceAll( &trace, pm->ps->origin, pm->ps->origin );
-			if (!trace.allsolid)
+			if (!trace.allsolid) {
 				pm->ps->pm_flags &= ~PMF_DUCKED;
+				pm->pmext->nitmodCrouchStandTime = 0;
+				pm->pmext->nitmodStandCrouchTime = pm->cmd.serverTime +
+					Q_max(0, pm->nitmodStandCrouchDelay);
+			}
 		}
 	}
 
+	keep_ducked:
 	if (pm->ps->pm_flags & PMF_DUCKED)
 	{
 		pm->maxs[2] = pm->ps->crouchMaxZ;
@@ -2346,7 +2391,7 @@ static void PM_BeginWeaponReload( int weapon ) {
 		memset(&options, 0, sizeof(options));
 		/* Keep the native Garand clip policy until dynamic original weapon
 		 * definitions are connected. Other scoped rifles allow midclip reload. */
-		options.noMidclipReload = weapon == WP_GARAND_SCOPE;
+		options.noMidclipReload = pm->nitmodNoMidclipReload || weapon == WP_GARAND_SCOPE;
 		NITMOD_BeginWeaponReload(pm, weapon, GetAmmoTableData(weapon), &options, 0, lightBits);
 		return;
 	}
@@ -3042,6 +3087,9 @@ void PM_AdjustAimSpreadScale( void ) {
 		wpnScale = 0.5f;
 		break;
 	}
+	if(pm->nitmodSpreadRatio != 0.0f) {
+		wpnScale = pm->nitmodSpreadRatio;
+	}
 
 	if (wpnScale) {
 
@@ -3053,14 +3101,17 @@ void PM_AdjustAimSpreadScale( void ) {
 		decrease = (cmdTime * AIMSPREAD_DECREASE_RATE) / wpnScale;
 
 		viewchange = 0;
-		// take player movement into account (even if only for the scoped weapons)
-		// TODO: also check for jump/crouch and adjust accordingly
-		if(BG_IsScopedWeapon(pm->ps->weapon)) {
+		/* Nitmod's tri-state fields preserve ET's defaults: velocity affects
+		 * scoped weapons and view rotation affects unscoped weapons. Explicit
+		 * yes/no may enable or disable either source for either weapon kind. */
+		if((BG_IsScopedWeapon(pm->ps->weapon) && pm->nitmodVelocityToSpread != 2) ||
+		   (!BG_IsScopedWeapon(pm->ps->weapon) && pm->nitmodVelocityToSpread == 1)) {
 			for(i = 0; i < 2; i++) {
 				viewchange += fabs(pm->ps->velocity[i]);
 			}
-		} else {
-			// take player view rotation into account
+		}
+		if((!BG_IsScopedWeapon(pm->ps->weapon) && pm->nitmodViewChangeToSpread != 2) ||
+		   (BG_IsScopedWeapon(pm->ps->weapon) && pm->nitmodViewChangeToSpread == 1)) {
 			for( i = 0; i < 2; i++ ) {
 				viewchange += fabs( SHORT2ANGLE(pm->cmd.angles[i]) - SHORT2ANGLE(pm->oldcmd.angles[i]) );
 			}
@@ -3111,6 +3162,44 @@ Generates weapon events and modifes the weapon counter
 
 //#define DO_WEAPON_DBG 1
 
+qboolean PM_NitmodAuthoritativeWeapon(const pmove_t *move) {
+	if(!move || !move->ps || !move->nitmodAuthoritativeWeapons) return qfalse;
+	return move->ps->weapon == WP_KNIFE && (move->cmd.wbuttons & WBUTTON_ATTACK2);
+}
+
+static qboolean PM_NitmodThrowKnife(void) {
+	int ammo;
+
+	if(!pm || !pm->ps || !pm->nitmodAuthoritativeWeapons || pm->ps->weapon != WP_KNIFE)
+		return qfalse;
+	if(!(pm->cmd.wbuttons & WBUTTON_ATTACK2)) {
+		if(pm->ps->weaponstate == WEAPON_FIRING &&
+		   (pm->ps->weapAnim & ~ANIM_TOGGLEBIT) == WEAP_ATTACK2) {
+			pm->ps->weaponstate = WEAPON_READY;
+			pm->ps->weaponTime = 0;
+			PM_ContinueWeaponAnim(PM_IdleAnimForWeapon(WP_KNIFE));
+			return qtrue;
+		}
+		return qfalse;
+	}
+	ammo = BG_FindAmmoForWeapon(WP_KNIFE);
+	if(pm->ps->ammo[ammo] <= 0) {
+		/* Consume the button while selected so an empty throw cannot fall
+		 * through into the ordinary stabbing/fire path. */
+		return qtrue;
+	}
+	/* Edge-gate the held button: remain in WEAPON_FIRING until it is released. */
+	if(pm->ps->weaponstate != WEAPON_FIRING) {
+		pm->ps->ammo[ammo]--;
+		PM_StartWeaponAnim(WEAP_ATTACK2);
+		PM_AddEvent(EV_NITMOD_THROW_KNIFE);
+		pm->ps->weaponstate = WEAPON_FIRING;
+		pm->ps->weaponTime = GetAmmoTableData(WP_KNIFE)->nextShotTime;
+		pm->ps->lastFireTime = pm->cmd.serverTime;
+	}
+	return qtrue;
+}
+
 static void PM_Weapon( void ) {
 	int			addTime = 0; // TTimo: init
 	int			ammoNeeded;
@@ -3121,6 +3210,7 @@ static void PM_Weapon( void ) {
 #ifdef DO_WEAPON_DBG
 	static int weaponstate_last = -1;
 #endif
+	if(PM_NitmodThrowKnife()) return;
 
 	// don't allow attack until all buttons are up
 	if ( pm->ps->pm_flags & PMF_RESPAWNED ) {
@@ -3134,7 +3224,7 @@ static void PM_Weapon( void ) {
 
 	// check for dead player
 	if ( pm->ps->stats[STAT_HEALTH] <= 0 ) {
-		if(!pm->ps->pm_flags & PMF_LIMBO) {
+		if(!(pm->ps->pm_flags & PMF_LIMBO)) {
 			PM_CoolWeapons();
 		}
 
@@ -3632,7 +3722,11 @@ static void PM_Weapon( void ) {
 	// check for fire
 	// if not on fire button and there's not a delayed shot this frame...
 	// consider also leaning, with delayed attack reset
-	if((!(pm->cmd.buttons & (BUTTON_ATTACK | WBUTTON_ATTACK2)) && !delayedFire) ||
+	/* Primary attack lives in usercmd.buttons; alternate attack lives in
+	 * usercmd.wbuttons and is consumed by the Nitmod alternate actions above
+	 * (throwing knife) or by reload handling. Mixing the two bit namespaces
+	 * made +attack2 alias BUTTON_ATTACK because both constants use bit zero. */
+	if((!(pm->cmd.buttons & BUTTON_ATTACK) && !delayedFire) ||
 	  (pm->ps->leanf != 0 && pm->ps->weapon != WP_GRENADE_LAUNCHER && pm->ps->weapon != WP_GRENADE_PINEAPPLE && pm->ps->weapon != WP_SMOKE_BOMB))
 	{
 		pm->ps->weaponTime	= 0;
@@ -3779,6 +3873,7 @@ static void PM_Weapon( void ) {
 
 		// melee
 		case WP_KNIFE:
+		case WP_POISON_SYRINGE:
 			if(!delayedFire) {
 				if( pm->ps->eFlags & EF_PRONE ) {
 					BG_AnimScriptEvent( pm->ps, pm->character->animModelInfo, ANIM_ET_FIREWEAPONPRONE, qfalse, qfalse );
@@ -3790,6 +3885,8 @@ static void PM_Weapon( void ) {
 
 		// throw
 		case WP_DYNAMITE:
+		case WP_BOMB:
+		case WP_POISON_BOMB:
 		case WP_GRENADE_LAUNCHER:
 		case WP_GRENADE_PINEAPPLE:
 		case WP_SMOKE_BOMB:
@@ -3808,6 +3905,7 @@ static void PM_Weapon( void ) {
 			}
 			break;
 		case WP_LANDMINE:
+		case WP_POISON_MINE:
 			if(!delayedFire) {
 				if(PM_WeaponAmmoAvailable(pm->ps->weapon)) {
 					if( pm->ps->eFlags & EF_PRONE ) {
@@ -3877,9 +3975,12 @@ static void PM_Weapon( void ) {
 			switch(pm->ps->weapon) {
 				// Ridah, only play if using a triggered weapon
 				case WP_DYNAMITE:
+				case WP_BOMB:
+				case WP_POISON_BOMB:
 				case WP_GRENADE_LAUNCHER:
 				case WP_GRENADE_PINEAPPLE:
 				case WP_LANDMINE:
+				case WP_POISON_MINE:
 				case WP_TRIPMINE:
 				case WP_SMOKE_BOMB:
 					playswitchsound = qfalse;
@@ -4026,7 +4127,7 @@ static void PM_Weapon( void ) {
 	}
 
 	// JPW NERVE -- in multiplayer, pfaust fires once then switches to pistol since it's useless for a while
-	if ( (pm->ps->weapon == WP_PANZERFAUST) || (pm->ps->weapon == WP_SMOKE_MARKER ) || (pm->ps->weapon == WP_DYNAMITE) || (pm->ps->weapon == WP_SMOKE_BOMB) || (pm->ps->weapon == WP_LANDMINE) || (pm->ps->weapon == WP_SATCHEL))
+	if ( (pm->ps->weapon == WP_PANZERFAUST) || (pm->ps->weapon == WP_SMOKE_MARKER ) || (pm->ps->weapon == WP_DYNAMITE) || (pm->ps->weapon == WP_BOMB) || (pm->ps->weapon == WP_SMOKE_BOMB) || (pm->ps->weapon == WP_POISON_BOMB) || (pm->ps->weapon == WP_LANDMINE) || (pm->ps->weapon == WP_POISON_MINE) || (pm->ps->weapon == WP_SATCHEL))
 		PM_AddEvent( EV_NOAMMO );
 	// jpw
 
@@ -4035,6 +4136,14 @@ static void PM_Weapon( void ) {
 		pm->ps->ammo[WP_SATCHEL] = 0;
 		pm->ps->ammoclip[WP_SATCHEL] = 0;
 		PM_BeginWeaponChange( WP_SATCHEL, WP_SATCHEL_DET, qfalse );
+	}
+
+	/* A poison mine is a place-and-arm tool. Returning to pliers after the
+	 * placement event also edge-gates a held attack button, preventing a stack
+	 * of mines from being emitted on consecutive weapon cycles. */
+	if( pm->ps->weapon == WP_POISON_MINE &&
+		COM_BitCheck(pm->ps->weapons, WP_PLIERS) ) {
+		PM_BeginWeaponChange(WP_POISON_MINE, WP_PLIERS, qfalse);
 	}
 
 	// WP_M7 and WP_GPG40 run out of ammo immediately after firing their last grenade
@@ -4070,14 +4179,18 @@ static void PM_Weapon( void ) {
 
 	switch( pm->ps->weapon ) {
 	case WP_KNIFE:
+	case WP_POISON_SYRINGE:
 	case WP_PANZERFAUST:
 	case WP_DYNAMITE:
+	case WP_BOMB:
+	case WP_POISON_BOMB:
 	case WP_GRENADE_LAUNCHER:
 	case WP_GRENADE_PINEAPPLE:
 	case WP_FLAMETHROWER:
 	case WP_GPG40:
 	case WP_M7:
 	case WP_LANDMINE:
+	case WP_POISON_MINE:
 	case WP_TRIPMINE:
 	case WP_SMOKE_BOMB:
 	case WP_MORTAR_SET:
@@ -4207,6 +4320,15 @@ static void PM_Weapon( void ) {
 	
 	// set weapon recoil
 	pm->pmext->lastRecoilDeltaTime = 0;
+	if( pm->nitmodCustomRecoilEnabled ) {
+		nitmodWeaponRecoil_t recoil;
+		recoil.enabled = 1;
+		recoil.duration = pm->nitmodCustomRecoilDuration;
+		recoil.yaw = pm->nitmodCustomRecoilYaw;
+		recoil.pitch = pm->nitmodCustomRecoilPitch;
+		if( NITMOD_ApplyWeaponRecoil(pm->pmext, pm->cmd.serverTime, &recoil) > 0 )
+			goto recoil_complete;
+	}
 
 	switch( pm->ps->weapon ) {
 	case WP_GARAND_SCOPE:
@@ -4263,6 +4385,16 @@ static void PM_Weapon( void ) {
 		pm->pmext->weapRecoilTime = 0;
 		pm->pmext->weapRecoilYaw = 0.f;
 		break;
+	}
+
+recoil_complete:
+	/* Original Nitmod applies these weaponDef values after the native weapon
+	 * switch. A zero base value is the sentinel for retaining ET behavior. */
+	if(pm->nitmodSpreadScaleAdd != 0) {
+		aimSpreadScaleAdd = pm->nitmodSpreadScaleAdd;
+		if(pm->nitmodSpreadScaleAddRand != 0) {
+			aimSpreadScaleAdd += rand() % pm->nitmodSpreadScaleAddRand;
+		}
 	}
 
 	// check for overheat
@@ -5098,11 +5230,56 @@ PmoveSingle
 */
 void trap_SnapVector( float *v );
 
+/*
+====================
+PM_NITMOD_TogglePlayDead
+
+PM_PLAYDEAD is present in the original Nitmod player-state protocol.  Keep the
+transition here rather than in qagame so predicted cgame movement performs the
+same state change.  EF_SPARE0 is the persistent, networked play-dead marker;
+real death continues to use EF_DEAD and STAT_HEALTH.
+====================
+*/
+static void PM_NITMOD_TogglePlayDead( void ) {
+	trace_t trace;
+	vec3_t maxs;
+
+	if( pm->ps->eFlags & EF_SPARE0 ) {
+		/* Leave enough room for a crouched player.  Starting crouched mirrors
+		 * Nitmod's recovery path and prevents standing through a low ceiling. */
+		VectorCopy( pm->ps->maxs, maxs );
+		maxs[2] = pm->ps->crouchMaxZ;
+		pm->trace( &trace, pm->ps->origin, pm->ps->mins, maxs,
+			pm->ps->origin, pm->ps->clientNum, pm->tracemask );
+		if( trace.allsolid || trace.startsolid ) {
+			pm->ps->pm_type = PM_DEAD;
+			return;
+		}
+
+		pm->ps->eFlags &= ~EF_SPARE0;
+		pm->ps->pm_flags |= PMF_DUCKED;
+		pm->ps->pm_type = PM_NORMAL;
+		pm->ps->viewheight = pm->ps->crouchViewHeight;
+		return;
+	}
+
+	pm->ps->eFlags |= EF_SPARE0;
+	pm->ps->pm_type = PM_DEAD;
+	pm->ps->viewheight = pm->ps->deadViewHeight;
+	VectorClear( pm->ps->velocity );
+	BG_AnimScriptEvent( pm->ps, pm->character->animModelInfo,
+		ANIM_ET_DEATH, qfalse, qtrue );
+}
+
 void PmoveSingle (pmove_t *pmove) {
 	// RF, update conditional values for anim system
 	BG_AnimUpdatePlayerStateConditions( pmove );
 
 	pm = pmove;
+
+	if( pm->ps->pm_type == PM_PLAYDEAD ) {
+		PM_NITMOD_TogglePlayDead();
+	}
 
 	// this counter lets us debug movement problems with a journal
 	// by setting a conditional breakpoint fot the previous frame
@@ -5147,7 +5324,7 @@ void PmoveSingle (pmove_t *pmove) {
 		}
 
 		// don't allow binocs if in the middle of throwing grenade
-		if( (pm->ps->weapon == WP_GRENADE_LAUNCHER || pm->ps->weapon == WP_GRENADE_PINEAPPLE || pm->ps->weapon == WP_DYNAMITE) && pm->ps->grenadeTimeLeft > 0) {
+		if( (pm->ps->weapon == WP_GRENADE_LAUNCHER || pm->ps->weapon == WP_GRENADE_PINEAPPLE || pm->ps->weapon == WP_DYNAMITE || pm->ps->weapon == WP_BOMB || pm->ps->weapon == WP_POISON_BOMB) && pm->ps->grenadeTimeLeft > 0) {
 			pm->ps->eFlags &= ~EF_ZOOMING;
 		}
 	}

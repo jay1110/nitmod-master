@@ -3,8 +3,25 @@
 #include "cg_nitmod_config.h"
 #include "cg_nitmod_hints.h"
 #include "cg_nitmod_names.h"
+#include "cg_nitmod_stats.h"
 #include <float.h>
 #include <limits.h>
+
+void CG_NitmodDrawSpectatorInstruction(int row, const char *text) {
+    nitmodHudAnchor_t previous;
+    if(row < 0 || row > 1 || !text || !NITMOD_UsesOriginalProtocol()) return;
+    previous = CG_NitmodHudAnchor(NITMOD_HUD_LEFT);
+    CG_Text_Paint_Ext(8, 150 + row * 8, .2f, .2f, colorWhite, text, 0, 0, 7, &cgs.media.limboFont2);
+    CG_NitmodHudAnchor(previous);
+}
+
+void CG_NitmodDrawWoundedInstruction(int row, const char *text) {
+    nitmodHudAnchor_t previous;
+    if(row < 0 || row > 2 || !text || !NITMOD_UsesOriginalProtocol()) return;
+    previous = CG_NitmodHudAnchor(NITMOD_HUD_LEFT);
+    CG_Text_Paint_Ext(8, 118 + row * 12, .2f, .2f, colorWhite, text, 0, 0, 7, &cgs.media.limboFont2);
+    CG_NitmodHudAnchor(previous);
+}
 
 static struct {
     char text[MAX_STRING_CHARS];
@@ -162,10 +179,23 @@ void CG_NitmodDrawStatusBars(void) {
     vec4_t healthColor, background = {1, 1, 1, .3f};
     nitmodHudAnchor_t previous;
     int client;
-    if(!NITMOD_UsesOriginalProtocol() || !cg.snap) return;
+    playerState_t nativeDisplay;
+    const playerState_t *display;
+    if(!NITMOD_UsesNitmodHud() || !cg.snap) return;
+    display = &cg.snap->ps;
+    if(!NITMOD_UsesOriginalProtocol()) {
+        /* Presentation-only adapter: never reinterpret or rewrite the
+         * ET260 snapshot as an original Nitmod network state. */
+        nativeDisplay = *display;
+        nativeDisplay.stats[6] = cg.pmext.sprintTime;
+        nativeDisplay.stats[9] = BG_EffectiveMaxHealth(display);
+        nativeDisplay.powerups[11] = display->powerups[PW_ADRENALINE];
+        nativeDisplay.ammo[WP_ARTY] = 0; /* No native support-availability mask. */
+        display = &nativeDisplay;
+    }
     client = cg.snap->ps.clientNum;
     if(client < 0 || client >= MAX_CLIENTS ||
-       !CG_NitmodStatusBars(&cg.snap->ps, cgs.clientinfo[client].cls,
+       !CG_NitmodStatusBars(display, cgs.clientinfo[client].cls,
            BG_GetConditionValue(client, ANIM_COND_UNDERWATER, qtrue) != 0,
            cg.time, cg.waterundertime, &bars)) return;
     CG_ColorForHealth(healthColor); healthColor[3] = .5f;
@@ -217,7 +247,7 @@ void CG_NitmodDrawSkillLevels(void) {
     char text[64];
     vec4_t healthColor;
     nitmodHudAnchor_t previous;
-    if(!NITMOD_UsesOriginalProtocol() || !cg.snap || cgs.gametype == GT_WOLF_LMS ||
+    if(!NITMOD_UsesNitmodHud() || !cg.snap || cgs.gametype == GT_WOLF_LMS ||
        cg.snap->ps.clientNum < 0 || cg.snap->ps.clientNum >= MAX_CLIENTS) return;
     ci = &cgs.clientinfo[cg.snap->ps.clientNum];
     previous = CG_NitmodHudAnchor(NITMOD_HUD_LEFT);
@@ -229,7 +259,7 @@ void CG_NitmodDrawSkillLevels(void) {
         /* Use the normalized snapshot, not the original global pm pointer. */
         skill = CG_NitmodHudSkill(ci->cls, row, &cg.snap->ps);
         if(skill < 0 || skill >= SK_NUM_SKILLS) continue;
-        level = ci->nitmodSkillLevels[skill];
+        level = NITMOD_UsesOriginalProtocol() ? ci->nitmodSkillLevels[skill] : ci->skill[skill];
         if(level < 0) level = 0;
         if(level > 5) level = 5;
         trap_R_SetColor(colorBlack);
@@ -314,7 +344,7 @@ nitmodHudAnchor_t CG_NitmodHudAnchor(nitmodHudAnchor_t anchor) {
     nitmodHudAnchor_t previous = hudAnchor;
     float bias = 0;
     hudAnchor = anchor >= NITMOD_HUD_STRETCH && anchor <= NITMOD_HUD_RIGHT ? anchor : NITMOD_HUD_STRETCH;
-    hudTransform = hudAnchor != NITMOD_HUD_STRETCH && NITMOD_UsesOriginalProtocol() &&
+    hudTransform = hudAnchor != NITMOD_HUD_STRETCH && NITMOD_UsesNitmodHud() &&
         cgs.glconfig.vidWidth > 0 && cgs.glconfig.vidHeight > 0;
     if(hudTransform) {
         hudScaleX = cgs.glconfig.vidWidth / 640.f;
@@ -770,6 +800,7 @@ void CG_NitmodNotificationStart(const char *text, int now) {
 }
 
 const char *CG_NitmodNotificationText(void) { return notificationText; }
+qboolean CG_NitmodNotificationActive(void) { return notificationStage != 0; }
 
 float CG_NitmodNotificationAlpha(int now, float hold, float fade) {
     double alpha;
@@ -796,6 +827,7 @@ void CG_NitmodDrawNotification(void) {
     vec4_t background, border, white = {1, 1, 1, 1};
     float width, height, x;
     nitmodHudAnchor_t previous;
+    if(CG_NitmodGlobalAwardActive()) return;
     white[3] = CG_NitmodNotificationAlpha(cg.time, cg_notificationTime.value, cg_notificationFadeTime.value);
     if(white[3] <= 0) return;
     CG_NitmodHudColors(background, border);
@@ -861,6 +893,7 @@ static qboolean tdmAxisIncreased, tdmAlliesIncreased;
 void CG_NitmodResetMaxSpeed(void) { highestSpeed = 0; }
 
 void CG_NitmodHudReset(void) {
+	CG_NitmodSnapshotRateReset();
     memset(&nitmodAnnouncement, 0, sizeof(nitmodAnnouncement));
     NITMOD_ResetSnapshotPersistant();
     bodyshotChanged = headshotChanged = qfalse;

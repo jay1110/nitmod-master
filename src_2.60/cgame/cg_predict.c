@@ -76,31 +76,36 @@ void CG_BuildSolidList( void ) {
 		}
 
 		if ( cent->nextState.solid) {
-/*			if(cg_fastSolids.integer) { // Gordon: "optimization" (disabling until i fix it)
+			if(cg_fastSolids.integer) {
 				vec3_t vec;
 				float len;
 
-				cg_solidFTEntities[cg_numSolidFTEntities] = cent;
-				cg_numSolidFTEntities++;
+				if(cg_numSolidFTEntities < MAX_ENTITIES_IN_SNAPSHOT)
+					cg_solidFTEntities[cg_numSolidFTEntities++] = cent;
 
-				// FIXME: use range to bbox, not to origin
-				if ( cent->nextState.solid == SOLID_BMODEL ) {
+				/* Recovered original cg_fastSolids path.  Invalid inline-model
+				 * indices fall back to the entity origin instead of indexing the
+				 * midpoint table outside its engine-owned bounds on WASM. */
+				if ( cent->nextState.solid == SOLID_BMODEL &&
+					cent->currentState.modelindex > 0 &&
+					cent->currentState.modelindex < MAX_MODELS ) {
 					VectorAdd( cgs.inlineModelMidpoints[ cent->currentState.modelindex ], cent->lerpOrigin, vec );
 					VectorSubtract( vec, cg.predictedPlayerEntity.lerpOrigin, vec );
 				} else {
 					VectorSubtract( cent->lerpOrigin, cg.predictedPlayerEntity.lerpOrigin, vec );
 				}
 				if((len = DotProduct( vec, vec )) < (512 * 512)) {
-					cg_solidEntities[cg_numSolidEntities] = cent;
-					cg_numSolidEntities++;
+					if(cg_numSolidEntities < MAX_ENTITIES_IN_SNAPSHOT)
+						cg_solidEntities[cg_numSolidEntities++] = cent;
 					continue;
 				}
-			} else*/ {
-				cg_solidEntities[cg_numSolidEntities] = cent;
-				cg_numSolidEntities++;
+				continue;
+			} else {
+				if(cg_numSolidEntities < MAX_ENTITIES_IN_SNAPSHOT)
+					cg_solidEntities[cg_numSolidEntities++] = cent;
 
-				cg_solidFTEntities[cg_numSolidFTEntities] = cent;
-				cg_numSolidFTEntities++;
+				if(cg_numSolidFTEntities < MAX_ENTITIES_IN_SNAPSHOT)
+					cg_solidFTEntities[cg_numSolidFTEntities++] = cent;
 				continue;
 			}
 		}
@@ -683,7 +688,7 @@ qboolean CG_PredictionOk( playerState_t *ps1, playerState_t *ps2 ) {
 	}
 
 	for( i = 0; i < 3; i++ ) {
-		if(abs(ps2->viewangles[i] - ps1->viewangles[i]) > MAX_PREDICT_VIEWANGLES_DELTA) {
+		if(fabsf(AngleDelta(ps2->viewangles[i], ps1->viewangles[i])) > MAX_PREDICT_VIEWANGLES_DELTA) {
 			return qfalse;
 		}
 	}
@@ -813,10 +818,27 @@ void CG_PredictPlayerState( void ) {
 		cg_pmove.nitmodDoubleJump = NITMOD_SimpleConfig()->doubleJump;
 		cg_pmove.nitmodLeanEnabled = NITMOD_UsesOriginalProtocol();
 		cg_pmove.nitmodReloadEnabled = !Q_stricmp(Info_ValueForKey(CG_ConfigString(CS_SERVERINFO), "gamename"), "nitmod");
+		cg_pmove.nitmodAuthoritativeWeapons = NITMOD_UsesOriginalProtocol();
+		if(cg_pmove.ps->weapon > WP_NONE && cg_pmove.ps->weapon < WP_NUM_WEAPONS) {
+			weaponInfo_t *wi=&cg_weapons[cg_pmove.ps->weapon];
+			cg_pmove.nitmodCustomRecoilEnabled=wi->customRecoilEnabled;
+			cg_pmove.nitmodCustomRecoilDuration=wi->customRecoilDuration;
+			cg_pmove.nitmodCustomRecoilYaw=wi->customRecoilYaw;
+			cg_pmove.nitmodCustomRecoilPitch=wi->customRecoilPitch;
+			cg_pmove.nitmodNoMidclipReload=wi->noMidclipReload;
+			cg_pmove.nitmodSpreadScaleAdd=wi->spreadScaleAdd;
+			cg_pmove.nitmodSpreadScaleAddRand=wi->spreadScaleAddRand;
+			cg_pmove.nitmodSpreadRatio=wi->spreadRatio;
+			cg_pmove.nitmodVelocityToSpread=wi->velocityToSpread;
+			cg_pmove.nitmodViewChangeToSpread=wi->viewChangeToSpread;
+		}
 		cg_pmove.nitmodWeaponFlags = NITMOD_GameState()->weapons;
 		cg_pmove.nitmodWarMode = NITMOD_SimpleConfig()->war;
 		cg_pmove.nitmodNoReload = (unsigned int)NITMOD_SimpleConfig()->noReload;
 		cg_pmove.nitmodDoubleJumpHeight = NITMOD_GameState()->doubleJumpHeight;
+		cg_pmove.nitmodProneDelay = NITMOD_SimpleConfig()->proneDelay;
+		cg_pmove.nitmodCrouchStandDelay = NITMOD_SimpleConfig()->crouchStandDelay;
+		cg_pmove.nitmodStandCrouchDelay = NITMOD_SimpleConfig()->standCrouchDelay;
 
 		cg.pmext.airleft = (cg.waterundertime - cg.time);
 
@@ -850,10 +872,27 @@ void CG_PredictPlayerState( void ) {
 	cg_pmove.nitmodDoubleJump = NITMOD_SimpleConfig()->doubleJump;
 	cg_pmove.nitmodLeanEnabled = NITMOD_UsesOriginalProtocol();
 	cg_pmove.nitmodReloadEnabled = !Q_stricmp(Info_ValueForKey(CG_ConfigString(CS_SERVERINFO), "gamename"), "nitmod");
+	cg_pmove.nitmodAuthoritativeWeapons = NITMOD_UsesOriginalProtocol();
+	if(cg_pmove.ps->weapon > WP_NONE && cg_pmove.ps->weapon < WP_NUM_WEAPONS) {
+		weaponInfo_t *wi=&cg_weapons[cg_pmove.ps->weapon];
+		cg_pmove.nitmodCustomRecoilEnabled=wi->customRecoilEnabled;
+		cg_pmove.nitmodCustomRecoilDuration=wi->customRecoilDuration;
+		cg_pmove.nitmodCustomRecoilYaw=wi->customRecoilYaw;
+		cg_pmove.nitmodCustomRecoilPitch=wi->customRecoilPitch;
+		cg_pmove.nitmodNoMidclipReload=wi->noMidclipReload;
+		cg_pmove.nitmodSpreadScaleAdd=wi->spreadScaleAdd;
+		cg_pmove.nitmodSpreadScaleAddRand=wi->spreadScaleAddRand;
+		cg_pmove.nitmodSpreadRatio=wi->spreadRatio;
+		cg_pmove.nitmodVelocityToSpread=wi->velocityToSpread;
+		cg_pmove.nitmodViewChangeToSpread=wi->viewChangeToSpread;
+	}
 	cg_pmove.nitmodWeaponFlags = NITMOD_GameState()->weapons;
 	cg_pmove.nitmodWarMode = NITMOD_SimpleConfig()->war;
 	cg_pmove.nitmodNoReload = (unsigned int)NITMOD_SimpleConfig()->noReload;
 	cg_pmove.nitmodDoubleJumpHeight = NITMOD_GameState()->doubleJumpHeight;
+	cg_pmove.nitmodProneDelay = NITMOD_SimpleConfig()->proneDelay;
+	cg_pmove.nitmodCrouchStandDelay = NITMOD_SimpleConfig()->crouchStandDelay;
+	cg_pmove.nitmodStandCrouchDelay = NITMOD_SimpleConfig()->standCrouchDelay;
 	cg_pmove.character = CG_CharacterForClientinfo( &cgs.clientinfo[cg.snap->ps.clientNum], &cg_entities[cg.snap->ps.clientNum] );
 	cg.pmext.airleft = (cg.waterundertime - cg.time);
 
@@ -1100,15 +1139,13 @@ void CG_PredictPlayerState( void ) {
 	
 	
 	// ydnar: shake player view here, rather than fiddle with view angles
-	if( cg.time > cg.cameraShakeTime )
-		cg.cameraShakeScale = 0;
-	else
 	{
 		float x;
 		
 		
 		// starts at 1, approaches 0 over time
-		x = (cg.cameraShakeTime - cg.time) / cg.cameraShakeLength;
+		x = CG_CameraShakeFraction();
+		if(x <= 0) return;
 		
 		// move
 		cg.predictedPlayerState.origin[ 2 ] +=

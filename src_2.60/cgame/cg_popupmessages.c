@@ -404,7 +404,14 @@ void CG_AddPMItemBig( popupMessageBigType_t type, const char* message, qhandle_t
 
 #define PM_ICON_SIZE_NORMAL 20
 #define PM_ICON_SIZE_SMALL 12
-void CG_DrawPMItems( void ) {
+static void CG_DrawPMItemsContent(void);
+void CG_DrawPMItems(void) {
+	nitmodHudAnchor_t previous = CG_NitmodHudAnchor(NITMOD_HUD_LEFT);
+	CG_DrawPMItemsContent();
+	CG_NitmodHudAnchor(previous);
+}
+
+static void CG_DrawPMItemsContent(void) {
 	vec4_t colour = { 0.f, 0.f, 0.f, 1.f };
 	vec4_t colourText = { 1.f, 1.f, 1.f, 1.f };
 	int i, size = PM_ICON_SIZE_SMALL, count;
@@ -443,7 +450,14 @@ void CG_DrawPMItems( void ) {
 	}
 }
 
-void CG_DrawPMItemsBig( void ) {
+static void CG_DrawPMItemsBigContent(void);
+void CG_DrawPMItemsBig(void) {
+	nitmodHudAnchor_t previous = CG_NitmodHudAnchor(NITMOD_HUD_RIGHT);
+	CG_DrawPMItemsBigContent();
+	CG_NitmodHudAnchor(previous);
+}
+
+static void CG_DrawPMItemsBigContent(void) {
 	vec4_t colour = { 0.f, 0.f, 0.f, 1.f };
 	vec4_t colourText = { 1.f, 1.f, 1.f, 1.f };
 	float t;

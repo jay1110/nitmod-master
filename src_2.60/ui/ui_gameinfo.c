@@ -18,6 +18,16 @@ static char		*ui_botInfos[MAX_BOTS];
 static int		ui_numArenas;
 //static char		*ui_arenaInfos[MAX_ARENAS];
 
+/* MapVote, TDM and DM are Nitmod rulesets over normal wolfmp arenas; they do
+ * not require authors to modify the arena file shipped in a pk3. */
+static void UI_AddWolfMpModes(mapInfo *map) {
+	if(!map) return;
+	map->typeBits |= (1 << GT_WOLF);
+	map->typeBits |= (1 << GT_WOLF_MAPVOTE);
+	map->typeBits |= (1 << GT_WOLF_TDM);
+	map->typeBits |= (1 << GT_WOLF_DM);
+}
+
 //static int		ui_numSinglePlayerArenas; // TTimo: unused
 //static int		ui_numSpecialSinglePlayerArenas; // TTimo: unused
 
@@ -132,7 +142,7 @@ static void UI_LoadArenasFromFile( char *filename ) {
 		if( *token.string == '}' ) {
 
 			if( !uiInfo.mapList[uiInfo.mapCount].typeBits ) {
-				uiInfo.mapList[uiInfo.mapCount].typeBits |= (1 << GT_WOLF);
+				UI_AddWolfMpModes(&uiInfo.mapList[uiInfo.mapCount]);
 			}
 
 			uiInfo.mapCount++;
@@ -212,7 +222,7 @@ static void UI_LoadArenasFromFile( char *filename ) {
 					uiInfo.mapList[uiInfo.mapCount].typeBits |= (1 << GT_WOLF_LMS);
 				}
 				if( strstr( token.string, "wolfmp" ) ) {
-					uiInfo.mapList[uiInfo.mapCount].typeBits |= (1 << GT_WOLF);
+					UI_AddWolfMpModes(&uiInfo.mapList[uiInfo.mapCount]);
 				}
 				if( strstr( token.string, "wolfsw" ) ) {
 					uiInfo.mapList[uiInfo.mapCount].typeBits |= (1 << GT_WOLF_STOPWATCH);

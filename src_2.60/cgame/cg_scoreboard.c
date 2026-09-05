@@ -1,5 +1,6 @@
 // cg_scoreboard -- draw the scoreboard on top of the game screen
 #include "cg_local.h"
+#include "cg_nitmod_hud.h"
 #include "cg_nitmod_config.h"
 #include "cg_nitmod_scoreboard.h"
 #include "cg_nitmod_mapvote.h"
@@ -846,7 +847,15 @@ CG_DrawScoreboard
 Draw the normal in-game scoreboard
 =================
 */
-qboolean CG_DrawScoreboard( void ) {
+static qboolean CG_DrawScoreboardContent(void);
+qboolean CG_DrawScoreboard(void) {
+	nitmodHudAnchor_t previous = CG_NitmodHudAnchor(NITMOD_HUD_CENTER);
+	qboolean result = CG_DrawScoreboardContent();
+	CG_NitmodHudAnchor(previous);
+	return result;
+}
+
+static qboolean CG_DrawScoreboardContent(void) {
 	int		x = 0, y = 0, x_right;
 	float	fade;
 	float	*fadeColor;

@@ -594,7 +594,7 @@ cgame,cgame_client.c,CG_removeStrings,,,untriaged,,
 cgame,cgame_client.c,CG_UpdateSvCvars,,,untriaged,,
 cgame,cgame_client.c,CG_Debreifing2_Awards_Parse,,,untriaged,,
 cgame,cgame_client.c,CG_Debreifing2_Awards_Draw,,,untriaged,,
-cgame,cgame_client.c,CG_UpdateClassesMaxHP,,,untriaged,,
+cgame,cgame_client.c,CG_UpdateClassesMaxHP,,cgame/cg_nitmod_config.c,ported,protocol-test,Typed five-class snapshot; original CS 39 collision avoided with negotiated nch command.
 cgame,cgame_consolecmds.c,CG_ConsoleCommand,,,untriaged,,
 cgame,cgame_consolecmds.c,CG_InitConsoleCommands,,,untriaged,,
 cgame,cgame_consolecmds.c,CG_Argv,,,untriaged,,
@@ -800,8 +800,8 @@ cgame,cgame_nitrox.c,nitmod_ParseNCS,,,untriaged,,
 cgame,cgame_nitrox.c,nitrox_ParseChargeTimes,,,untriaged,,
 cgame,cgame_nitrox.c,nitrox_ConfigString,,,untriaged,,
 cgame,cgame_nitrox.c,nitmod_DrawObjectiveHint,,,untriaged,,
-cgame,cgame_nitrox.c,nitmod_DrawArtilleryHint,,,untriaged,,
-cgame,cgame_nitrox.c,nitmod_CheckArtilleryHint,,,untriaged,,
+cgame,cgame_nitrox.c,nitmod_DrawArtilleryHint,,cgame/cg_nitmod_hints.c,ported,source-contract-test,Centered pulsing icon with recovered timing and reconstructed-server support.
+cgame,cgame_nitrox.c,nitmod_CheckArtilleryHint,,cgame/cg_nitmod_hints.c,ported,source-contract-test,Team filter and recovered 400/576 distance thresholds.
 cgame,cgame_nitrox.c,MD5Print,,,untriaged,,
 cgame,cgame_nitrox.c,MD5toStr,,,untriaged,,
 cgame,cgame_nitrox.c,nitrox_OpenCrashLog,,,untriaged,,
@@ -1869,8 +1869,8 @@ qagame,nitmod_admin.c,G_shrubbot_unmute,,,untriaged,,
 qagame,nitmod_admin.c,G_shrubbot_splat,,,untriaged,,
 qagame,nitmod_admin.c,G_shrubbot_gibme,,,untriaged,,
 qagame,nitmod_admin.c,G_shrubbot_slap,,,untriaged,,
-qagame,nitmod_admin.c,G_shrubbot_panzerwar,,,untriaged,,
-qagame,nitmod_admin.c,G_shrubbot_sniperwar,,,untriaged,,
+qagame,nitmod_admin.c,G_shrubbot_panzerwar,,game/g_svcmds.c; game/g_client.c,ported_partial,control-flow/disassembly/source-build,Authoritative mode transition connected-client touch broadcast and spawn loadout are ported; shrubbot permission dispatch remains separate.
+qagame,nitmod_admin.c,G_shrubbot_sniperwar,,game/g_svcmds.c; game/g_client.c,ported_partial,control-flow/disassembly/source-build,Authoritative mode transition connected-client touch broadcast and spawn loadout are ported; shrubbot permission dispatch remains separate.
 qagame,nitmod_admin.c,G_shrubbot_poison,,,untriaged,,
 qagame,nitmod_admin.c,G_shrubbot_blind,,,untriaged,,
 qagame,nitmod_admin.c,G_shrubbot_unblind,,,untriaged,,
@@ -2190,15 +2190,15 @@ qagame,nitmod_core.c,nitmod_NCSvar,,game/g_main.c; game/g_nitmod_config.c,ported
 qagame,nitmod_core.c,nitrox_PreciseBBoxCollision,,,untriaged,,
 qagame,nitmod_core.c,nitrox_CreateDirectory,,,deferred,callgraph-review,Used by the anti-cheat path and performs native filesystem access; it belongs behind the planned platform backend.
 qagame,nitmod_core.c,BG_BuildFilePath,,game/g_nitmod_config.c,ported,control-flow/source-build,Typed bounded path builder preserves the recovered separator behavior for later platform backends.
-qagame,nitmod_core.c,nitrox_CrazyGravityCmd,,,deferred,source-review,Depends on the absent n_crazyGravity Cvar and its gameplay implementation.
-qagame,nitmod_core.c,Nit_GibAll,,,deferred,callgraph-review,Only reached while disabling the unported panzerwar/sniperwar admin modes.
+qagame,nitmod_core.c,nitrox_CrazyGravityCmd,,game/g_svcmds.c; game/g_main.c,ported,control-flow/source-build,Strict 0/1 console toggle reuses the authoritative recovered runtime; shrubbot dispatch remains separate.
+qagame,nitmod_core.c,Nit_GibAll,,game/g_svcmds.c,ported,disassembly/source-build,Typed connected-client iteration preserves the original zero-damage call and flags 0x28 used by panzerwar/sniperwar transitions.
 qagame,nitmod_core.c,nitrox_bigBufferPrint,,game/g_nitmod_config.c,ported,control-flow/source-build,Typed explicit-buffer implementation preserves chunked print delivery and safely escapes command delimiters.
 qagame,nitmod_core.c,nitrox_QueryScreenshot,,,untriaged,,
 qagame,nitmod_core.c,nitrox_SortByKDRatio,,,untriaged,,
 qagame,nitmod_core.c,nitrox_ResetNumObjectives,,,deferred,source-review,Resets native objective count plus a second unresolved mod-only counter.
 qagame,nitmod_core.c,nitrox_CustomVoteDescription,,,untriaged,,
 qagame,nitmod_core.c,nitmod_customVoteCmd,,,untriaged,,
-qagame,nitmod_core.c,nitrox_SpawnArtyHint,,,untriaged,,
+qagame,nitmod_core.c,nitrox_SpawnArtyHint,,game/g_nitmod_entities.c,ported,source-contract-test,Typed broadcast marker spawned from first damaging artillery shell.
 qagame,nitmod_core.c,nitrox_DrawHitboxesOnShoot,,,untriaged,,
 qagame,nitmod_core.c,Bullet_Fire_Extended,,,untriaged,,
 qagame,nitmod_core.c,nitrox_ClampFloat,,game/g_nitmod_config.c,ported,control-flow/source-build,Typed in-place floating-point clamp.
@@ -2267,8 +2267,8 @@ qagame,nitmod_core.c,nitrox_AddEntityToEntityArray,,game/nitmod_entity_array.c,p
 qagame,nitmod_core.c,nitrox_RemoveEntityFromEntityArray,,game/nitmod_entity_array.c,ported_partial,control-flow/executable-tests,"Typed borrowed entity-pointer container; 1024 entries, duplicate suppression, full-before-duplicate check and ordered removal tested. Engine consumers and original fatal overflow adapter remain pending; invalid container checks are deliberate hardening."
 qagame,nitmod_core.c,nitrox_NextKey,,,deferred,callgraph-review,Shared helper has no recovered product callsite outside duplicated decompiler declarations.
 qagame,nitmod_core.c,nitrox_CacheClientIP,,game/g_client.c; game/g_nitmod_config.c; game/g_local.h,ported,control-flow/source-build,Mapped to a typed address/host/port cache refreshed from client userinfo.
-qagame,nitmod_core.c,nitrox_HitboxHeight,,,deferred,source-review,Depends on unresolved g_realBody/g_hitboxes policy and custom hitbox consumers.
-qagame,nitmod_core.c,nitrox_ParseMaxHP,,,deferred,source-review,Original shares native CS_FILTERCAMS (39); a direct port would corrupt stock configstring semantics.
+qagame,nitmod_core.c,nitrox_HitboxHeight,,game/g_antilag.c; game/g_active.c,ported,disassembly/control-flow/source-build,Typed standing crouched prone/dead and attacker-weapon height branches plus temporary trace-bound restoration match the original.
+qagame,nitmod_core.c,nitrox_ParseMaxHP,,game/g_client.c,ported,runtime-test,Strict typed five-class parser feeds spawn and healing maxima.
 qagame,nitmod_core.c,nitrox_SendSkillLevels,,,deferred,original-i386-symbols/source-review,Seven vmCvar string sources resolved; see reference/skill-thresholds-disassembly.md. Isolated 7x6 parser tested but sender not activated: native ET has five levels and needs coordinated XP/UI/state migration.
 qagame,nitmod_core.c,nitrox_SetConfigstring,,game/nitmod_config_store.c; game/g_nitmod_config.c,ported_partial,storage-transitions/executable-tests,"655-slot typed store and dirty tracking tested including empty, duplicate, invalid and maximum-length values. Immediate and dirty-pass sends remain capability-gated. Rejection replaces original unsafe/truncating writes; network replay pending."
 qagame,nitmod_core.c,nitrox_GetConfigstring,,game/g_nitmod_config.c,ported_partial,source-build,Bounded copy from typed NCS store with index validation; engine error-path replay pending.
@@ -2276,7 +2276,7 @@ qagame,nitmod_core.c,nitrox_UpdateConfigstrings,,game/g_nitmod_config.c,ported_p
 qagame,nitmod_core.c,nitrox_CSIndex,,game/nitmod_config_index.c; game/g_utils.c; game/g_nitmod_config.c,ported_partial,control-flow/executable-tests,"Case-sensitive first-empty-slot search, reserved index zero and creation overflow tested. Four recovered asset ranges use authoritative native allocation plus NCS mirrors. Arbitrary NCS ranges are rejected; original private sound +84 offset is not used for native ET events."
 qagame,nitmod_core.c,nitrox_SendNewGameState,,,untriaged,,
 qagame,nitmod_core.c,nitrox_SendConfigString,,,untriaged,,
-qagame,nitmod_core.c,nitrox_SendClassesMaxHP,,,deferred,source-review,Depends on the unresolved custom class-maximum-health state.
+qagame,nitmod_core.c,nitrox_SendClassesMaxHP,,game/g_nitmod_config.c;cgame/cg_nitmod_config.c,ported,protocol-test,Capability-negotiated nch snapshot avoids native CS_FILTERCAMS collision and resyncs on change.
 qagame,nitmod_core.c,nitrox_DumpNCSFull,,,untriaged,,
 qagame,nitmod_core.c,nitrox_LoadDBFile_commands,,,untriaged,,
 qagame,nitmod_core.c,nitrox_LoadDBFile_levels,,,untriaged,,
@@ -4877,7 +4877,7 @@ qagame,nitmod_unknown.c,MagicSink,,,untriaged,,
 qagame,nitmod_unknown.c,artilleryThink,,,untriaged,,
 qagame,nitmod_unknown.c,artilleryGoAway,,,untriaged,,
 qagame,nitmod_unknown.c,artilleryThink_real,,,untriaged,,
-qagame,nitmod_unknown.c,artilleryHintThink,,,untriaged,,
+qagame,nitmod_unknown.c,artilleryHintThink,,game/g_nitmod_entities.c,ported,source-contract-test,Owner and salvo timestamp lifecycle with terminal one-second state.
 qagame,nitmod_unknown.c,HandleEntsThatBlockConstructible_constprop_7,,,untriaged,,
 qagame,nitmod_unknown.c,AddLean,,,untriaged,,
 qagame,nitmod_unknown.c,jP_UnDoChargeCost,,,untriaged,,

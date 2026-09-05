@@ -1,5 +1,7 @@
 #include "g_local.h"
+#include "g_nitmod_config.h"
 #include "g_nitmod_equipment.h"
+#include "nitmod_skills.h"
 #include "../../pak/ui/menudef.h"
 
 
@@ -127,33 +129,17 @@ void G_ClientSwap(gclient_t *client)
 
 
 void G_CalcRank( gclient_t* client ) {
-	int i, highestskill = 0;
+	int i;
+	if(!client) return;
 
 	for( i = 0; i < SK_NUM_SKILLS; i++ ) {
 		G_SetPlayerSkill( client, i );
-		if( client->sess.skill[i] > highestskill ) {
-			highestskill = client->sess.skill[i];
-		}
 	}
 
-	// set rank
-	client->sess.rank = highestskill;
-
-	if( client->sess.rank >=4 ) {
-		int cnt = 0;
-
-		// Gordon: count the number of maxed out skills
-		for( i = 0; i < SK_NUM_SKILLS; i++ ) {
-			if( client->sess.skill[ i ] >= 4 ) {
-				cnt++;
-			}
-		}
-
-		client->sess.rank = cnt + 3;
-		if( client->sess.rank > 10 ) {
-			client->sess.rank = 10;
-		}
-	}
+	/* Original G_CalcRank: sum all seven levels, then rankTable 0..9.
+	 * Native XP/ability ownership remains unchanged by this rank port. */
+	client->sess.rank = 0;
+	NITMOD_CalculateRank(client->sess.skill, &client->sess.rank);
 }
 
 /*
@@ -335,6 +321,8 @@ void G_InitWorldSession( void ) {
 	char	s[MAX_STRING_CHARS];
 	int		gt;
 	int		i, j;
+	int		sessionRound = 0, sessionMapCount = 0;
+	char	sessionMap[MAX_QPATH] = "";
 
 	trap_Cvar_VariableStringBuffer( "session", s, sizeof(s) );
 	gt = atoi( s );
@@ -349,22 +337,34 @@ void G_InitWorldSession( void ) {
 	} else {
 		char *tmp = s;
 		qboolean test = (g_altStopwatchMode.integer != 0 || g_currentRound.integer == 1);
+		int locks = 0;
+		qboolean extendedSession;
 
-
-#define GETVAL(x) if((tmp = strchr(tmp, ' ')) == NULL) return; x = atoi(++tmp);
-
-		// Get team lock stuff
-		GETVAL(gt);
-		teamInfo[TEAM_AXIS].spec_lock = (gt & TEAM_AXIS) ? qtrue : qfalse;
-		teamInfo[TEAM_ALLIES].spec_lock = (gt & TEAM_ALLIES) ? qtrue : qfalse;
+		/* Nitmod persists the map-vote XP-cycle counter in the world session:
+		 * gametype, team locks, round, map count, map name. Accept the old ET
+		 * three-field layout as well so upgrades do not invalidate sessions. */
+		extendedSession = sscanf(s, "%i %i %i %i %63s", &gt, &locks,
+			&sessionRound, &sessionMapCount, sessionMap) == 5;
+		if(extendedSession) {
+			teamInfo[TEAM_AXIS].spec_lock = (locks & TEAM_AXIS) ? qtrue : qfalse;
+			teamInfo[TEAM_ALLIES].spec_lock = (locks & TEAM_ALLIES) ? qtrue : qfalse;
+			G_NITMOD_SetMapCycleCount(sessionMapCount);
+		} else {
+			G_NITMOD_SetMapCycleCount(0);
+			if((tmp = strchr(tmp, ' ')) != NULL) {
+				locks = atoi(++tmp);
+				teamInfo[TEAM_AXIS].spec_lock = (locks & TEAM_AXIS) ? qtrue : qfalse;
+				teamInfo[TEAM_ALLIES].spec_lock = (locks & TEAM_ALLIES) ? qtrue : qfalse;
+			}
+		}
 
 		// See if we need to clear player stats
 		// FIXME: deal with the multi-map missions
 		if(g_gametype.integer != GT_WOLF_CAMPAIGN) {
-			if((tmp = strchr(va("%s", tmp), ' ')) != NULL) {
-				tmp++;
+			if(extendedSession || (tmp && (tmp = strchr(tmp, ' ')) != NULL)) {
+				const char *oldMap = extendedSession ? sessionMap : tmp + 1;
 				trap_GetServerinfo(s, sizeof(s));
-				if(Q_stricmp(tmp, Info_ValueForKey(s, "mapname"))) {
+				if(Q_stricmp(oldMap, Info_ValueForKey(s, "mapname"))) {
 					level.fResetStats = qtrue;
 					G_Printf("Map changed, clearing player stats.\n");
 				}
@@ -379,6 +379,18 @@ void G_InitWorldSession( void ) {
 		if(g_swapteams.integer) {
 			G_swapTeamLocks();
 		}
+	}
+	nitmod_RefreshBaseSettings();
+
+	/* Clear the persisted payload once at cycle start. Doing this here rather
+	 * than in G_ReadSessionData avoids erasing XP on a mid-map reconnect. */
+	if(G_NITMOD_MapCycleResetsXP()) {
+		for(i = 0; i < g_maxclients.integer && i < MAX_CLIENTS; ++i) {
+			trap_Cvar_Set(va("sessionstats%i", i), "");
+			G_deleteStats(i);
+		}
+		level.fResetStats = qtrue;
+		G_Printf("Nitmod: starting XP reset map cycle.\n");
 	}
 
 	for( i = 0; i < MAX_FIRETEAMS; i++ ) {
@@ -449,8 +461,9 @@ void G_WriteSessionData( qboolean restart ) {
 #endif // USEXPSTORAGE
 
 	trap_GetServerinfo(strServerInfo, sizeof(strServerInfo));
-	trap_Cvar_Set("session", va("%i %i %s", g_gametype.integer,
+	trap_Cvar_Set("session", va("%i %i %i %i %s", g_gametype.integer,
 											(teamInfo[TEAM_AXIS].spec_lock * TEAM_AXIS | teamInfo[TEAM_ALLIES].spec_lock * TEAM_ALLIES),
+											g_currentRound.integer, G_NITMOD_MapCycleCount(),
 											Info_ValueForKey(strServerInfo, "mapname")));
 
 	// Keep stats for all players in sync

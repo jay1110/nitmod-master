@@ -53,6 +53,10 @@ static const weaponPathEntry_t weaponPaths[] = {
     { WP_AKIMBO_SILENCEDLUGER, { "akimbo_silenced_luger.weap", 0 } },
     { WP_MOBILE_MG42_SET, { "mg42.weap", 1 } },
     { WP_TRIPMINE, { "tripmine.weap", 0 } },
+    { WP_BOMB, { "bomb.weap", 0 } },
+    { WP_POISON_SYRINGE, { "poison.weap", 0 } },
+    { WP_POISON_BOMB, { "poisongas.weap", 0 } },
+    { WP_POISON_MINE, { "landmine_pgas.weap", 0 } },
 };
 
 const nitmodWeaponPath_t *NITMOD_WeaponPath( int weapon ) {

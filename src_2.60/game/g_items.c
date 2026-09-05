@@ -12,6 +12,9 @@
 
 #include "g_local.h"
 #include "g_nitmod_restrictions.h"
+#include "g_nitmod_weapon_definition.h"
+#include "g_nitmod_etbot_lifecycle.h"
+#include "g_nitmod_legacy_cvars.h"
 
 
 
@@ -251,7 +254,9 @@ int AddToClip(
 	int inclip, maxclip;
 	int ammoweap = BG_FindAmmoForWeapon(weapon);
 
-	if(weapon < WP_LUGER || weapon >= WP_NUM_WEAPONS)
+	/* Nitmod's dedicated thrown-knife pickup legitimately routes WP_KNIFE
+	 * through Add_Ammo; base ET started this range at WP_LUGER. */
+	if(weapon < WP_KNIFE || weapon >= WP_NUM_WEAPONS)
 		return qfalse;
 
 	inclip	= ps->ammoclip[BG_FindClipForWeapon(weapon)];
@@ -482,6 +487,7 @@ void G_DropWeapon( gentity_t *ent, weapon_t weapon )
 		ent2->count = client->ps.ammo[BG_FindAmmoForWeapon(weapon)] + client->ps.ammoclip[BG_FindClipForWeapon(weapon)];
 	} else {
 		ent2->count = client->ps.ammoclip[BG_FindClipForWeapon(weapon)];
+		ent2->nitmodDropAmmo = client->ps.ammo[BG_FindAmmoForWeapon(weapon)];
 	}
 
 	if( weapon == WP_KAR98 || weapon == WP_CARBINE ) {
@@ -492,6 +498,8 @@ void G_DropWeapon( gentity_t *ent, weapon_t weapon )
 
 //	ent2->item->quantity = client->ps.ammoclip[BG_FindClipForWeapon(weapon)]; // Gordon: um, modifying an item is not a good idea
 	client->ps.ammoclip[BG_FindClipForWeapon(weapon)] = 0;
+	client->ps.ammo[BG_FindAmmoForWeapon(weapon)] = 0;
+	Bot_Event_RemoveWeapon(client->ps.clientNum, Bot_WeaponGameToBot(weapon));
 }
 
 // TAT 1/6/2003 - Bot picks up a new weapon
@@ -499,9 +507,16 @@ void BotPickupWeapon(int client, int weaponnum, qboolean alreadyHave);
 
 qboolean G_CanPickupWeapon( weapon_t weapon, gentity_t* ent ) {
 	int decision;
+	unsigned int classMask;
 	if(!ent || !ent->client || weapon < WP_NONE || weapon >= WP_NUM_WEAPONS) return qfalse;
 	decision=G_NITMOD_PickupPrecheck(ent,weapon);
 	if(decision>=0) return decision ? qtrue : qfalse;
+	/* Only validated definitions enable the reconstructed class policy.
+	 * Missing/unsupported files preserve ET's existing pickup fallback. */
+	if(G_NITMOD_PickupClassMask(weapon, &classMask)) {
+		decision = G_NITMOD_CanPickupWeapon(ent, weapon, classMask);
+		if(decision >= 0) return decision ? qtrue : qfalse;
+	}
 	if( ent->client->sess.sessionTeam == TEAM_AXIS ) {
 		if( weapon == WP_THOMPSON ) {
 			weapon = WP_MP40;
@@ -530,24 +545,37 @@ qboolean G_CanPickupWeapon( weapon_t weapon, gentity_t* ent ) {
 
 int Pickup_Weapon( gentity_t *ent, gentity_t *other ) {
 	int			quantity;
+	int			reserveQuantity;
+	int			options;
 	qboolean	alreadyHave = qfalse;
 
 	// JPW NERVE -- magic ammo for any two-handed weapon
 	if( ent->item->giTag == WP_AMMO ) {
 		AddMagicAmmo( other, ent->count );
+		if (ent->parent) {
+			Bot_Event_RecievedAmmo(other - g_entities, ent->parent);
+			if( ent->parent->client && ent->parent != other &&
+				ent->parent->client->sess.sessionTeam == other->client->sess.sessionTeam ) {
+				other->client->pers.nitmodLastAmmoClient = ent->parent - g_entities;
+			}
+		}
 
 		// if LT isn't giving ammo to self or another LT or the enemy, give him some props
 		if( other->client->ps.stats[STAT_PLAYER_CLASS] != PC_FIELDOPS ) {
 			if ( ent->parent && ent->parent->client && other->client->sess.sessionTeam == ent->parent->client->sess.sessionTeam ) {
-				if (!(ent->parent->client->PCSpecialPickedUpCount % LT_SPECIAL_PICKUP_MOD)) {
-					AddScore(ent->parent, WOLF_AMMO_UP);
-					if(ent->parent && ent->parent->client) {
-						G_LogPrintf("Ammo_Pack: %d %d\n", ent->parent - g_entities, other - g_entities);	// OSP
+				/* Original Pickup_Weapon checks g_misc bit 8 around the whole
+				 * Field Ops reward block. The pack still supplies ammunition and
+				 * advances PCSpecialPickedUpCount; only score/skill rewards are
+				 * suppressed. */
+				if( !(G_NITMOD_LegacyCvarInteger("g_misc", 0) & 8) ) {
+					if (!(ent->parent->client->PCSpecialPickedUpCount % LT_SPECIAL_PICKUP_MOD)) {
+						AddScore(ent->parent, WOLF_AMMO_UP);
+						G_LogPrintf("Ammo_Pack: %d %d\n", (int)(ent->parent - g_entities), (int)(other - g_entities));	// OSP
 					}
+					G_AddSkillPoints( ent->parent, SK_SIGNALS, 1.f );
+					G_DebugAddSkillPoints( ent->parent, SK_SIGNALS, 1.f, "ammo pack picked up" );
 				}
 				ent->parent->client->PCSpecialPickedUpCount++;
-				G_AddSkillPoints( ent->parent, SK_SIGNALS, 1.f );
-				G_DebugAddSkillPoints( ent->parent, SK_SIGNALS, 1.f, "ammo pack picked up" ); 
 
 				// extracted code originally here into AddMagicAmmo -xkan, 9/18/2002
 				// add 1 clip of magic ammo for any two-handed weapon
@@ -556,18 +584,57 @@ int Pickup_Weapon( gentity_t *ent, gentity_t *other ) {
 		}
 	}
 
+	/* Original Pickup_Weapon handles thrown knives before g_weaponItems and
+	 * firearm ownership. Each entity restores exactly one throwing knife; at
+	 * eight stored knives it remains in the world. */
+	if( ent->item->giTag == WP_KNIFE ) {
+		int ammo = BG_FindAmmoForWeapon(WP_KNIFE);
+		if( other->client->ps.ammo[ammo] > 7 ) return 0;
+		Add_Ammo(other, WP_KNIFE, 1, qfalse);
+		return -1;
+	}
+
 	quantity = ent->count;
+	options = G_NITMOD_LegacyCvarInteger("g_weaponItems", 1);
+	reserveQuantity = (options & 4) ? ent->nitmodDropAmmo : 0;
 
 	// check if player already had the weapon
 	alreadyHave = COM_BitCheck( other->client->ps.weapons, ent->item->giTag );
 
 	// JPW NERVE  prevents drop/pickup weapon "quick reload" exploit
 	if( alreadyHave ) {
-		Add_Ammo( other, ent->item->giTag, quantity, qfalse );
+		int ammoAdded = 0;
+		if( quantity ) {
+			ammoAdded += Add_Ammo( other, ent->item->giTag, quantity, qfalse );
+		}
+		if( reserveQuantity ) {
+			ammoAdded += Add_Ammo( other, ent->item->giTag, reserveQuantity, qfalse );
+		}
 
 		// Gordon: secondary weapon ammo
 		if( ent->delay ) {
-			Add_Ammo( other, weapAlts[ ent->item->giTag ], ent->delay, qfalse );
+			ammoAdded += Add_Ammo( other, weapAlts[ ent->item->giTag ], ent->delay, qfalse );
+		}
+		/* Original bit 16 preserves an item which cannot contribute any ammo. */
+		if( !ammoAdded && (options & 16) ) {
+			return 0;
+		}
+		/* Bit 8 is the original ammo-only retention mode.  Pickup_Weapon
+		 * returns zero so Touch_Item leaves the entity in the world; because
+		 * that suppresses Touch_Item's normal feedback, emit it here first. */
+		if( (options & 8) && ent->item->giTag != WP_BINOCULARS ) {
+			if( quantity || reserveQuantity || ent->delay ) {
+				int pickupEvent = EV_ITEM_PICKUP;
+				if( ent->noise_index ) {
+					G_AddEvent( other, EV_GENERAL_SOUND, ent->noise_index );
+					pickupEvent = EV_ITEM_PICKUP_QUIET;
+				}
+				G_AddEvent( other, pickupEvent, ent->s.modelindex );
+			}
+			ent->count = 0;
+			ent->nitmodDropAmmo = 0;
+			ent->delay = 0;
+			return 0;
 		}
 	} else {
 		if( level.time - other->client->dropWeaponTime < 1000 ) {
@@ -626,6 +693,7 @@ int Pickup_Weapon( gentity_t *ent, gentity_t *other ) {
 					}
 				} else {
 					other->client->ps.ammoclip[BG_FindClipForWeapon(ent->item->giTag)] = quantity;
+					other->client->ps.ammo[BG_FindAmmoForWeapon(ent->item->giTag)] = reserveQuantity;
 
 					// Gordon: secondary weapon ammo
 					if( ent->delay ) {
@@ -641,6 +709,8 @@ int Pickup_Weapon( gentity_t *ent, gentity_t *other ) {
 	// TAT 1/6/2003 - If we are a bot, call the pickup function
 	if( other->r.svFlags & SVF_BOT )
 		BotPickupWeapon( other->s.number, ent->item->giTag, alreadyHave );
+	Bot_Event_AddWeapon(other->client->ps.clientNum,
+		Bot_WeaponGameToBot(ent->item->giTag));
 
 	return -1;
 }
@@ -655,26 +725,34 @@ int Pickup_Health (gentity_t *ent, gentity_t *other) {
 	// if medic isn't giving ammo to self or another medic or the enemy, give him some props
 	if( other->client->ps.stats[STAT_PLAYER_CLASS] != PC_MEDIC ) {
 		if( ent->parent && ent->parent->client && other->client->sess.sessionTeam == ent->parent->client->sess.sessionTeam ) {
-			if (!(ent->parent->client->PCSpecialPickedUpCount % MEDIC_SPECIAL_PICKUP_MOD)) {
-				AddScore(ent->parent, WOLF_HEALTH_UP);
-				G_LogPrintf("Health_Pack: %d %d\n", ent->parent - g_entities, other - g_entities);	// OSP
+			if( ent->parent != other ) {
+				other->client->pers.nitmodLastHealthClient = ent->parent - g_entities;
 			}
-			G_AddSkillPoints( ent->parent, SK_FIRST_AID, 1.f );
-			G_DebugAddSkillPoints( ent->parent, SK_FIRST_AID, 1.f, "health pack picked up" ); 
+			/* Original Pickup_Health gates the complete Medic reward block
+			 * with g_misc bit 4. Healing and assist ownership stay active. */
+			if( !(G_NITMOD_LegacyCvarInteger("g_misc", 0) & 4) ) {
+				if (!(ent->parent->client->PCSpecialPickedUpCount % MEDIC_SPECIAL_PICKUP_MOD)) {
+					AddScore(ent->parent, WOLF_HEALTH_UP);
+					G_LogPrintf("Health_Pack: %d %d\n", (int)(ent->parent - g_entities), (int)(other - g_entities));	// OSP
+				}
+				G_AddSkillPoints( ent->parent, SK_FIRST_AID, 1.f );
+				G_DebugAddSkillPoints( ent->parent, SK_FIRST_AID, 1.f, "health pack picked up" );
+			}
 			ent->parent->client->PCSpecialPickedUpCount++;
 		}
 	}	
 	
-	max = other->client->ps.stats[STAT_MAX_HEALTH];
-	if( other->client->sess.playerType == PC_MEDIC ) {
-		max *= 1.12f;
-	}
+	max = BG_EffectiveMaxHealth(&other->client->ps);
+	G_NITMOD_CurePoisonFromHealth(other, ent->parent, qfalse);
 
 	other->health += ent->item->quantity;
 	if (other->health > max ) {
 		other->health = max;
 	}
 	other->client->ps.stats[STAT_HEALTH] = other->health;
+	if (ent->parent) {
+		Bot_Event_Healed(other - g_entities, ent->parent);
+	}
 
 	return -1;
 }
@@ -1154,6 +1232,53 @@ G_BounceItem
 
 ================
 */
+static void G_NITMOD_FlushItem( gentity_t *ent, trace_t *trace ) {
+	vec3_t settled;
+	int enabled = G_NITMOD_LegacyCvarInteger("g_flushItems", 1);
+
+	VectorCopy(trace->endpos, settled);
+	if( !enabled || !ent->item || trace->plane.normal[2] <= 0.7f ||
+		(trace->plane.normal[0] == 0.f && trace->plane.normal[1] == 0.f &&
+		 trace->plane.normal[2] == 1.f) ) {
+		settled[2] += 1.f;
+		if( ent->item ) {
+			ent->s.angles[0] = 0.f;
+			ent->s.angles[2] = 0.f;
+		}
+	} else {
+		vec3_t axis[3];
+		vec3_t forward;
+		vec3_t start;
+		vec3_t end;
+		trace_t backtrace;
+
+		AngleVectors(ent->s.angles, forward, NULL, NULL);
+		VectorCopy(trace->plane.normal, axis[2]);
+		ProjectPointOnPlane(axis[0], forward, axis[2]);
+		if( VectorNormalize(axis[0]) == 0.f ) {
+			AngleVectors(ent->s.angles, NULL, axis[0], NULL);
+			ProjectPointOnPlane(axis[0], axis[0], axis[2]);
+			VectorNormalize(axis[0]);
+		}
+		CrossProduct(axis[0], axis[2], axis[1]);
+		VectorNegate(axis[1], axis[1]);
+		AxisToAngles(axis, ent->s.angles);
+
+		VectorAdd(trace->endpos, axis[2], start);
+		VectorMA(trace->endpos, -64.f, axis[2], end);
+		trap_Trace(&backtrace, start, NULL, NULL, end, ent->s.number, CONTENTS_SOLID);
+		if( !backtrace.startsolid )
+			VectorMA(trace->endpos, -64.f * backtrace.fraction, axis[2], settled);
+		VectorAdd(settled, axis[2], settled);
+	}
+
+	G_SetAngle(ent, ent->s.angles);
+	SnapVector(settled);
+	G_SetOrigin(ent, settled);
+	ent->s.groundEntityNum = trace->entityNum;
+	if( trace->entityNum != ENTITYNUM_WORLD ) ent->s.eType = ET_ITEM;
+}
+
 void G_BounceItem( gentity_t *ent, trace_t *trace ) {
 	vec3_t	velocity;
 	float	dot;
@@ -1170,10 +1295,7 @@ void G_BounceItem( gentity_t *ent, trace_t *trace ) {
 
 	// check for stop
 	if ( trace->plane.normal[2] > 0 && ent->s.pos.trDelta[2] < 40 ) {
-		trace->endpos[2] += 1.0;	// make sure it is off ground
-		SnapVector( trace->endpos );
-		G_SetOrigin( ent, trace->endpos );
-		ent->s.groundEntityNum = trace->entityNum;
+		G_NITMOD_FlushItem(ent, trace);
 		return;
 	}
 

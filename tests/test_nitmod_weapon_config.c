@@ -125,5 +125,9 @@ int main( void ) {
     medicValue = oversized;
     CHECK( !G_NITMOD_ReadMedicOptions(&medicOptions) && medicOptions == ~0u );
     CHECK( !G_NITMOD_ReadMedicOptions(NULL) );
+    for(j = 0; j < 256; ++j) {
+        tracked[8]->integer = j;
+        CHECK(G_NITMOD_ConfiguredMedicOptions() == (unsigned int)j);
+    }
     return 0;
 }

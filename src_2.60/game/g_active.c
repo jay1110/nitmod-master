@@ -1,9 +1,15 @@
 
 #include "g_local.h"
+#include "nitmod_weapon_recoil.h"
+#include "g_nitmod_weapon_definition.h"
 #include "g_nitmod_air.h"
 #include "g_nitmod_restrictions.h"
+#include "g_nitmod_legacy_cvars.h"
+#include "g_nitmod_config.h"
+#include "g_nitmod_abilities.h"
 #include "nitmod_air.h"
 #include "nitmod_weapon_reload.h"
+#include <limits.h>
 
 /*
 ===============
@@ -459,10 +465,35 @@ void SpectatorThink( gentity_t *ent, usercmd_t *ucmd ) {
 		pm.nitmodDoubleJump = g_doubleJump.integer;
 		pm.nitmodLeanEnabled = qtrue;
 		pm.nitmodReloadEnabled = qtrue;
+		pm.nitmodAuthoritativeWeapons = qtrue;
 		pm.nitmodWarMode = G_NITMOD_ConfiguredWarMode();
 		pm.nitmodNoReload = (unsigned int)G_NITMOD_ConfiguredNoReload();
 		pm.nitmodWeaponFlags = G_NITMOD_ConfiguredWeaponFlags();
+		pm.nitmodNoMidclipReload = G_NITMOD_WeaponNoMidclipReload(client->ps.weapon);
+		{
+			nitmodWeaponOptions_t options;
+			memset(&options, 0, sizeof(options));
+			if(G_NITMOD_WeaponSpreadOptions(client->ps.weapon, &options)) {
+				pm.nitmodSpreadScaleAdd = options.spreadScaleAdd;
+				pm.nitmodSpreadScaleAddRand = options.spreadScaleAddRand;
+				pm.nitmodSpreadRatio = options.spreadRatio;
+				pm.nitmodVelocityToSpread = options.velocityToSpread;
+				pm.nitmodViewChangeToSpread = options.viewChangeToSpread;
+			}
+		}
+		{
+			nitmodWeaponRecoil_t recoil;
+			if(G_NITMOD_WeaponRecoil(client->ps.weapon, &recoil)) {
+				pm.nitmodCustomRecoilEnabled = qtrue;
+				pm.nitmodCustomRecoilDuration = recoil.duration;
+				pm.nitmodCustomRecoilYaw = recoil.yaw;
+				pm.nitmodCustomRecoilPitch = recoil.pitch;
+			}
+		}
 		pm.nitmodDoubleJumpHeight = g_DJHeight.value;
+		pm.nitmodProneDelay = G_NITMOD_LegacyCvarInteger("n_proneDelay", 0);
+		pm.nitmodCrouchStandDelay = G_NITMOD_LegacyCvarInteger("n_crouchStandDelay", 0);
+		pm.nitmodStandCrouchDelay = G_NITMOD_LegacyCvarInteger("n_standCrouchDelay", 0);
 		pm.nitmodReloadPreferenceFlags = NITMOD_EncodeReloadPreferences(0,
 			client->pers.bAutoReloadAux, client->pers.bAltReloadAux);
 		pm.character = client->pers.character;
@@ -610,35 +641,56 @@ ClientTimerActions
 Actions that happen once a second
 ==================
 */
-void ClientTimerActions( gentity_t *ent, int msec ) {
+void G_NITMOD_HealthTimer(gentity_t *ent, int msec, unsigned int medicOptions, int war) {
 	gclient_t *client;
+	int baseRate, extraRate;
+	qboolean regenerate;
+	if(!ent || !ent->client || msec < 0) return;
 
 	client = ent->client;
+	/* Original ClientTimerActions gates before residual accumulation. */
+	if((unsigned int)war - 1u < 4u ||
+		(client->sess.playerType == PC_MEDIC && (medicOptions & 32u))) return;
+	extraRate = medicOptions & 64u ? 1 : medicOptions & 128u ? 0 : 2;
+	baseRate = extraRate + 1;
+	if(client->timeResidual < 0 || msec > INT_MAX - client->timeResidual) return;
 	client->timeResidual += msec;
 
 	while( client->timeResidual >= 1000 ) {
 		client->timeResidual -= 1000;
 
 		// regenerate
-		if( client->sess.playerType == PC_MEDIC ) {
+		/* Original ClientTimerActions (ELF 0x4e2f0): DM option bit 1 admits
+		 * every class. Otherwise a living medic regenerates normally, and
+		 * g_medics bit 4 admits a client with the sixth First Aid reward. */
+		regenerate = g_gametype.integer == 8 ? !!(g_DMOptions.integer & 2) :
+			((client->sess.playerType == PC_MEDIC &&
+			  !(client->ps.eFlags & (EF_DEAD | EF_VIEWING_CAMERA))) ||
+			 ((medicOptions & 16u) && (G_NITMOD_FirstAidUnlocks(client) & 32u)));
+		if( regenerate ) {
+			int maximum = BG_EffectiveMaxHealth(&client->ps);
 			if( ent->health < client->ps.stats[STAT_MAX_HEALTH]) {
-				ent->health += 3;
-				if ( ent->health > client->ps.stats[STAT_MAX_HEALTH] * 1.1){
-					ent->health = client->ps.stats[STAT_MAX_HEALTH] * 1.1;
+				ent->health += baseRate;
+				if ( ent->health > client->ps.stats[STAT_MAX_HEALTH]){
+					ent->health = client->ps.stats[STAT_MAX_HEALTH];
 				}
-			} else if( ent->health < client->ps.stats[STAT_MAX_HEALTH] * 1.12) {
-				ent->health += 2;
-				if( ent->health > client->ps.stats[STAT_MAX_HEALTH] * 1.12 ) {
-					ent->health = client->ps.stats[STAT_MAX_HEALTH] * 1.12;
+			} else if( ent->health < maximum) {
+				ent->health += extraRate;
+				if( ent->health > maximum ) {
+					ent->health = maximum;
 				}
 			}
 		} else {
 			// count down health when over max
-			if ( ent->health > client->ps.stats[STAT_MAX_HEALTH] ) {
+			if ( ent->health > BG_EffectiveMaxHealth(&client->ps) && ent->health > 1 ) {
 				ent->health--;
 			}
 		}
 	}
+}
+
+void ClientTimerActions(gentity_t *ent, int msec) {
+	G_NITMOD_HealthTimer(ent, msec, G_NITMOD_ConfiguredMedicOptions(), G_NITMOD_ConfiguredWarMode());
 }
 
 /*
@@ -670,12 +722,84 @@ Events will be passed on to the clients for presentation,
 but any server game effects are handled here
 ================
 */
+/* Original ClientEvents: ordinary shots retain the first 500 ms after spawn;
+ * mounted MG42 shots revoke protection immediately. Event IDs are native here. */
+void G_NITMOD_AttackInvulnerability(gentity_t *ent, int event, int now, int enabled) {
+	if(!ent || !ent->client || !enabled) return;
+	switch(event) {
+	case EV_FIRE_WEAPON:
+	case EV_FIRE_WEAPONB:
+	case EV_FIRE_WEAPON_LASTSHOT:
+		if((double)now - ent->client->pers.lastSpawnTime <= 500.0) return;
+		break;
+	case EV_FIRE_WEAPON_MG42:
+	case EV_FIRE_WEAPON_MOUNTEDMG42:
+		break;
+	default:
+		return;
+	}
+	ent->client->ps.powerups[PW_INVULNERABLE] = 0;
+}
+
+void G_NITMOD_FallDamage(gentity_t *ent, int event) {
+	gentity_t *target = NULL;
+	int damage, stun = 0, slot, flags = g_goombaFlags.integer;
+	qboolean sameTeam;
+	if(!ent || !ent->client || ent->s.eType != ET_PLAYER) return;
+	switch(event) {
+	case EV_FALL_SHORT: damage = 0; break;
+	case EV_FALL_NDIE: damage = 500; break;
+	case EV_FALL_DMG_10: damage = 10; stun = 250; break;
+	case EV_FALL_DMG_15: damage = 15; stun = 250; break;
+	case EV_FALL_DMG_25: damage = 25; stun = 500; break;
+	case EV_FALL_DMG_50: damage = 50; stun = 1000; break;
+	default: return;
+	}
+	if(g_goomba.integer) {
+		slot = ent->s.groundEntityNum;
+		if(slot >= 0 && slot < MAX_GENTITIES && g_entities[slot].client) target = &g_entities[slot];
+		else {
+			trace_t trace;
+			vec3_t end;
+			VectorCopy(ent->r.currentOrigin, end); end[2] -= 4;
+			trap_Trace(&trace, ent->r.currentOrigin, NULL, NULL, end, ent->s.number, MASK_SHOT);
+			if(trace.entityNum >= 0 && trace.entityNum < MAX_GENTITIES)
+				target = &g_entities[trace.entityNum];
+		}
+	}
+	if(target == ent || (target && (!target->client || !target->takedamage))) target = NULL;
+	sameTeam = target && target->client->sess.sessionTeam == ent->client->sess.sessionTeam;
+	if(event == EV_FALL_SHORT && (!target || (flags & 2) || (sameTeam && (flags & 4)))) return;
+	if(target) {
+		double amount;
+		if(g_gametype.integer != 8 && sameTeam && (flags & 1)) return;
+		if(!damage) damage = 5;
+		if(stun) { target->client->ps.pm_time = stun; target->client->ps.pm_flags |= PMF_TIME_KNOCKBACK; }
+		target->pain_debounce_time = level.time + 200;
+		amount = (flags & 16) ? target->health : (double)damage * g_goomba.integer;
+		/* Preserve normal configured values, reject overflow before int conversion. */
+		if(ent->health > 0 && amount >= -2147483647.0 && amount <= 2147483647.0)
+			G_Damage(target, ent, ent, NULL, NULL, (int)amount,
+				(flags & 16) ? DAMAGE_NO_PROTECTION : 0, MOD_GOOMBA);
+		/* Original short falls play sound slot 5 at the stomped client after
+		 * applying damage. This uses the existing typed general-sound path. */
+		if(damage <= 5) {
+			NITMOD_PlaySoundEvent(target, 5);
+			return;
+		}
+		if(flags & 8) return;
+		damage = (int)(damage * .2f);
+	} else {
+		if(stun) { ent->client->ps.pm_time = stun; ent->client->ps.pm_flags |= PMF_TIME_KNOCKBACK; }
+		ent->pain_debounce_time = level.time + 200;
+	}
+	G_Damage(ent, NULL, NULL, NULL, NULL, damage, 0, MOD_FALLING);
+}
+
 void ClientEvents( gentity_t *ent, int oldEventSequence ) {
 	int			i;
 	int			event;
 	gclient_t	*client;
-	int			damage;
-	vec3_t		dir;
 
 	client = ent->client;
 
@@ -687,7 +811,7 @@ void ClientEvents( gentity_t *ent, int oldEventSequence ) {
 
 		switch ( event ) {
 		case EV_FALL_NDIE:
-		//case EV_FALL_SHORT:
+		case EV_FALL_SHORT:
 		case EV_FALL_DMG_10:
 		case EV_FALL_DMG_15:
 		case EV_FALL_DMG_25:
@@ -695,48 +819,11 @@ void ClientEvents( gentity_t *ent, int oldEventSequence ) {
 		case EV_FALL_DMG_50:
 		//case EV_FALL_DMG_75:
 		
-			// rain - VectorClear() used to be done here whenever falling
-			// damage occured, but I moved it to bg_pmove where it belongs.
-			
-			if ( ent->s.eType != ET_PLAYER ) {
-				break;		// not in the player model
-			}
-			if ( event == EV_FALL_NDIE ) 
-			{
-				damage = 9999;
-			}
-			else if (event == EV_FALL_DMG_50)
-			{
-				damage = 50;
-				ent->client->ps.pm_time = 1000;
-				ent->client->ps.pm_flags |= PMF_TIME_KNOCKBACK;
-			}
-			else if (event == EV_FALL_DMG_25)
-			{
-				damage = 25;
-				ent->client->ps.pm_time = 250;
-				ent->client->ps.pm_flags |= PMF_TIME_KNOCKBACK;
-			}
-			else if (event == EV_FALL_DMG_15)
-			{
-				damage = 15;
-				ent->client->ps.pm_time = 1000;
-				ent->client->ps.pm_flags |= PMF_TIME_KNOCKBACK;
-			}
-			else if (event == EV_FALL_DMG_10)
-			{
-				damage = 10;
-				ent->client->ps.pm_time = 1000;
-				ent->client->ps.pm_flags |= PMF_TIME_KNOCKBACK;
-			}
-			else
-				damage = 5; // never used
-			VectorSet (dir, 0, 0, 1);
-			ent->pain_debounce_time = level.time + 200;	// no normal pain sound
-			G_Damage (ent, NULL, NULL, NULL, NULL, damage, 0, MOD_FALLING);
+			G_NITMOD_FallDamage(ent, event);
 			break;
 
 		case EV_FIRE_WEAPON_MG42:
+			G_NITMOD_AttackInvulnerability(ent, event, level.time, g_noAttackInvul.integer);
 
 			// Gordon: reset player disguise on stealing docs
 			ent->client->ps.powerups[PW_OPS_DISGUISED] = 0;
@@ -751,6 +838,7 @@ void ClientEvents( gentity_t *ent, int oldEventSequence ) {
 
 			break;
 		case EV_FIRE_WEAPON_MOUNTEDMG42:
+			G_NITMOD_AttackInvulnerability(ent, event, level.time, g_noAttackInvul.integer);
 			// Gordon: reset player disguise on stealing docs
 			ent->client->ps.powerups[PW_OPS_DISGUISED] = 0;
 
@@ -774,7 +862,12 @@ void ClientEvents( gentity_t *ent, int oldEventSequence ) {
 		case EV_FIRE_WEAPON:
 		case EV_FIRE_WEAPONB:
 		case EV_FIRE_WEAPON_LASTSHOT:
+			G_NITMOD_AttackInvulnerability(ent, event, level.time, g_noAttackInvul.integer);
 			FireWeapon( ent );
+			break;
+		case EV_NITMOD_THROW_KNIFE:
+			G_NITMOD_AttackInvulnerability(ent, EV_FIRE_WEAPON, level.time, g_noAttackInvul.integer);
+			G_NITMOD_ThrowKnife(ent);
 			break;
 
 		default:
@@ -913,6 +1006,7 @@ void ClientThink_real( gentity_t *ent ) {
 	pmove_t		pm;
 	usercmd_t	*ucmd;
 	gclient_t	*client = ent->client;
+	G_NITMOD_RunPoison(ent);
 
 
 	// don't think if the client is not yet connected (and thus not yet spawned in)
@@ -998,6 +1092,12 @@ void ClientThink_real( gentity_t *ent ) {
 		return;
 	}
 
+	/* Original G_CheckClientWeapons revokes adrenaline immediately when its
+	 * configured class/unlock eligibility changes. It never grants here; the
+	 * spawn/skill paths remain responsible for assignment. */
+	G_NITMOD_CheckAdrenaline(ent, qfalse, G_NITMOD_FirstAidUnlocks(client),
+		(unsigned int)G_NITMOD_LegacyCvarInteger("g_adrenClasses", 2));
+
 	if((client->ps.eFlags & EF_VIEWING_CAMERA) || level.match_pause != PAUSE_NONE
 #ifdef SAVEGAME_SUPPORT
 	  || (g_gametype.integer == GT_SINGLE_PLAYER && saveGamePending && g_reloading.integer && (g_reloading.integer != RELOAD_FAILED))) {
@@ -1052,10 +1152,35 @@ void ClientThink_real( gentity_t *ent ) {
 	pm.nitmodDoubleJump = g_doubleJump.integer;
 	pm.nitmodLeanEnabled = qtrue;
 	pm.nitmodReloadEnabled = qtrue;
+	pm.nitmodAuthoritativeWeapons = qtrue;
 	pm.nitmodWarMode = G_NITMOD_ConfiguredWarMode();
 	pm.nitmodNoReload = (unsigned int)G_NITMOD_ConfiguredNoReload();
 	pm.nitmodWeaponFlags = G_NITMOD_ConfiguredWeaponFlags();
+	pm.nitmodNoMidclipReload = G_NITMOD_WeaponNoMidclipReload(client->ps.weapon);
+	{
+		nitmodWeaponOptions_t options;
+		memset(&options, 0, sizeof(options));
+		if(G_NITMOD_WeaponSpreadOptions(client->ps.weapon, &options)) {
+			pm.nitmodSpreadScaleAdd = options.spreadScaleAdd;
+			pm.nitmodSpreadScaleAddRand = options.spreadScaleAddRand;
+			pm.nitmodSpreadRatio = options.spreadRatio;
+			pm.nitmodVelocityToSpread = options.velocityToSpread;
+			pm.nitmodViewChangeToSpread = options.viewChangeToSpread;
+		}
+	}
+	{
+		nitmodWeaponRecoil_t recoil;
+		if(G_NITMOD_WeaponRecoil(client->ps.weapon, &recoil)) {
+			pm.nitmodCustomRecoilEnabled = qtrue;
+			pm.nitmodCustomRecoilDuration = recoil.duration;
+			pm.nitmodCustomRecoilYaw = recoil.yaw;
+			pm.nitmodCustomRecoilPitch = recoil.pitch;
+		}
+	}
 	pm.nitmodDoubleJumpHeight = g_DJHeight.value;
+	pm.nitmodProneDelay = G_NITMOD_LegacyCvarInteger("n_proneDelay", 0);
+	pm.nitmodCrouchStandDelay = G_NITMOD_LegacyCvarInteger("n_crouchStandDelay", 0);
+	pm.nitmodStandCrouchDelay = G_NITMOD_LegacyCvarInteger("n_standCrouchDelay", 0);
 	pm.nitmodReloadPreferenceFlags = NITMOD_EncodeReloadPreferences(0,
 		client->pers.bAutoReloadAux, client->pers.bAltReloadAux);
 	pm.character = client->pers.character;
@@ -1089,17 +1214,22 @@ void ClientThink_real( gentity_t *ent ) {
 
 	// NERVE - SMF
 	pm.gametype = g_gametype.integer;
-	pm.ltChargeTime = level.lieutenantChargeTime[client->sess.sessionTeam-1];
-	pm.soldierChargeTime = level.soldierChargeTime[client->sess.sessionTeam-1];
-	pm.engineerChargeTime = level.engineerChargeTime[client->sess.sessionTeam-1];
-	pm.medicChargeTime = level.medicChargeTime[client->sess.sessionTeam-1];
+	if (G_NITMOD_LegacyCvarInteger("g_noCharge", 0)) {
+		pm.ltChargeTime = pm.soldierChargeTime = pm.engineerChargeTime = pm.medicChargeTime = 0;
+	} else {
+		pm.ltChargeTime = level.lieutenantChargeTime[client->sess.sessionTeam-1];
+		pm.soldierChargeTime = level.soldierChargeTime[client->sess.sessionTeam-1];
+		pm.engineerChargeTime = level.engineerChargeTime[client->sess.sessionTeam-1];
+		pm.medicChargeTime = level.medicChargeTime[client->sess.sessionTeam-1];
+	}
 	// -NERVE - SMF
 
 	pm.skill = client->sess.skill;
 
 	client->pmext.airleft = NITMOD_AirRemaining( ent->client->airOutTime, level.time );
 
-	pm.covertopsChargeTime = level.covertopsChargeTime[client->sess.sessionTeam-1];
+	pm.covertopsChargeTime = G_NITMOD_LegacyCvarInteger("g_noCharge", 0) ? 0 :
+		level.covertopsChargeTime[client->sess.sessionTeam-1];
 
 	if( client->ps.pm_type != PM_DEAD && level.timeCurrent - client->pers.lastBattleSenseBonusTime > 45000 ) {
 		/*switch( client->combatState )
@@ -1212,6 +1342,9 @@ void ClientThink_real( gentity_t *ent ) {
 
 	VectorCopy (pm.mins, ent->r.mins);
 	VectorCopy (pm.maxs, ent->r.maxs);
+	/* Keep live collision bounds consistent with the recovered historical
+	 * trace policy. Attacker-specific prone handling is applied by antilag. */
+	ent->r.maxs[2] = G_NITMOD_HitboxHeight( ent, NULL );
 
 	ent->waterlevel = pm.waterlevel;
 	ent->watertype = pm.watertype;
@@ -1389,8 +1522,15 @@ void SpectatorClientEndFrame( gentity_t *ent )
 		gclient_t *cl;
 		qboolean do_respawn = qfalse; // JPW NERVE
 
+		/* Original Nitmod bypasses the reinforcement wave once the ordinary
+		 * respawn delay expires when g_instantSpawn is enabled. */
+		if (g_gamestate.integer == GS_PLAYING &&
+			G_NITMOD_LegacyCvarInteger("g_instantSpawn", 0) &&
+			ent->client->respawnTime <= level.timeCurrent &&
+			ent->client->sess.sessionTeam != TEAM_SPECTATOR) {
+			do_respawn = qtrue;
 		// Players can respawn quickly in warmup
-		if(g_gamestate.integer != GS_PLAYING && ent->client->respawnTime <= level.timeCurrent &&
+		} else if(g_gamestate.integer != GS_PLAYING && ent->client->respawnTime <= level.timeCurrent &&
 		  ent->client->sess.sessionTeam != TEAM_SPECTATOR) {
 			do_respawn = qtrue;
 		} else if(ent->client->sess.sessionTeam == TEAM_AXIS) {
@@ -1638,6 +1778,33 @@ while a slow client may have multiple ClientEndFrame between ClientThink.
 */
 void ClientEndFrame( gentity_t *ent ) {
 	int			i;
+	int			pingSample;
+	unsigned int pingIndex;
+
+	/* Original Nitmod applies the configured rate once per elapsed minute. */
+	if((G_NITMOD_LegacyCvarInteger("g_XPDecay", 0) & 1) &&
+		level.time > 0 && level.time % 60000 == 0) {
+		G_NITMOD_XPDecay(ent, 60, qfalse);
+	}
+
+	/* Original Nitmod 0x502a0: maintain a 64-frame latency history for every
+	 * connected client.  g_truePing selects its arithmetic mean; disabled
+	 * mode deliberately leaves the engine supplied ps.ping untouched. */
+	pingSample = level.time - ent->client->pers.cmd.serverTime;
+	pingIndex = ent->client->nitmodPingSampleHead & 63u;
+	ent->client->nitmodPingSamples[pingIndex] = pingSample;
+	ent->client->nitmodPingSampleHead = (pingIndex + 1u) & 63u;
+	if (G_NITMOD_LegacyCvarInteger("g_truePing", 0)) {
+		int pingTotal = 0;
+
+		for (i = 0; i < 64; ++i) {
+			pingTotal += ent->client->nitmodPingSamples[i];
+		}
+		ent->client->ps.ping = pingTotal / 64;
+		if (ent->client->ps.ping < 0) {
+			ent->client->ps.ping = 0;
+		}
+	}
 
 
 	// used for informing of speclocked teams.

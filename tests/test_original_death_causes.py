@@ -21,7 +21,9 @@ source = (root / "src_2.60/cgame/cg_nitmod_events.c").read_text()
 table = re.search(r"static const int causes\[\] = \{(.*?)\};", source, re.S).group(1)
 actual = re.findall(r"\bMOD_\w+", table)
 native = set(re.findall(r"\bMOD_\w+", (root / "src_2.60/game/bg_public.h").read_text()))
-expected = ["MOD_FG42SCOPE" if name == "MOD_FG42_SCOPE" else
+aliases = {"MOD_FG42_SCOPE": "MOD_FG42SCOPE", "MOD_POISONGAS": "MOD_POISON_GAS",
+           "MOD_POISONGASMINE": "MOD_POISON_GAS_MINE", "MOD_POISON": "MOD_POISON"}
+expected = [aliases[name] if name in aliases else
             name if name in native else "MOD_UNKNOWN" for name in names]
 assert actual == expected, list(zip(names, actual, expected))
 assert names[5] == "MOD_KNIFE" and names[57] == "MOD_SWITCHTEAM"

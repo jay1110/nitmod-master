@@ -463,6 +463,9 @@ typedef struct {
 } displayContextDef_t;
 
 float UI_NitmodWideWidth(const displayContextDef_t *context);
+float UI_NitmodWideX(const displayContextDef_t *context, float x);
+float UI_NitmodWideXOffset(const displayContextDef_t *context);
+void UI_NitmodWideRect(const displayContextDef_t *context, rectDef_t *rect);
 float UI_NitmodXScale(const displayContextDef_t *context);
 
 const char *String_Alloc(const char *p);

@@ -24,11 +24,22 @@ These side effects are not part of the recovered numeric helper.
 `NITMOD_CalculateRank` implements the sum and ten comparisons with typed
 levels 0..5. Invalid levels or pointers are rejected without modifying the
 output; this is deliberate hardening. There is no old-rank retention.
-Native G_CalcRank/G_UpgradeSkill remain unchanged until coordinated skill,
-Lua, userinfo and ability integration. The helper is not gameplay-active.
+The numeric helper is now gameplay-active in G_CalcRank (session restoration
+and recalculation) and G_UpgradeSkill. G_CalcRank first recomputes all seven
+levels using the existing ET skill thresholds. G_UpgradeSkill preserves the
+existing userinfo update and native ability grants after assigning the rank.
+This integrates the original rank formula, not the full Nitmod six-level XP,
+Lua-hook or ability system. CMake and historical SCons both link the helper.
+The cgame userinfo reader accepts only decimal ranks 0..10; malformed values
+fall back to rank zero before indexing rank names, sounds or icons.
 
 Verification: C test covers all 6^7 = 279936 level combinations, every
 possible total 0..35 and invalid arguments. A separate Python test reads the
 hash-pinned ELF table and compares all 36 totals against the compiled helper.
 The ten-entry boundary is established by disassembly, not merely symbol size.
 This is numeric/data evidence, not original-module execution or replay parity.
+
+The linked qagame runtime test additionally exercises G_CalcRank for all
+5^7 = 78125 native XP profiles, checking both level recalculation and rank,
+including downward recalculation. It does not execute G_UpgradeSkill's engine
+side effects. Rank-input tests cover all valid ranks and malformed integers.

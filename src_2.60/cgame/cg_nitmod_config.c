@@ -17,6 +17,8 @@ static unsigned int nitmodServerCapabilities;
 static nitmodSimpleConfig_t nitmodSimpleConfig;
 static nitmodGameState_t nitmodGameState;
 static qboolean nitmodClassLimitsReceived;
+static int nitmodClassMaxHealth[NUM_PLAYER_CLASSES];
+static qboolean nitmodClassHealthReceived;
 vmCvar_t n_forceSinglePistol, cg_FTAutoSelect;
 vmCvar_t cg_markDistance, cg_projectileNudge, nitmod_sv_fps;
 vmCvar_t cg_countryflags, cg_optimizePrediction, cg_locations;
@@ -127,8 +129,8 @@ void NITMOD_TranslateSnapshotPersistant(snapshot_t *snapshot) {
     snapshot->ps.persistant[PERS_ATTACKER] = -1;
 }
 
-/* Original Nitmod weapon_t, distinct from ET's enum. The four new weapons
- * without typed gameplay implementations deliberately have no alias. */
+/* Original Nitmod weapon_t, distinct from ET's enum. Extensions have independent
+ * typed inventories; original-server bomb/poison firing stays authoritative. */
 static const int nitmodWireWeapons[52] = {
 	WP_NONE, WP_KNIFE, WP_LUGER, WP_MP40, WP_GRENADE_LAUNCHER,
 	WP_PANZERFAUST, WP_FLAMETHROWER, WP_COLT, WP_THOMPSON, WP_GRENADE_PINEAPPLE,
@@ -139,7 +141,7 @@ static const int nitmodWireWeapons[52] = {
 	WP_FG42, WP_DUMMY_MG42, WP_MORTAR, WP_AKIMBO_COLT, WP_AKIMBO_LUGER,
 	WP_GPG40, WP_M7, WP_SILENCED_COLT, WP_GARAND_SCOPE, WP_K43_SCOPE,
 	WP_FG42SCOPE, WP_MORTAR_SET, WP_MEDIC_ADRENALINE, WP_AKIMBO_SILENCEDCOLT,
-	WP_AKIMBO_SILENCEDLUGER, WP_MOBILE_MG42_SET, -1, -1, WP_TRIPMINE, -1, -1
+	WP_AKIMBO_SILENCEDLUGER, WP_MOBILE_MG42_SET, WP_POISON_SYRINGE, WP_BOMB, WP_TRIPMINE, WP_POISON_BOMB, WP_POISON_MINE
 };
 
 int NITMOD_WeaponFromWire(int weapon) {
@@ -167,6 +169,61 @@ int NITMOD_WeaponToWire(int weapon) {
 	if(weapon < 0) return 0;
 	for(i = 0; i < 52; ++i) if(nitmodWireWeapons[i] == weapon) return i;
 	return 0;
+}
+
+/* Original aWeapID (ELF VA 0x1004a0), indexed here by wire weapon.
+ * 26 means no statistics. In particular smoke bomb has no original row. */
+int NITMOD_WeaponStatForWeapon(int weapon) {
+	static const unsigned char originalStats[52] = {
+		26,0,1,3,9,7,8,2,4,9,5,14,26,13,1,11,13,26,26,26,26,12,
+		20,19,19,17,26,15,26,18,20,6,18,10,2,1,16,16,2,19,20,6,
+		10,26,2,1,18,21,22,23,24,25
+	};
+	int stat;
+	if(weapon < 0 || weapon >= WP_NUM_WEAPONS) return -1;
+	if(NITMOD_UsesOriginalProtocol()) {
+		stat = originalStats[NITMOD_WeaponToWire(weapon)];
+		return stat == 26 ? -1 : stat;
+	}
+	stat = BG_WeapStatForWeapon(weapon);
+	return stat == WS_MAX ? -1 : stat;
+}
+
+int NITMOD_WeaponStatCount(void) {
+	return NITMOD_UsesOriginalProtocol() ? 26 : WS_MAX;
+}
+
+const char *NITMOD_WeaponStatName(int stat) {
+	static const char *names[26] = {
+		"Knife", "Luger", "Colt", "MP-40", "Thompson", "Sten", "FG-42", "Panzer",
+		"F.Thrower", "Grenade", "Mortar", "Dynamite", "Airstrike", "Artillery", "Syringe",
+		"Satchel", "G.Launchr", "Landmine", "MG-42 Gun", "Garand", "K43 Rifle",
+		"Poison", "Bomb", "Tripmine", "Poison Gas", "Poison Gas Mine"
+	};
+	if(stat < 0 || stat >= NITMOD_WeaponStatCount()) return "UNKNOWN";
+	return NITMOD_UsesOriginalProtocol() ? names[stat] : aWeaponInfo[stat].pszName;
+}
+
+const char *NITMOD_WeaponStatCode(int stat) {
+	static const char *codes[26] = {
+		"KNIF", "LUGR", "COLT", "MP40", "TMPS", "STEN", "FG42", "PNZR",
+		"FLAM", "GRND", "MRTR", "DYNA", "ARST", "ARTY", "SRNG", "STCH",
+		"GRLN", "LNMN", "MG42", "GARN", "K-43", "POIS", "BOMB", "TPMN", "PGAS", "PGASMINE"
+	};
+	if(stat < 0 || stat >= NITMOD_WeaponStatCount()) return "UNKNOWN";
+	return NITMOD_UsesOriginalProtocol() ? codes[stat] : aWeaponInfo[stat].pszCode;
+}
+
+qboolean NITMOD_WeaponStatHasHeadshots(int stat) {
+	if(stat < 0 || stat >= NITMOD_WeaponStatCount()) return qfalse;
+	if(!NITMOD_UsesOriginalProtocol()) return aWeaponInfo[stat].fHasHeadShots;
+	/* Original aWeaponInfo first word, including knife/panzer/flamethrower. */
+	return stat <= 8 || (stat >= 18 && stat <= 20);
+}
+
+const char *NITMOD_ClientRankName(int team, int rank) {
+	if(rank < 0 || rank >= NUM_EXPERIENCE_LEVELS) return "UNKNOWN";
+	return (team == TEAM_AXIS ? rankNames_Axis : rankNames_Allies)[rank];
 }
 
 const char *NITMOD_PlayerConfigString(int clientNum) {
@@ -202,12 +259,12 @@ int NITMOD_ItemFromWire(int item) {
 		"weapon_akimbosilencedcolt", "weapon_mp40", "weapon_panzerfaust", "weapon_grenadelauncher",
 		"weapon_grenadepineapple", "weapon_grenadesmoke", "weapon_smoketrail", "weapon_medic_heal",
 		"weapon_dynamite", "weapon_flamethrower", "weapon_class_special", "weapon_arty",
-		"weapon_medic_syringe", NULL, "weapon_medic_adrenaline", "weapon_magicammo",
+		"weapon_medic_syringe", "weapon_poison_syringe", "weapon_medic_adrenaline", "weapon_magicammo",
 		"weapon_magicammo2", "weapon_magicammo2", "weapon_binoculars", "weapon_kar43",
 		"weapon_kar43_scope", "weapon_kar98Rifle", "weapon_gpg40", "weapon_gpg40_allied",
 		"weapon_M1CarbineRifle", "weapon_garandRifle", "weapon_garandRifleScope", "weapon_fg42",
-		"weapon_fg42scope", "weapon_mortar", "weapon_mortar_set", "weapon_landmine", NULL,
-		"weapon_satchel", "weapon_satchelDetonator", "weapon_smokebomb", NULL, NULL,
+		"weapon_fg42scope", "weapon_mortar", "weapon_mortar_set", "weapon_landmine", "weapon_poison_landmine",
+		"weapon_satchel", "weapon_satchelDetonator", "weapon_smokebomb", "weapon_poisonbomb", "weapon_bomb",
 		"weapon_tripmine", "weapon_mobile_mg42", "weapon_mobile_mg42_set", "weapon_silencer",
 		"weapon_silencedcolt", "weapon_medic_heal", "ammo_syringe", "ammo_smoke_grenade",
 		"ammo_smoke_grenade", "ammo_dynamite", "ammo_disguise", "ammo_airstrike",
@@ -354,12 +411,15 @@ int NITMOD_ParseLatchedClass(const char *info, int currentClass) {
 	return value;
 }
 
-/* Original player tokens sc=0x59, tv=0x5a, xp=0x70. Malformed fields
- * cannot retain roles or partially overwrite a previous XP vector. */
+/* Original player tokens sc=0x59, tv=0x5a, xp=0x70. Despite its name,
+ * xp carries unlock masks, not XP counters. Reject malformed vectors atomically. */
 qboolean NITMOD_DecodeClientSkills(const char *text, int *nativeLevels, int *displayLevels) {
-    int levels[SK_NUM_SKILLS], i;
-    int maximum = NITMOD_UsesOriginalProtocol() ? NITMOD_SKILL_LEVEL_COUNT - 1 : NUM_SKILL_LEVELS - 1;
-    if(!nativeLevels || !displayLevels || !NITMOD_ParseSkillDigits(text, maximum, levels)) return qfalse;
+    int levels[SK_NUM_SKILLS], i, maximum;
+    /* text can point into Info_ValueForKey's rotating scratch buffers.
+     * Consume it before protocol detection performs additional Info lookups. */
+    if(!nativeLevels || !displayLevels || !NITMOD_ParseSkillDigits(text, 9, levels)) return qfalse;
+    maximum = NITMOD_UsesOriginalProtocol() ? NITMOD_SKILL_LEVEL_COUNT - 1 : NUM_SKILL_LEVELS - 1;
+    for(i = 0; i < SK_NUM_SKILLS; ++i) if(levels[i] > maximum) return qfalse;
     for(i = 0; i < SK_NUM_SKILLS; ++i) {
         displayLevels[i] = levels[i];
         nativeLevels[i] = levels[i] < NUM_SKILL_LEVELS ? levels[i] : NUM_SKILL_LEVELS - 1;
@@ -377,7 +437,7 @@ void NITMOD_ParseClientExtras(const char *info, clientInfo_t *client) {
         client->nitmodShoutcaster = value != 0;
     if(NITMOD_ParseProtocolSigned(Info_ValueForKey(info, "tv"), &value))
         client->nitmodTV = value != 0;
-    memset(client->skillpoints, 0, sizeof(client->skillpoints));
+    memset(client->nitmodSkillMasks, 0, sizeof(client->nitmodSkillMasks));
     cursor = Info_ValueForKey(info, "xp");
     while(*cursor) {
         char number[16];
@@ -393,7 +453,40 @@ void NITMOD_ParseClientExtras(const char *info, clientInfo_t *client) {
         if(!NITMOD_ParseProtocolSigned(number, &values[count])) return;
         ++count;
     }
-    memcpy(client->skillpoints, values, sizeof(values));
+    memcpy(client->nitmodSkillMasks, values, sizeof(values));
+}
+
+static nitmodSkillThresholds_t clientSkillThresholds;
+static qboolean clientSkillThresholdsReady;
+static const char *NITMOD_ClientSkillValue(void *context, const char *key) {
+	return Info_ValueForKey((const char *)context, key);
+}
+qboolean NITMOD_UpdateClientSkillThresholds(const char *info) {
+	if(!info || !NITMOD_ParseSkillThresholds(NITMOD_ClientSkillValue, (void *)info, &clientSkillThresholds)) return qfalse;
+	clientSkillThresholdsReady = qtrue;
+	return qtrue;
+}
+int NITMOD_ClientSkillNextThreshold(int skill, int level) {
+	if(skill < 0 || skill >= SK_NUM_SKILLS || level < 0) return -1;
+	if(!NITMOD_UsesOriginalProtocol()) return level < NUM_SKILL_LEVELS - 1 ? skillLevels[level + 1] : -1;
+	if(level >= 5) return -1;
+	if(!clientSkillThresholdsReady) {
+		NITMOD_DefaultSkillThresholds(&clientSkillThresholds);
+		clientSkillThresholdsReady = qtrue;
+	}
+	return clientSkillThresholds.threshold[skill][level + 1];
+}
+
+unsigned int NITMOD_NewSkillUnlocks(int oldMask, int newMask) {
+    return (unsigned int)newMask & ~(unsigned int)oldMask & 0x3eu;
+}
+
+qboolean NITMOD_ClientSkillUnlocked(int client, int skill, int level) {
+    if(client < 0 || client >= MAX_CLIENTS || skill < 0 || skill >= SK_NUM_SKILLS ||
+       level < 0 || level >= NITMOD_SKILL_LEVEL_COUNT) return qfalse;
+    if(NITMOD_UsesOriginalProtocol())
+        return ((unsigned int)cgs.clientinfo[client].nitmodSkillMasks[skill] & (1u << level)) != 0;
+    return cgs.clientinfo[client].skill[skill] >= level;
 }
 
 const char *CG_NitmodSpectatorLabel(const clientInfo_t *client, int ping) {
@@ -427,7 +520,9 @@ qboolean NITMOD_ClassIsDisabled(int team, int playerClass) {
 }
 qboolean NITMOD_WeaponQuotaDisabled(int weapon, int playerClass, int teamCount, int weaponCount) {
 	int maximum;
-	if(!NITMOD_UsesOriginalProtocol() || !nitmodClassLimitsReceived) return qfalse;
+	/* The reconstructed server sends the same # settings with native weapon
+	 * IDs. Applying quotas must not depend on legacy ID translation. */
+	if(!NITMOD_UsesNitmodHud() || !nitmodClassLimitsReceived) return qfalse;
 	switch(weapon) {
 		case WP_MP40: case WP_THOMPSON: return qfalse;
 		case WP_STEN: return playerClass != PC_COVERTOPS && !(nitmodGameState.weapons & 512);
@@ -488,6 +583,8 @@ static int nitmodKDCursor;
 typedef struct {
 	char name[256];
 	char value[256];
+	char original[256];
+	qboolean hasOriginal;
 } nitmodForcedCvar_t;
 static nitmodForcedCvar_t nitmodForcedCvars[64];
 static int nitmodForcedCvarCount;
@@ -511,9 +608,27 @@ static void NITMOD_ForceCvarCommand(void) {
 		if(!Q_stricmp(name, nitmodForcedCvars[i].name)) break;
 	if(i == nitmodForcedCvarCount) {
 		Q_strncpyz(nitmodForcedCvars[i].name, name, sizeof(nitmodForcedCvars[i].name));
+		trap_Cvar_VariableStringBuffer(name, nitmodForcedCvars[i].original,
+			sizeof(nitmodForcedCvars[i].original));
+		nitmodForcedCvars[i].hasOriginal = qtrue;
 		++nitmodForcedCvarCount;
 	}
 	Q_strncpyz(nitmodForcedCvars[i].value, value, sizeof(nitmodForcedCvars[i].value));
+}
+
+void NITMOD_RestoreForcedCvars(void) {
+	int i;
+
+	/* A map restart tears down and recreates cgame in the same engine process.
+	 * Put every cvar back before the new VM accepts another force list.  Keep
+	 * the first observed value when a server changes one cvar repeatedly. */
+	for(i = 0; i < nitmodForcedCvarCount; ++i) {
+		const nitmodForcedCvar_t *entry = &nitmodForcedCvars[i];
+		if(!entry->hasOriginal || !entry->name[0]) continue;
+		trap_Cvar_Set(entry->name, entry->original);
+	}
+	nitmodForcedCvarCount = 0;
+	memset(nitmodForcedCvars, 0, sizeof(nitmodForcedCvars));
 }
 
 void NITMOD_ApplyForcedCvars(void) {
@@ -531,6 +646,12 @@ void NITMOD_ApplyForcedCvars(void) {
 }
 
 qboolean NITMOD_DisplayCommand(const char *command) {
+	if(NITMOD_UsesOriginalProtocol() && !strcmp(command, "sl")) {
+		char info[256];
+		trap_Args(info, sizeof(info));
+		NITMOD_UpdateClientSkillThresholds(info);
+		return qtrue;
+	}
 	int kind, count, start, i, kills[MAX_CLIENTS], deaths[MAX_CLIENTS];
 	if(!strcmp(command, "cvs")) {
 		char name[MAX_CVAR_VALUE_STRING], value[MAX_CVAR_VALUE_STRING];
@@ -570,9 +691,10 @@ qboolean NITMOD_DisplayCommand(const char *command) {
 	}
 	if(!strcmp(command, "pop")) {
 		if(trap_Argc() == 2) {
-			CG_NitmodGlobalAwardClear();
-			CG_NitmodNotificationStart(CG_LocalizeServerCommand(CG_Argv(1)), cg.time);
-			CG_Printf("%s^7\n", CG_NitmodNotificationText());
+			char text[MAX_STRING_CHARS];
+			Q_strncpyz(text, CG_LocalizeServerCommand(CG_Argv(1)), sizeof(text));
+			if(!CG_NitmodGlobalAwardActive()) CG_NitmodNotificationStart(text, cg.time);
+			CG_Printf("%s^7\n", text);
 		}
 		return qtrue;
 	}
@@ -617,12 +739,16 @@ void NITMOD_DrawBanner(void) {
 	const char *cursor = nitmodBanner;
 	char lastColor = '7';
 	float *color;
+	nitmodHudAnchor_t previous;
 	int y = 0;
 	int rowHeight = (int)(CG_Text_Height_Ext("A", .2f, 1, &cgs.media.limboFont1) * 1.5f);
 	if(rowHeight < 1) rowHeight = 1;
 	if(!cg_drawBanners.integer || !*cursor) return;
 	color = CG_FadeColor(nitmodBannerTime, 10000);
 	if(!color) { nitmodBanner[0] = 0; return; }
+	/* Original Nitmod lays top-centre banners out in the 640x480 HUD area.
+	 * Keep that area centred on wide displays instead of stretching its X axis. */
+	previous = CG_NitmodHudAnchor(NITMOD_HUD_CENTER);
 	while(*cursor && y < SCREEN_HEIGHT) {
 		int n = 2;
 		line[0] = '^'; line[1] = lastColor;
@@ -636,6 +762,7 @@ void NITMOD_DrawBanner(void) {
 		CG_Text_Paint_Ext((int)((SCREEN_WIDTH - CG_Text_Width_Ext(line, 0.2f, 0, &cgs.media.limboFont1)) * 0.5f),
 			y, 0.2f, 0.2f, color, line, 0, 0, ITEM_TEXTSTYLE_SHADOWED, &cgs.media.limboFont1);
 	}
+	CG_NitmodHudAnchor(previous);
 }
 static sfxHandle_t nitmodPrivateMessageSound;
 
@@ -666,6 +793,9 @@ qboolean NITMOD_UsesOriginalProtocol(void) {
 	return !Q_stricmp(Info_ValueForKey(info, "gamename"), "nitmod") &&
 		Q_stricmp(Info_ValueForKey(info, "nitmod_csLayout"), "et260");
 }
+qboolean NITMOD_UsesNitmodHud(void) {
+	return !Q_stricmp(Info_ValueForKey(CG_ConfigString(CS_SERVERINFO), "gamename"), "nitmod");
+}
 int NITMOD_CoreConfigToWire(int index) {
 	switch(index) {
 	case CS_MUSIC_QUEUE: return 25;
@@ -678,6 +808,7 @@ int NITMOD_CoreConfigToWire(int index) {
 	case CS_AXIS_MAPS_XP: return 31;
 	case CS_ALLIED_MAPS_XP: return 32;
 	case CS_INTERMISSION_START_TIME: return 33;
+	case CS_ENDGAME_STATS: return 34;
 	default: return index;
 	}
 }
@@ -692,8 +823,9 @@ int NITMOD_CoreConfigFromWire(int index) {
 	case 31: return CS_AXIS_MAPS_XP;
 	case 32: return CS_ALLIED_MAPS_XP;
 	case 33: return CS_INTERMISSION_START_TIME;
+	case 34: return CS_ENDGAME_STATS;
 	/* These original slots must not trigger unrelated ET callbacks. */
-	case 34: case 35: case 36: case 37: case 38: case 39: return -1;
+	case 35: case 36: case 37: case 38: case 39: return -1;
 	default: return index;
 	}
 }
@@ -740,10 +872,13 @@ static qboolean NITMOD_HasArgumentCount( const char *command, int expected ) {
 }
 
 void NITMOD_ClearConfigStrings( void ) {
+	clientSkillThresholdsReady = qfalse;
 	CG_NitmodObituaryReset();
 	CG_NitmodHudReset();
 	CG_NitmodGlobalStatsReset();
 	nitmodClassLimitsReceived = qfalse;
+	nitmodClassHealthReceived = qfalse;
+	memset( nitmodClassMaxHealth, 0, sizeof( nitmodClassMaxHealth ) );
 	nitmodForcedCvarCount = 0;
 	memset(nitmodForcedCvars, 0, sizeof(nitmodForcedCvars));
 	nitmodHitSoundsRegistered = qfalse;
@@ -865,6 +1000,30 @@ void NITMOD_GameStateCommand( void ) {
 		return;
 	}
 	nitmodClassLimitsReceived = qtrue;
+}
+
+void NITMOD_ClassHealthCommand( void ) {
+	int values[NUM_PLAYER_CLASSES] = { 0 };
+	int playerClass;
+
+	if( !NITMOD_HasArgumentCount( "nch", NUM_PLAYER_CLASSES + 1 ) ) {
+		return;
+	}
+	for( playerClass = PC_SOLDIER; playerClass <= PC_COVERTOPS; ++playerClass ) {
+		if( !NITMOD_ParseProtocolInteger( CG_Argv( playerClass + 1 ), &values[playerClass] ) ||
+			values[playerClass] < 0 || values[playerClass] > 32767 ) {
+			return;
+		}
+	}
+	memcpy( nitmodClassMaxHealth, values, sizeof( nitmodClassMaxHealth ) );
+	nitmodClassHealthReceived = qtrue;
+}
+
+int NITMOD_ClassMaxHealth( int playerClass ) {
+	if( !nitmodClassHealthReceived || playerClass < PC_SOLDIER || playerClass > PC_COVERTOPS ) {
+		return 0;
+	}
+	return nitmodClassMaxHealth[playerClass];
 }
 
 void NITMOD_MapEndStatsCommand( void ) {

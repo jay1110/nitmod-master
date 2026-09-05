@@ -14,12 +14,15 @@ extern void UI_RunMenuScript(char **args);
 extern void dllEntry(int (QDECL *)(int, ...));
 #include "check_ui_widescreen.h"
 #include "check_ui_map_preview.h"
+#include "check_ui_vote_flags.h"
+#include "check_ui_campaign_vote.h"
 static int catalogListMode;
 static char *campaignInput;
 static int campaignBudget, campaignReads, campaignOpens, campaignCloses;
 static const char *campaignMap;
 static unsigned char campaignSaveBytes[13 + MAX_CAMPAIGNS * (8 + 4 * MAX_MAPS_PER_CAMPAIGN)];
 static int campaignSaveSize, campaignSavePosition, campaignSaveClosed;
+static int campaignSaveWriting, campaignSaveOpens, campaignSaveOpenFailure;
 static int QDECL CampaignSaveSyscall(int command, ...) {
     va_list args;
     int result = 0;
@@ -28,9 +31,19 @@ static int QDECL CampaignSaveSyscall(int command, ...) {
         fileHandle_t *file;
         if(strcmp(va_arg(args, const char *), "profiles/test/campaign.dat")) exit(2);
         file = va_arg(args, fileHandle_t *);
-        if(va_arg(args, int) != FS_READ) exit(2);
+        if(va_arg(args, int) != (campaignSaveWriting ? FS_WRITE : FS_READ)) exit(2);
+        ++campaignSaveOpens;
+        if(campaignSaveOpenFailure) { *file = 0; va_end(args); return -1; }
         *file = 72; campaignSavePosition = 0; campaignSaveClosed = 0;
+        if(campaignSaveWriting) campaignSaveSize = 0;
         result = campaignSaveSize;
+    } else if(command == UI_FS_WRITE) {
+        const void *buffer = va_arg(args, const void *);
+        int length = va_arg(args, int);
+        if(!campaignSaveWriting || va_arg(args, int) != 72 || length < 0 ||
+           length > sizeof(campaignSaveBytes) - campaignSaveSize) exit(2);
+        memcpy(campaignSaveBytes + campaignSaveSize, buffer, length);
+        campaignSaveSize += length;
     } else if(command == UI_FS_READ) {
         void *buffer = va_arg(args, void *);
         int length = va_arg(args, int);
@@ -98,6 +111,51 @@ static int CheckCampaignSave(void) {
     if(!BG_LoadCampaignSave("profiles/test/campaign.dat", &output, "test") ||
        output.campaigns[MAX_CAMPAIGNS - 1].shortnameHash != MAX_CAMPAIGNS - 1) ++errors;
     if(errors) fprintf(stderr, "%d campaign save failures\n", errors);
+    return errors;
+}
+static int CheckCampaignWrite(void) {
+    static cpsFile_t input, output, before;
+    static unsigned char expected[sizeof(campaignSaveBytes)];
+    const int counts[] = {0, 1, MAX_CAMPAIGNS};
+    int count, progress, i, j, size, errors = 0;
+    dllEntry(CampaignSaveSyscall);
+    for(count = 0; count < 3; ++count) for(progress = 0; progress <= MAX_MAPS_PER_CAMPAIGN; ++progress) {
+        memset(&input, 0, sizeof(input)); memset(campaignSaveBytes, 0, sizeof(campaignSaveBytes));
+        input.header.numCampaigns = counts[count];
+        CampaignSaveInt(0, CPS_IDENT); campaignSaveBytes[4] = CPS_VERSION;
+        CampaignSaveInt(5, counts[count]);
+        CampaignSaveInt(9, 't'*119u + 'e'*120u + 's'*121u + 't'*122u);
+        size = 13;
+        for(i = 0; i < counts[count]; ++i) {
+            input.campaigns[i].shortnameHash = -1 - i;
+            input.campaigns[i].progress = progress;
+            CampaignSaveInt(size, (unsigned int)(-1 - i)); CampaignSaveInt(size + 4, progress); size += 8;
+            for(j = 0; j < progress; ++j) {
+                input.campaigns[i].maps[j].mapnameHash = 0x12345678 + j;
+                CampaignSaveInt(size, 0x12345678u + j); size += 4;
+            }
+        }
+        memcpy(expected, campaignSaveBytes, size);
+        campaignSaveWriting = 1;
+        if(!BG_StoreCampaignSave("profiles/test/campaign.dat", &input, "TeSt") ||
+           campaignSaveSize != size || campaignSaveClosed != 1 || memcmp(expected, campaignSaveBytes, size)) ++errors;
+        campaignSaveWriting = 0;
+        if(!BG_LoadCampaignSave("profiles/test/campaign.dat", &output, "test") || memcmp(&input, &output, sizeof(input))) ++errors;
+    }
+    campaignSaveWriting = 1;
+    for(i = -2; i < MAX_CAMPAIGNS; ++i) for(j = 0; j < 2; ++j) {
+        int opens = campaignSaveOpens;
+        memset(&input, 0, sizeof(input)); input.header.numCampaigns = MAX_CAMPAIGNS;
+        if(i < 0) input.header.numCampaigns = j ? MAX_CAMPAIGNS + 1 : -1;
+        else input.campaigns[i].progress = j ? MAX_MAPS_PER_CAMPAIGN + 1 : -1;
+        before = input;
+        if(BG_StoreCampaignSave("profiles/test/campaign.dat", &input, "test") ||
+           campaignSaveOpens != opens || memcmp(&before, &input, sizeof(input))) ++errors;
+    }
+    memset(&input, 0, sizeof(input)); before = input; campaignSaveOpenFailure = 1;
+    if(BG_StoreCampaignSave("profiles/test/campaign.dat", &input, "test") || memcmp(&before, &input, sizeof(input))) ++errors;
+    campaignSaveOpenFailure = 0; campaignSaveWriting = 0;
+    if(errors) fprintf(stderr, "%d campaign write failures\n", errors);
     return errors;
 }
 static int QDECL CampaignParserSyscall(int command, ...) {
@@ -245,6 +303,121 @@ static int CheckCampaignCatalog(void) {
     return errors;
 }
 static float settingsValue, settingsWritten[2];
+static float profilePitch, profileHand;
+static int profileWrites, profileExecs;
+static char profileNames[4][64], profileValues[4][64], profileCommand[64];
+static int QDECL ProfileSettingsSyscall(int command, ...) {
+    va_list args; int result = 0; va_start(args, command);
+    if(command == UI_CVAR_VARIABLEVALUE) {
+        const char *name = va_arg(args, const char *);
+        float value = !strcmp(name, "ui_handedness") ? profileHand : profilePitch;
+        if(strcmp(name, "ui_handedness") && strcmp(name, "ui_mousePitch") && strcmp(name, "ui_profile_mousePitch")) exit(2);
+        memcpy(&result, &value, sizeof(result));
+    } else if(command == UI_CVAR_SET || command == UI_CVAR_SETVALUE) {
+        int slot = profileWrites++;
+        if(slot >= 4) exit(2);
+        Q_strncpyz(profileNames[slot], va_arg(args, const char *), 64);
+        if(command == UI_CVAR_SET) Q_strncpyz(profileValues[slot], va_arg(args, const char *), 64);
+        else {
+            int bits = va_arg(args, int); float value;
+            memcpy(&value, &bits, sizeof(value));
+            Com_sprintf(profileValues[slot], 64, "%.3f", value);
+        }
+    } else if(command == UI_CMD_EXECUTETEXT) {
+        if(va_arg(args, int) != EXEC_APPEND) exit(2);
+        Q_strncpyz(profileCommand, va_arg(args, const char *), sizeof(profileCommand)); ++profileExecs;
+    } else exit(2);
+    va_end(args); return result;
+}
+static int CheckProfileSettings(void) {
+    const char *actions[] = {"profileCvarsGet", "profileCvarsApply", "profileCvarsReset", "defaultControls"};
+    int action, hand, pitch, errors = 0;
+    dllEntry(ProfileSettingsSyscall);
+    for(action = 0; action < 4; ++action) for(hand = -2; hand <= 2; ++hand)
+    for(pitch = -2; pitch <= 2; ++pitch) {
+        char script[64], *args = script, value[32];
+        profileHand = hand * .75f; profilePitch = pitch * .75f;
+        profileWrites = profileExecs = 0; strcpy(script, actions[action]); UI_RunMenuScript(&args);
+        if(profileWrites != (action == 0 ? 1 : action == 1 ? 4 : action == 2 ? 2 : 0) ||
+           profileExecs != (action == 1 || action == 3)) ++errors;
+        if(action == 0 || action == 1) {
+            Com_sprintf(value, sizeof(value), "%d", (int)profilePitch);
+            if(strcmp(profileNames[0], action ? "ui_mousePitch" : "ui_profile_mousePitch") || strcmp(profileValues[0], value)) ++errors;
+        }
+        if(action == 1 && (strcmp(profileNames[1], "m_pitch") ||
+           strcmp(profileValues[1], (int)profilePitch ? "-0.022" : "0.022"))) ++errors;
+        if(action == 1 || action == 3)
+            if(strcmp(profileCommand, (int)profileHand ? "exec default_left.cfg\n" : "exec default.cfg\n")) ++errors;
+        if(action == 1 || action == 2) {
+            int start = action == 1 ? 2 : 0;
+            if(strcmp(profileNames[start], "ui_handedness") || profileValues[start][0] ||
+               strcmp(profileNames[start+1], "ui_profile_mousePitch") || profileValues[start+1][0]) ++errors;
+        }
+    }
+    {
+        unsigned int bits = 0x7fc00000;
+        profileHand = 0; memcpy(&profilePitch, &bits, sizeof(bits));
+        profileWrites = profileExecs = 0; UI_NitmodProfileSettings("profileCvarsApply");
+        if(profileWrites || profileExecs) ++errors;
+    }
+    Controls_SetDefaults(qfalse);
+    return errors;
+}
+static const char *systemKeys[] = {
+    "r_mode", "r_gamma", "rate", "cl_maxpackets", "cl_packetdup", "sensitivity",
+    "r_colorbits", "r_fullscreen", "r_lodbias", "r_subdivisions", "r_picmip",
+    "r_texturebits", "r_depthbits", "r_ext_compressed_textures", "r_finish",
+    "r_dynamiclight", "r_allowextensions", "m_filter", "s_khz", "r_detailtextures", "r_texturemode"
+};
+static int systemAction, systemReads, systemWrites, systemBad, systemZeroRate;
+static int QDECL SystemSettingsSyscall(int command, ...) {
+    va_list args; const char *name; int result = 0, i;
+    va_start(args, command); name = va_arg(args, const char *);
+    if(command == UI_CVAR_VARIABLEVALUE || command == UI_CVAR_VARIABLESTRINGBUFFER) {
+        char expected[64]; float value;
+        i = systemReads++;
+        if(i >= 21) exit(2);
+        Com_sprintf(expected, sizeof(expected), "%s%s", systemAction == 1 ? "ui_" : "", systemKeys[i]);
+        if(strcmp(name, expected)) exit(2);
+        if(command == UI_CVAR_VARIABLESTRINGBUFFER) {
+            char *out = va_arg(args, char *); int size = va_arg(args, int);
+            if(i != 20) exit(2);
+            Q_strncpyz(out, "GL_LINEAR_MIPMAP_LINEAR", size);
+        } else {
+            value = systemZeroRate && i == 2 ? 0 : i + .75f;
+            if(i == systemBad) { unsigned int bits = 0x7fc00000; memcpy(&value, &bits, sizeof(value)); }
+            memcpy(&result, &value, sizeof(result));
+        }
+    } else if(command == UI_CVAR_SET) {
+        char expected[64], text[64]; const char *actual = va_arg(args, const char *);
+        int reset = systemAction == 2 || systemWrites >= 21;
+        i = systemWrites++ % 21;
+        if(systemReads != (systemAction == 2 ? 0 : 21)) exit(2);
+        Com_sprintf(expected, sizeof(expected), "%s%s", reset || systemAction == 0 ? "ui_" : "", systemKeys[i]);
+        if(reset) text[0] = 0;
+        else if(i == 20) strcpy(text, "GL_LINEAR_MIPMAP_LINEAR");
+        else if(systemAction == 1 && systemZeroRate && i >= 2 && i <= 4) strcpy(text, i == 2 ? "5000" : i == 3 ? "30" : "1");
+        else if(i == 1 || i == 5) Com_sprintf(text, sizeof(text), "%f", i + .75);
+        else Com_sprintf(text, sizeof(text), "%d", systemZeroRate && i == 2 ? 0 : i);
+        if(strcmp(name, expected) || strcmp(actual, text)) exit(2);
+    } else exit(2);
+    va_end(args); return result;
+}
+static int CheckSystemSettings(void) {
+    const char *actions[] = {"systemCvarsGet", "systemCvarsApply", "systemCvarsReset"};
+    int errors = 0;
+    dllEntry(SystemSettingsSyscall);
+    for(systemAction = 0; systemAction < 3; ++systemAction)
+    for(systemZeroRate = 0; systemZeroRate < 2; ++systemZeroRate)
+    for(systemBad = -1; systemBad < 20; ++systemBad) {
+        char script[64], *args = script;
+        systemReads = systemWrites = 0; strcpy(script, actions[systemAction]);
+        UI_RunMenuScript(&args);
+        if(systemWrites != (systemAction == 2 ? 21 : systemBad >= 0 ? 0 : systemAction == 1 ? 42 : 21)) ++errors;
+    }
+    if(UI_NitmodSystemSettings(NULL) || UI_NitmodSystemSettings("unknown")) ++errors;
+    return errors;
+}
 static int settingsWrites, settingsCommands;
 static char settingsNames[2][64], settingsText[2][1024], settingsCommand[128];
 static int QDECL SettingsSyscall(int command, ...) {
@@ -810,6 +983,69 @@ static int CheckLaunchActions(void) {
 }
 static int value, writes, drawn;
 static int QDECL NoSelectionSyscall(int command, ...) { (void)command; exit(2); return 0; }
+static const char *joinAddress;
+static int joinCommands, joinWrites;
+static int QDECL JoinSyscall(int command, ...) {
+    va_list args; va_start(args, command);
+    if(command == UI_CVAR_VARIABLESTRINGBUFFER) {
+        const char *name = va_arg(args, const char *);
+        char *out = va_arg(args, char *); int size = va_arg(args, int);
+        if(strcmp(name, "ui_connectToIPAddress")) exit(2);
+        Q_strncpyz(out, joinAddress, size);
+    } else if(command == UI_CVAR_SET) {
+        const char *name = va_arg(args, const char *), *value = va_arg(args, const char *);
+        if(strcmp(name, "ui_singlePlayerActive") || strcmp(value, "0")) exit(2);
+        ++joinWrites;
+    } else if(command == UI_CMD_EXECUTETEXT) {
+        int mode = va_arg(args, int); const char *text = va_arg(args, const char *);
+        if(mode != EXEC_APPEND || strcmp(text, "connect \"example.org:27960\"\n")) exit(2);
+        ++joinCommands;
+    } else exit(2);
+    va_end(args); return 0;
+}
+static int CheckJoinActions(void) {
+    const char *bad[] = {"", "host;quit", "host\nquit", "host name"};
+    int n, errors = 0;
+    dllEntry(JoinSyscall);
+    for(n = 0; n < 4; ++n) {
+        char script[] = "JoinDirectServer", *args = script;
+        joinAddress = bad[n]; joinCommands = joinWrites = 0;
+        UI_RunMenuScript(&args);
+        if(joinCommands || joinWrites) ++errors;
+    }
+    for(n = 0; n < 4; ++n) {
+        char script[] = "FoundPlayerJoinServer", *args = script;
+        uiInfo.numFoundPlayerServers = n == 3 ? 0x7fffffff : 2;
+        uiInfo.currentFoundPlayerServer = n == 2 ? -1 : 0;
+        strcpy(uiInfo.foundPlayerServerAddresses[0], n == 1 ? "host;quit" : "example.org:27960");
+        joinCommands = joinWrites = 0; UI_RunMenuScript(&args);
+        if(joinCommands != (n == 0) || joinWrites != (n == 0)) ++errors;
+    }
+    {
+        const int counts[] = {-1, 0, 1, 2, MAX_FOUNDPLAYER_SERVERS, 0x7fffffff};
+        int count, row;
+        char address[MAX_ADDRESSLENGTH];
+        for(row = 0; row < MAX_FOUNDPLAYER_SERVERS; ++row)
+            strcpy(uiInfo.foundPlayerServerAddresses[row], "example.org:27960");
+        for(count = 0; count < 6; ++count) for(row = -1; row <= MAX_FOUNDPLAYER_SERVERS; ++row) {
+            int valid = counts[count] >= 2 && counts[count] <= MAX_FOUNDPLAYER_SERVERS && row >= 0 && row < counts[count] - 1;
+            uiInfo.numFoundPlayerServers = counts[count]; uiInfo.currentFoundPlayerServer = row;
+            strcpy(address, "unchanged");
+            if(UI_NitmodFoundPlayerAddress(address, sizeof(address)) != valid ||
+               strcmp(address, valid ? "example.org:27960" : "unchanged")) ++errors;
+            if(!valid) {
+                char script[] = "FoundPlayerServerStatus", *args = script;
+                strcpy(uiInfo.serverStatusAddress, "unchanged");
+                UI_RunMenuScript(&args); /* No syscall is permitted for invalid selections. */
+                if(strcmp(uiInfo.serverStatusAddress, "unchanged")) ++errors;
+            }
+        }
+        memset(uiInfo.foundPlayerServerAddresses, 0, sizeof(uiInfo.foundPlayerServerAddresses));
+    }
+    uiInfo.numFoundPlayerServers = 0; uiInfo.currentFoundPlayerServer = 0;
+    uiInfo.foundPlayerServerAddresses[0][0] = 0;
+    return errors;
+}
 static int campaignWrites, campaignStops, campaignCompleted;
 static int QDECL CampaignSyscall(int command, ...) {
     va_list args;
@@ -1231,6 +1467,26 @@ static int CheckBrowser(void) {
     uiInfo.serverStatus.sortKey=SORT_CLIENTS; uiInfo.serverStatus.sortDir=0;
     UI_BuildServerDisplayList(qtrue);
     if(uiInfo.serverStatus.numDisplayServers!=8) ++errors;
+    {
+        char population[32];
+        int savedSource = ui_netSource.integer;
+        for(i=0;i<8;++i) {
+            char expected[32];
+            Com_sprintf(expected,sizeof(expected),"^7%d^9(+%d)/32",8-i,2+i);
+            UI_ServerPopulationText(i,"\\clients\\10\\sv_maxclients\\32",population,sizeof(population));
+            if(strcmp(population,expected)) ++errors;
+        }
+        UI_ServerPopulationText(0,"\\clients\\2\\sv_maxclients\\32",population,sizeof(population));
+        if(strcmp(population,"^72^9/32")) ++errors;
+        ui_netSource.integer=AS_LOCAL;
+        UI_ServerPopulationText(0,"\\clients\\10\\sv_maxclients\\32",population,sizeof(population));
+        if(strcmp(population,"^710^9/32")) ++errors;
+        UI_ServerPopulationText(-1,"\\clients\\10\\sv_maxclients\\32\\version\\ET Legacy\\humans\\3",population,sizeof(population));
+        if(strcmp(population,"^73^9(+7)/32")) ++errors;
+        UI_ServerPopulationText(MAX_GLOBAL_SERVERS,"\\clients\\-1\\sv_maxclients\\999",population,sizeof(population));
+        if(strcmp(population,"^70^9/64")) ++errors;
+        ui_netSource.integer=savedSource;
+    }
     for(i=0;i<8;++i) if(uiInfo.serverStatus.displayServers[i]!=7-i) ++errors;
     uiInfo.serverStatus.sortDir=1; UI_ServersSort(SORT_CLIENTS,qtrue);
     for(i=0;i<8;++i) if(uiInfo.serverStatus.displayServers[i]!=i) ++errors;
@@ -1424,6 +1680,7 @@ static int CheckMultiOptions(void) {
 #include "check_ui_search.h"
 #include "check_ui_descriptions.h"
 #include "check_ui_bindings.h"
+#include "check_ui_campaign_visibility.h"
 extern int Menu_ItemsMatchingGroup(menuDef_t *, const char *);
 extern itemDef_t *Menu_GetMatchingItemByNumber(menuDef_t *, int, const char *);
 static int CheckMenuGroups(void) {
@@ -1445,6 +1702,12 @@ static int CheckMenuGroups(void) {
     if(Menu_ItemsMatchingGroup(&menu, "*") || Menu_GetMatchingItemByNumber(&menu, 0, "*")) ++errors;
     return errors;
 }
+#include "check_ui_download_bounds.h"
+#include "check_ui_server_columns.h"
+#include "check_ui_gametype_catalog.h"
+#include "check_ui_host_start.h"
+#include "check_ui_selection_bounds.h"
+#include "check_ui_tooltip_layout.h"
 int main(void) {
     displayContextDef_t dc;
     itemDef_t item;
@@ -1459,8 +1722,14 @@ int main(void) {
     dc.cursorx = dc.cursory = 5;
     Init_Display(&dc); String_Init();
     errors += CheckMenuGroups();
+    errors += CheckDownloadBounds();
     errors += CheckWideUI();
     errors += CheckBindings(&dc);
+    errors += CheckServerColumns();
+    errors += CheckGameTypeCatalog();
+    errors += CheckHostStart();
+    errors += CheckSelectionBounds();
+    errors += CheckTooltipLayout(&dc);
     dllEntry(ParserSyscall);
     for(mask = 1; mask <= 16; mask <<= 1) {
         parsePosition = 0; parseMask = mask;
@@ -1520,10 +1789,29 @@ int main(void) {
     }
     errors += CheckMultiOptions();
     errors += CheckSliders(&dc);
+    errors += CheckCampaignMenuVote(&dc);
     errors += CheckPanelEdit(&dc);
     errors += CheckTextField(&dc);
     errors += CheckBrowser();
     errors += CheckLaunchActions();
+    errors += CheckSystemSettings();
+    errors += CheckProfileSettings();
+    errors += CheckJoinActions();
+    {
+        const char *valid[] = {"ET://example.org:27960", "et://127.0.0.1", "[::1]:27960", "localhost"};
+        const char *invalid[] = {"", "ET://", "host;quit", "host\nquit", "host\"", "host/path", "host name", "host\\test"};
+        char address[128]; int n;
+        for(n = 0; n < 4; ++n) {
+            strcpy(address, valid[n]);
+            if(!UI_NitmodRedirectAddress(address, address, sizeof(address)) ||
+               strcmp(address, n < 2 ? valid[n] + 5 : valid[n])) ++errors;
+        }
+        for(n = 0; n < 8; ++n) {
+            strcpy(address, "unchanged");
+            if(UI_NitmodRedirectAddress(invalid[n], address, sizeof(address)) || strcmp(address, "unchanged")) ++errors;
+        }
+        if(UI_NitmodRedirectAddress("abcdef", address, 6) || UI_NitmodRedirectAddress(NULL, address, 128)) ++errors;
+    }
     errors += CheckPreviewLifecycle();
     errors += CheckMapPreview();
     errors += CheckListText();
@@ -1532,10 +1820,13 @@ int main(void) {
     errors += CheckCampaignRows();
     errors += CheckFileActions();
     errors += CheckPlayerActions();
+    errors += CheckVoteUIFlags();
     errors += CheckRoster();
     errors += CheckCatalog();
     errors += CheckCampaignCatalog();
     errors += CheckCampaignSave();
+    errors += CheckCampaignWrite();
+    errors += CheckCampaignVisibility();
     errors += CheckSettings();
     errors += CheckServerStatus();
     errors += CheckPlayerSearch();

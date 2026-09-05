@@ -5,19 +5,50 @@
 
 vmCvar_t cg_drawHitbox;
 vmCvar_t demo_wallHack;
-static qhandle_t demoRedShader, demoBlueShader;
+static qhandle_t transGunWhiteShader, demoRedShader, transGunGreenShader,
+    demoBlueShader, constructionShader;
 
 void CG_NitmodRegisterDebugMedia(void) {
-    demoRedShader = demoBlueShader = 0;
+    transGunWhiteShader = demoRedShader = transGunGreenShader =
+        demoBlueShader = constructionShader = 0;
     if(!NITMOD_UsesOriginalProtocol()) return;
+    transGunWhiteShader = trap_R_RegisterShader("textures/sfx/transgunWhite");
     demoRedShader = trap_R_RegisterShader("textures/sfx/transgunRed");
+    transGunGreenShader = trap_R_RegisterShader("textures/sfx/transgunGreen");
     demoBlueShader = trap_R_RegisterShader("textures/sfx/transgunBlue");
+    constructionShader = trap_R_RegisterShader("textures/sfx/construction");
+}
+
+/* Original CG_AddPlayerWeapon/CG_AddViewWeapon draw-gun inspection modes.
+ * Mode 1 is normal media; 2..6 replace every first-person weapon part. */
+qhandle_t CG_NitmodViewWeaponShader(int drawGun) {
+    qhandle_t shader;
+    if(!NITMOD_UsesOriginalProtocol()) return 0;
+    switch(drawGun) {
+    case 2: shader = transGunWhiteShader; break;
+    case 3: shader = demoRedShader; break;
+    case 4: shader = transGunGreenShader; break;
+    case 5: shader = demoBlueShader; break;
+    case 6: shader = constructionShader; break;
+    default: return 0;
+    }
+    return shader > 0 ? shader : 0;
 }
 
 qhandle_t CG_NitmodDemoPlayerShader(team_t team) {
     qhandle_t shader;
     /* Demo-only even when a modified engine fails to enforce CVAR_CHEAT. */
     if(!cg.demoPlayback || !demo_wallHack.integer || !NITMOD_UsesOriginalProtocol()) return 0;
+    shader = team == TEAM_AXIS ? demoRedShader : demoBlueShader;
+    return shader > 0 ? shader : 0;
+}
+
+/* Shared original transgun assets; this grants no entity visibility.
+ * Only the already-authorized mine renderer consumes this accessor. */
+qhandle_t CG_NitmodMineTeamShader(team_t team) {
+    qhandle_t shader;
+    if(!NITMOD_UsesOriginalProtocol() || !(NITMOD_SimpleConfig()->misc & 16)) return 0;
+    if(team != TEAM_AXIS && team != TEAM_ALLIES) return 0;
     shader = team == TEAM_AXIS ? demoRedShader : demoBlueShader;
     return shader > 0 ? shader : 0;
 }

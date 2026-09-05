@@ -12,6 +12,10 @@ qboolean CG_NitmodPrepareMine(const centity_t *cent, refEntity_t *ent, qboolean 
 qboolean CG_NitmodScanMine(const centity_t *cent);
 qboolean CG_NitmodDrawMineHint(void);
 qboolean CG_NitmodDrawCrosshairPlayer(int client, qboolean disguised, int health, int maxHealth, const vec4_t color);
+int CG_NitmodCrosshairMaxHealth(int client);
+qboolean CG_NitmodCanIdentifyDisguise(int client);
+/* 0 hidden, 1 model only, 2 model and beam. */
+int CG_NitmodTripminePresentation(const entityState_t *state, byte rgba[4]);
 void CG_NitmodDrawCrosshairLabel(const char *text, const vec4_t color);
 void CG_NitmodDrawCrosshairHealth(int health, int maxHealth, const vec4_t color);
 const char *CG_NitmodCrosshairEntityName(int entity, qboolean construction);

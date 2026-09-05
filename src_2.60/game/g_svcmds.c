@@ -4,6 +4,9 @@
 // this file holds commands that can be executed by the server console, but not remote clients
 
 #include "g_local.h"
+#include "g_nitmod_omnibot.h"
+#include "g_nitmod_etbot_lifecycle.h"
+#include <limits.h>
 
 
 /*
@@ -65,6 +68,36 @@ static ipFilterList_t		ipMaxLivesFilters;
 #ifdef USEXPSTORAGE
 static ipXPStorageList_t	ipXPStorage;
 #endif
+
+/* Original Nitmod XPSave contract recovered from nitrox_XPSave_LoadXP:
+ * bit 1 enables persistence and bit 4 makes entries permanent.  The old ET
+ * reconnect cache used an unrelated hard-coded five minute lifetime. */
+static qboolean G_XPBackupEnabled( void ) {
+	return ( g_XPSave.integer & 1 ) != 0;
+}
+
+static int G_XPBackupMaxAge( void ) {
+	if( g_XPSave.integer & 4 ) {
+		return INT_MAX;
+	}
+	if( g_XPSaveMaxAge.integer <= 0 ) {
+		return 0;
+	}
+	if( g_XPSaveMaxAge.integer > INT_MAX / 1000 ) {
+		return INT_MAX;
+	}
+	return g_XPSaveMaxAge.integer * 1000;
+}
+
+static qboolean G_XPBackupExpired( const ipXPStorage_t *storage ) {
+	int maxAge;
+
+	if( !storage->timeadded ) {
+		return qtrue;
+	}
+	maxAge = G_XPBackupMaxAge();
+	return maxAge != INT_MAX && level.time - storage->timeadded > maxAge;
+}
 
 static ipGUID_t		guidMaxLivesFilters[MAX_IPFILTERS];
 static int			numMaxLivesFilters = 0;
@@ -203,10 +236,11 @@ ipXPStorage_t* G_FindIpData( ipXPStorageList_t *ipXPStorageList, char *from ) {
 		i++, p++;
 	}
 	
-	in = *(unsigned *)m;
+	/* Do not type-pun a byte array: its alignment is not guaranteed on WASM. */
+	memcpy( &in, m, sizeof( in ) );
 
-	for( i = 0; i < MAX_IPFILTERS; i++ ) {
-		if( !ipXPStorageList->ipFilters[ i ].timeadded || level.time - ipXPStorageList->ipFilters[ i ].timeadded > ( 5 * 60000 ) ) {
+	for( i = 0; i < MAX_XPSTORAGEITEMS; i++ ) {
+		if( G_XPBackupExpired( &ipXPStorageList->ipFilters[ i ] ) ) {
 			continue;
 		}
 
@@ -264,7 +298,12 @@ qboolean G_FilterMaxLivesIPPacket( char *from )
 
 #ifdef USEXPSTORAGE
 ipXPStorage_t* G_FindXPBackup( char *from ) {
-	ipXPStorage_t* storage = G_FindIpData( &ipXPStorage, from );
+	ipXPStorage_t* storage;
+
+	if( !G_XPBackupEnabled() ) {
+		return NULL;
+	}
+	storage = G_FindIpData( &ipXPStorage, from );
 
 	if( storage ) {
 		storage->timeadded = 0;
@@ -295,7 +334,7 @@ void G_StoreXPBackup( void ) {
 	char s[MAX_STRING_CHARS];
 
 	for( i = 0; i < MAX_XPSTORAGEITEMS; i++ ) {
-		if( !ipXPStorage.ipFilters[ i ].timeadded || level.time - ipXPStorage.ipFilters[ i ].timeadded > ( 5 * 60000 ) ) {
+		if( !G_XPBackupEnabled() || G_XPBackupExpired( &ipXPStorage.ipFilters[ i ] ) ) {
 			trap_Cvar_Set( va( "xpbackup%i", i ), "" );
 			continue;
 		}
@@ -318,6 +357,10 @@ void G_StoreXPBackup( void ) {
 void G_ReadXPBackup( void ) {
 	int i;
 	char s[MAX_STRING_CHARS];
+
+	if( !G_XPBackupEnabled() ) {
+		return;
+	}
 
 	for( i = 0; i < MAX_XPSTORAGEITEMS; i++ ) {
 		trap_Cvar_VariableStringBuffer( va( "xpbackup%i", i ), s, sizeof( s ) );
@@ -355,6 +398,10 @@ void G_AddXPBackup( gentity_t* ent ) {
 	int besttime;
 	const char* str;
 	char userinfo[MAX_INFO_STRING];
+
+	if( !G_XPBackupEnabled() || !ent || !ent->client ) {
+		return;
+	}
 
 	trap_GetUserinfo( ent - g_entities, userinfo, sizeof( userinfo ) );
 	str = Info_ValueForKey( userinfo, "ip" );
@@ -1156,6 +1203,91 @@ static void Svcmd_KickNum_f( void ) {
 
 char	*ConcatArgs( int start );
 
+/* Recovered nitrox_CrazyGravityCmd (qagame 0x000c98d0).  Keep the
+ * authoritative state transition independent of the still-missing shrubbot
+ * dispatcher and expose it through the game console in the meantime. */
+static qboolean Svcmd_CrazyGravity_f( void ) {
+	char value[3];
+
+	if ( trap_Argc() != 2 ) {
+		G_Printf( "usage: crazygravity [0|1]\n" );
+		return qtrue;
+	}
+
+	trap_Argv( 1, value, sizeof( value ) );
+	if ( value[1] || ( value[0] != '0' && value[0] != '1' ) ) {
+		G_Printf( "usage: crazygravity [0|1]\n" );
+		return qtrue;
+	}
+
+	trap_Cvar_Set( "n_crazyGravity", value );
+	trap_SendServerCommand( -1, value[0] == '1'
+		? "cpm \"^xcrazygravity: ^2Enabled !\""
+		: "cpm \"^xcrazygravity: ^1Disabled!\"" );
+	return qtrue;
+}
+
+/* Original Nit_GibAll (qagame 0x000be1e0).  Despite its historical name the
+ * binary applies one unprotected, knockback-free point to every connected
+ * client; preserve that observable contract instead of inventing a forced
+ * respawn. */
+static void Svcmd_WarModeTouchClients( void ) {
+	int i;
+
+	for ( i = 0; i < level.numConnectedClients; i++ ) {
+		int clientNum = level.sortedClients[i];
+		gentity_t *player;
+
+		if ( clientNum < 0 || clientNum >= level.maxclients ) {
+			continue;
+		}
+		player = &g_entities[clientNum];
+		if ( !player->client || player->client->pers.connected != CON_CONNECTED ) {
+			continue;
+		}
+		G_Damage( player, NULL, NULL, NULL, NULL, 0,
+			DAMAGE_NO_PROTECTION | DAMAGE_NO_KNOCKBACK, MOD_UNKNOWN );
+	}
+}
+
+static qboolean Svcmd_WarMode_f( const char *command, int mode,
+	const char *displayName ) {
+	char value[8];
+	qboolean enable;
+	int current;
+
+	if ( trap_Argc() != 2 ) {
+		G_Printf( "usage: %s [1|on|0|off]\n", command );
+		return qtrue;
+	}
+
+	trap_Argv( 1, value, sizeof( value ) );
+	if ( !Q_stricmp( value, "1" ) || !Q_stricmp( value, "on" ) ) {
+		enable = qtrue;
+	} else if ( !Q_stricmp( value, "0" ) || !Q_stricmp( value, "off" ) ) {
+		enable = qfalse;
+	} else {
+		G_Printf( "usage: %s [1|on|0|off]\n", command );
+		return qtrue;
+	}
+
+	current = G_NITMOD_LegacyCvarInteger( "g_war", 0 );
+	if ( enable && current == mode ) {
+		G_Printf( "%s is already enabled.\n", displayName );
+		return qtrue;
+	}
+	if ( !enable && current != mode ) {
+		G_Printf( "%s is already disabled.\n", displayName );
+		return qtrue;
+	}
+
+	trap_Cvar_Set( "g_war", enable ? va( "%i", mode ) : "0" );
+	Svcmd_WarModeTouchClients();
+	trap_SendServerCommand( -1, va( "cpm \"^x%s: %s !\"", command,
+		enable ? "^2Enabled" : "^1Disabled" ) );
+	return qtrue;
+}
+
 /*
 =================
 ConsoleCommand
@@ -1166,6 +1298,25 @@ qboolean	ConsoleCommand( void ) {
 	char	cmd[MAX_TOKEN_CHARS];
 
 	trap_Argv( 0, cmd, sizeof( cmd ) );
+
+	if ( Q_stricmp( cmd, "crazygravity" ) == 0 ) {
+		return Svcmd_CrazyGravity_f();
+	}
+	if ( Q_stricmp( cmd, "panzerwar" ) == 0 ) {
+		return Svcmd_WarMode_f( "panzerwar", 1, "Panzerwar" );
+	}
+	if ( Q_stricmp( cmd, "sniperwar" ) == 0 ) {
+		return Svcmd_WarMode_f( "sniperwar", 2, "Sniperwar" );
+	}
+
+	if (Q_stricmp(cmd, "nitmod_omnibot_status") == 0) {
+		G_NITMOD_OmniBotReportStatus();
+		return qtrue;
+	}
+	if (Q_stricmp(cmd, "omnibot") == 0) {
+		Bot_Interface_ConsoleCommand();
+		return qtrue;
+	}
 
 #ifdef SAVEGAME_SUPPORT
 	if (Q_stricmp (cmd, "savegame") == 0) {

@@ -143,7 +143,7 @@ void CG_BloodTrail( localEntity_t *le ) {
 centity_t	*cent;
 cent = &cg_entities[le->ownerNum];
 
-	if ( !cg_blood.integer ) {
+	if ( !cg_gibs.integer ) {
 		return;
 	}
 

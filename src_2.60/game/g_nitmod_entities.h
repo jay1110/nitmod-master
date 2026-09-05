@@ -19,5 +19,7 @@ void G_NITMOD_FadeLandmines( struct gentity_s *owner, nitmodEntityRelease_t rele
 void NITMOD_FreeFadedLandmine( struct gentity_s *mine );
 void G_NITMOD_FadeSatchels( struct gentity_s *owner, nitmodEntityRelease_t release );
 struct gentity_s *G_NITMOD_FindSatchel( const struct gentity_s *owner );
+/* Team-only proximity marker that follows one artillery salvo. */
+void G_NITMOD_SpawnArtilleryHint( struct gentity_s *shell );
 
 #endif

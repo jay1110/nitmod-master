@@ -417,6 +417,7 @@ struct gentity_s {
 	char		tagName[MAX_QPATH];		// name of the tag we are attached to
 	gentity_t	*tagParent;
 	gentity_t	*tankLink;
+	int			nitmodTankMountTime;
 
 	int			lastHintCheckTime;			// DHM - Nerve
 	int			voiceChatSquelch;			// DHM - Nerve
@@ -490,6 +491,9 @@ struct gentity_s {
 	int nitmodClassnameHash;
 	int nitmodTargetHash;
 	int nitmodScriptNameHash;
+	/* Server-only replacement for original dropped-item gentity+0x39c.
+	 * Deliberately outside the engine-owned entityState/entityShared prefix. */
+	int nitmodDropAmmo;
 };
 
 // Ridah
@@ -578,6 +582,7 @@ typedef struct {
 	float		startskillpoints[SK_NUM_SKILLS];// Gordon: initial skillpoints at map beginning
 	float		startxptotal;
 	int			skill[SK_NUM_SKILLS];			// Arnout: skill
+	unsigned int nitmodSkillMasks[SK_NUM_SKILLS]; // original independent level unlocks
 	int			rank;							// Arnout: rank
 	int			medals[SK_NUM_SKILLS];			// Arnout: medals
 
@@ -600,6 +605,8 @@ typedef struct {
 	// OSP
 
 	qboolean	versionOK;
+	qboolean	botSuicide;
+	qboolean	botPush;
 } clientSession_t;
 
 //
@@ -700,6 +707,16 @@ typedef struct {
 	unsigned int	clientMaxPackets;	// Client com_maxpacket settings
 	unsigned int	clientTimeNudge;	// Client cl_timenudge settings
 	int				cmd_debounce;		// Dampening of command spam
+	int				nitmodFloodNextTime;
+	int				nitmodFloodWindowTime;
+	int				nitmodFloodCount;
+	/* Stored as map id + 1 so zero-initialized clients have no selections. */
+	int				nitmodMapVotes[3];
+	int				nitmodLastAmmoClient;
+	int				nitmodLastKillerClient;
+	int				nitmodLastHealthClient;
+	int				nitmodLastKilledClient;
+	int				nitmodLastReviverClient;
 	unsigned int	invite;				// Invitation to a team to join
 	mview_t			mv[MULTIVIEW_MAXVIEWS];	// Multiview portals
 	int				mvCount;			// Number of active portals
@@ -762,6 +779,10 @@ struct gclient_s {
 	int			lastCmdTime;		// level.time of last usercmd_t, for EF_CONNECTION
 									// we can't just use pers.lastCommand.time, because
 									// of the g_sycronousclients case
+	/* Original Nitmod ClientEndFrame ring used by g_truePing.  Keep this in
+	 * private qagame state: only the resulting ps.ping crosses the VM ABI. */
+	int			nitmodPingSamples[64];
+	unsigned int nitmodPingSampleHead;
 	int			buttons;
 	int			oldbuttons;
 	int			latched_buttons;
@@ -793,10 +814,17 @@ struct gclient_s {
 	int			inactivityTime;		// kick players when time > this
 	qboolean	inactivityWarning;	// qtrue if the five seoond warning has been given
 	int			rewardTime;			// clear the EF_AWARD_IMPRESSIVE, etc when time > this
+	int			nitmodMuteUntil;		// 0/negative: session mute, positive: level-time expiry
 
 	int			airOutTime;
 
 	int			lastKillTime;		// for multiple kill rewards
+	int			nitmodMultiKillCount;
+	int			nitmodDamageReceived[MAX_CLIENTS];
+	int			nitmodReviveSpree;
+	int			nitmodBestReviveSpree;
+	int			nitmodLastReviveTime;
+	int			nitmodMultiReviveCount;
 
 	qboolean	fireHeld;			// used for hook
 	gentity_t	*hook;				// grapple hook if out
@@ -845,6 +873,9 @@ struct gclient_s {
 
 	gentity_t		*tempHead;	// Gordon: storing a temporary head for bullet head shot detection
 	gentity_t		*tempLeg;	// Arnout: storing a temporary leg for bullet head shot detection
+	vec3_t		nitmodSavedBodyMins;
+	vec3_t		nitmodSavedBodyMaxs;
+	qboolean	nitmodBodyBoundsAdjusted;
 
 	int				botSlotNumber;  // the slot the bot falls into (set up in the initial UI screen)
 	// END		xkan, 8/27/2002
@@ -873,6 +904,15 @@ struct gclient_s {
 	qboolean		wantsscore;
 	qboolean		maxlivescalced;
 	int nitmodLastShoveTime;
+	/* Last authoritative damage time; original Nitmod client offset +0xfac. */
+	int nitmodLastHurtTime;
+	qboolean nitmodSlashKillPending;
+	int nitmodSlashKillChargeTime;
+	int nitmodSlashKillDeathTime;
+	int nitmodObjectiveDrops;
+	int nitmodPoisonAttacker;
+	int nitmodPoisonStacks;
+	int nitmodPoisonNextTick;
 	nitmodWarState_t nitmodWarState;
 };
 
@@ -911,6 +951,8 @@ typedef struct voteInfo_s {
 	int			numVotingTeamClients[2];
 	int			(*vote_fn)(gentity_t *ent, unsigned int dwVoteIndex, char *arg, char *arg2, qboolean fRefereeCmd);
 	char		vote_value[VOTE_MAXSTRING];	// Desired vote item setting.
+	team_t surrenderTeam; /* Captured at admission, not a mutable client slot. */
+	int			callerClientNum; /* Original g_voting bit 2 refund target. */
 } voteInfo_t;
 
 
@@ -936,6 +978,8 @@ typedef struct {
 	int			frameTime;				// Gordon: time the frame started, for antilag stuff
 
 	int			startTime;				// level.time the map was started
+	qboolean	twoMinute;
+	qboolean	thirtySecond;
 
 	int			teamScores[TEAM_NUM_TEAMS];
 	int			lastTeamLocationTime;		// last time of client team location update
@@ -1097,6 +1141,10 @@ typedef struct {
 	int			numLimboCams;
 
 	int			numActiveAirstrikes[2];
+	/* Nitmod keeps airstrike and artillery availability independent for each
+	 * combat team.  Values are remaining milliseconds. */
+	int			nitmodAirstrikeCounter[2];
+	int			nitmodArtilleryCounter[2];
 
 	float		teamXP[SK_NUM_SKILLS][2];
 
@@ -1168,6 +1216,7 @@ void UseHoldableItem( gentity_t *ent, int item );
 void PrecacheItem (gitem_t *it);
 gentity_t *Drop_Item( gentity_t *ent, gitem_t *item, float angle, qboolean novelocity );
 gentity_t *LaunchItem( gitem_t *item, vec3_t origin, vec3_t velocity, int ownerNum );
+void Use_Item( gentity_t *ent, gentity_t *other, gentity_t *activator );
 void SetRespawn (gentity_t *ent, float delay);
 void G_SpawnItem (gentity_t *ent, gitem_t *item);
 void FinishSpawningItem( gentity_t *ent );
@@ -1338,7 +1387,10 @@ qboolean AccuracyHit( gentity_t *target, gentity_t *attacker );
 void CalcMuzzlePoint ( gentity_t *ent, int weapon, vec3_t forward, vec3_t right, vec3_t up, vec3_t muzzlePoint );
 void SnapVectorTowards( vec3_t v, vec3_t to );
 gentity_t *weapon_grenadelauncher_fire (gentity_t *ent, int grenadeWPID);
+void weapon_smokeBombExplode( gentity_t *ent );
 void G_PlaceTripmine(gentity_t* ent);
+void G_NITMOD_RemoveTripmines(gentity_t *owner);
+int G_NITMOD_CountTeamTripmines(team_t team);
 void G_FadeItems(gentity_t* ent, int modType);
 gentity_t *G_FindSatchel(gentity_t* ent);
 void G_ExplodeMines(gentity_t* ent);
@@ -1347,6 +1399,7 @@ void G_FreeSatchel( gentity_t* ent );
 int G_GetWeaponDamage( int weapon );
 
 void CalcMuzzlePoints(gentity_t *ent, int weapon);
+void G_NITMOD_ThrowKnife(gentity_t *ent);
 void CalcMuzzlePointForActivate ( gentity_t *ent, vec3_t forward, vec3_t right, vec3_t up, vec3_t muzzlePoint );
 
 //
@@ -1370,6 +1423,7 @@ qboolean SpotWouldTelefrag( gentity_t *spot );
 qboolean G_CheckForExistingModelInfo( bg_playerclass_t* classInfo, const char *modelName, animModelInfo_t **modelInfo );
 void G_StartPlayerAppropriateSound(gentity_t *ent, char* soundType);
 void SetWolfSpawnWeapons( gclient_t *client );
+qboolean AddWeaponToPlayer( gclient_t *client, weapon_t weapon, int ammo, int ammoclip, qboolean setcurrent );
 void limbo( gentity_t *ent, qboolean makeCorpse ); // JPW NERVE
 void reinforce(gentity_t *ent); // JPW NERVE
 
@@ -1440,6 +1494,7 @@ void Cmd_Say_f( gentity_t *ent, int mode, qboolean arg0 );
 void Cmd_Team_f( gentity_t *ent, unsigned int dwCommand, qboolean fValue );
 void Cmd_SetWeapons_f( gentity_t *ent, unsigned int dwCommand, qboolean fValue );
 void Cmd_SetClass_f( gentity_t *ent, unsigned int dwCommand, qboolean fValue );
+void Cmd_ResetSetup_f( gentity_t *ent );
 
 //
 // g_pweapon.c
@@ -1679,6 +1734,41 @@ extern	vmCvar_t	voteFlags;
 extern	vmCvar_t	g_complaintlimit;
 extern	vmCvar_t	g_ipcomplaintlimit;
 extern	vmCvar_t	g_filtercams;
+extern vmCvar_t g_spectatorNames;
+extern vmCvar_t n_classesMaxHP;
+extern vmCvar_t g_DMOptions;
+extern vmCvar_t g_noAttackInvul;
+extern vmCvar_t g_moverScale;
+extern vmCvar_t g_mapConfigs;
+extern vmCvar_t g_goomba, g_goombaFlags;
+void G_NITMOD_FallDamage(gentity_t *ent, int event);
+void G_NITMOD_LoadMapConfigs(void);
+void G_NITMOD_LoadMapCycleConfig(void);
+extern vmCvar_t g_forceLimboHealth;
+int G_NITMOD_ForceLimboThreshold(int configured);
+void G_NITMOD_AttackInvulnerability(gentity_t *ent, int event, int now, int enabled);
+extern vmCvar_t vote_allow_poll;
+extern vmCvar_t vote_allow_maprestart;
+extern vmCvar_t vote_allow_restartcampaign;
+extern vmCvar_t vote_allow_nextcampaign;
+extern vmCvar_t vote_allow_surrender;
+int G_NITMOD_SurrenderVote(gentity_t *, unsigned int, char *, char *, qboolean);
+qboolean G_NITMOD_CanVoteSurrender(const gentity_t *);
+int G_NITMOD_SurrenderVoters(void);
+void LogExit(const char *string);
+extern vmCvar_t vote_allow_shuffleteams;
+extern vmCvar_t vote_allow_shuffleteams_norestart;
+extern vmCvar_t vote_allow_swapteamsrestart;
+int G_NITMOD_ShuffleVote(gentity_t *, unsigned int, char *, char *, qboolean);
+int G_NITMOD_ShuffleNoRestartVote(gentity_t *, unsigned int, char *, char *, qboolean);
+int G_NITMOD_SwapVote(gentity_t *, unsigned int, char *, char *, qboolean);
+int G_NITMOD_SwapRestartVote(gentity_t *, unsigned int, char *, char *, qboolean);
+int G_NITMOD_NextCampaignVote(gentity_t *, unsigned int, char *, char *, qboolean);
+int G_NITMOD_RestartCampaignVote(gentity_t *, unsigned int, char *, char *, qboolean);
+int G_NITMOD_ClassMaxHealth(int playerClass);
+void G_NITMOD_HealthTimer(gentity_t *ent, int msec, unsigned int medicOptions, int war);
+void G_NITMOD_SetHealthLimits(gclient_t *client, int numMedics, int war, int gametype, int override);
+int G_NITMOD_SpawnHealth(const gclient_t *client, int war, int gametype, int override);
 extern	vmCvar_t	g_maxlives;				// DHM - Nerve :: number of respawns allowed (0==infinite)
 extern	vmCvar_t	g_maxlivesRespawnPenalty;
 extern	vmCvar_t	g_voiceChatsAllowed;	// DHM - Nerve :: number before spam control
@@ -1761,6 +1851,13 @@ extern vmCvar_t		g_noTeamSwitching;
 extern vmCvar_t		g_altStopwatchMode;
 extern vmCvar_t		g_gamestate;
 extern vmCvar_t		g_swapteams;
+extern vmCvar_t		g_XPSave;
+extern vmCvar_t		g_XPSaveMaxAge;
+extern vmCvar_t		g_resetXPMapCount;
+extern vmCvar_t		g_maxMapsVotedFor;
+extern vmCvar_t		g_minMapAge;
+extern vmCvar_t		g_mapVoteFlags;
+extern vmCvar_t		g_excludedMaps;
 // -NERVE - SMF
 
 //Gordon
@@ -1783,6 +1880,7 @@ extern vmCvar_t		server_motd2;
 extern vmCvar_t		server_motd3;
 extern vmCvar_t		server_motd4;
 extern vmCvar_t		server_motd5;
+extern vmCvar_t		server_motd6;
 extern vmCvar_t		team_maxPanzers;
 extern vmCvar_t		team_maxplayers;
 extern vmCvar_t		team_nocontrols;
@@ -1881,7 +1979,7 @@ int		trap_BotAllocateClient( int clientNum );
 void	trap_BotFreeClient( int clientNum );
 void	trap_GetUsercmd( int clientNum, usercmd_t *cmd );
 qboolean	trap_GetEntityToken( char *buffer, int bufferSize );
-qboolean trap_GetTag( int clientNum, int tagFileNumber, char *tagName, orientation_t *or );
+qboolean trap_GetTag( int clientNum, int tagFileNumber, char *tagName, orientation_t *orientation );
 qboolean trap_LoadTag( const char* filename );
 
 int		trap_RealTime( qtime_t *qtime );
@@ -2098,6 +2196,7 @@ void G_ResetMarkers( gentity_t* ent );
 void G_HistoricalTrace( gentity_t* ent, trace_t *results, const vec3_t start, const vec3_t mins, const vec3_t maxs, const vec3_t end, int passEntityNum, int contentmask );
 void G_HistoricalTraceBegin( gentity_t *ent );
 void G_HistoricalTraceEnd( gentity_t *ent );
+float G_NITMOD_HitboxHeight( const gentity_t *target, const gentity_t *attacker );
 void G_Trace( gentity_t* ent, trace_t *results, const vec3_t start, const vec3_t mins, const vec3_t maxs, const vec3_t end, int passEntityNum, int contentmask );
 
 #define BODY_VALUE(ENT) ENT->watertype
@@ -2175,6 +2274,7 @@ void G_LogRegionHit(	gentity_t* ent, hitRegion_t hr );
 // Skills
 void G_SetPlayerScore( gclient_t *client );
 void G_SetPlayerSkill( gclient_t *client, skillType_t skill );
+void G_NITMOD_XPDecay( gentity_t *ent, int minutes, qboolean force );
 void G_AddSkillPoints( gentity_t *ent, skillType_t skill, float points );
 void G_LoseSkillPoints( gentity_t *ent, skillType_t skill, float points );
 void G_AddKillSkillPoints( gentity_t *attacker, meansOfDeath_t mod, hitRegion_t hr, qboolean splash );
@@ -2210,6 +2310,11 @@ int G_CountTeamLandmines ( team_t team );
 qboolean G_SweepForLandmines( vec3_t origin, float radius, int team );
 void G_NITMOD_SatchelDie( gentity_t *self, gentity_t *inflictor, gentity_t *attacker, int damage, int mod );
 extern vmCvar_t g_damageweapons;
+extern vmCvar_t g_poison;
+qboolean G_NITMOD_PoisonAttack( gentity_t *attacker );
+void G_NITMOD_RunPoison( gentity_t *victim );
+void G_NITMOD_ClearPoison( gentity_t *victim );
+void G_NITMOD_CurePoisonFromHealth( gentity_t *victim, gentity_t *provider, qboolean cabinet );
 extern vmCvar_t n_preciseLandmineTrigger;
 extern vmCvar_t g_OmniBotFlags;
 void G_NITMOD_ResetBotHandles(void);
@@ -2441,6 +2546,7 @@ void G_smvRegenerateClients(gentity_t *ent, int clientList);
 void G_smvRemoveEntityInMVList(gentity_t *ent, mview_t *ref);
 void G_smvRemoveInvalidClients(gentity_t *ent, int nTeam);
 qboolean G_smvRunCamera(gentity_t *ent);
+qboolean G_NITMOD_RunMissileCamera(gentity_t *ent);
 void G_smvUpdateClientCSList(gentity_t *ent);
 
 
@@ -2468,6 +2574,8 @@ void G_MakeReferee(void);
 void G_RemoveReferee(void);
 void G_MuteClient(void);
 void G_UnMuteClient(void);
+qboolean G_NITMOD_ClientMuted(gentity_t *ent);
+void G_NITMOD_SetClientMute(gentity_t *ent, qboolean muted, int durationSeconds);
 
 
 
@@ -2545,7 +2653,7 @@ qboolean G_ConstructionIsPartlyBuilt( gentity_t* ent );
 
 int G_CountTeamMedics( team_t team, qboolean alivecheck );
 qboolean G_TankIsOccupied( gentity_t* ent );
-qboolean G_TankIsMountable( gentity_t* ent, gentity_t* other );
+qboolean G_TankIsMountable( gentity_t* ent, gentity_t* other, qboolean notify );
 
 qboolean G_ConstructionBegun( gentity_t* ent );
 qboolean G_ConstructionIsFullyBuilt( gentity_t* ent );

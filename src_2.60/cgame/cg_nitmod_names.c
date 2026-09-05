@@ -107,7 +107,7 @@ float CG_NitmodFloatNameScale(float distance) {
 }
 
 static qboolean CG_NitmodSpectatorNamesEnabled(void) {
-    return NITMOD_UsesOriginalProtocol() && cg.snap && cg_draw2D.integer &&
+    return NITMOD_UsesNitmodHud() && cg.snap && cg_draw2D.integer &&
         cg.clientNum >= 0 && cg.clientNum < MAX_CLIENTS &&
         cg.snap->ps.persistant[PERS_TEAM] == TEAM_SPECTATOR &&
         (cgs.clientinfo[cg.clientNum].nitmodShoutcaster || NITMOD_SimpleConfig()->spectatorNames);
@@ -168,7 +168,7 @@ void CG_NitmodDrawSpectatorNames(void) {
     vec4_t color = {1,1,1,1};
     nitmodHudAnchor_t previous;
     floatingCount = 0;
-    if(!NITMOD_UsesOriginalProtocol() || !cg.snap || !cg_draw2D.integer || !cg.refdef_current) return;
+    if(!NITMOD_UsesNitmodHud() || !cg.snap || !cg_draw2D.integer || !cg.refdef_current) return;
     previous = CG_NitmodHudAnchor(NITMOD_HUD_CENTER);
     for(i = 0; i < count; ++i) {
         trace_t trace;

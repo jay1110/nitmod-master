@@ -54,7 +54,8 @@ nitmodAmmoAction_t CG_NitmodAmmoSelection(qboolean force, int *choice) {
         if(current == WP_SMOKE_BOMB) {
             if(CG_WeaponSelectable(WP_LUGER)) { *choice = WP_LUGER; return NITMOD_AMMO_FINISH; }
             if(CG_WeaponSelectable(WP_COLT)) { *choice = WP_COLT; return NITMOD_AMMO_FINISH; }
-        } else if(current == WP_DYNAMITE || current == WP_LANDMINE || current == WP_TRIPMINE) {
+        } else if(current == WP_DYNAMITE || current == WP_LANDMINE ||
+                  current == WP_TRIPMINE || current == WP_POISON_MINE) {
             if(CG_WeaponSelectable(WP_PLIERS)) { *choice = WP_PLIERS; return NITMOD_AMMO_FINISH; }
         } else if(current == WP_SATCHEL && CG_WeaponSelectable(WP_SATCHEL_DET)) {
             *choice = WP_SATCHEL_DET; return NITMOD_AMMO_SELECT;

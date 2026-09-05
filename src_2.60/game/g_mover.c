@@ -2717,7 +2717,7 @@ void Reached_Train( gentity_t *ent ) {
 
 	// if the path_corner has a speed, use that
 	if ( next->speed ) {
-		speed = next->speed;
+		speed = next->speed * g_moverScale.value;
 	} else {
 		// otherwise use the train's speed
 		speed = ent->speed;
@@ -3061,7 +3061,7 @@ void Reached_Train_rotating( gentity_t *ent ) {
 
 	// if the path_corner has a speed, use that
 	if ( next->speed ) {
-		speed = next->speed;
+		speed = next->speed * g_moverScale.value;
 	} else {
 		// otherwise use the train's speed
 		speed = ent->speed;
@@ -3082,6 +3082,8 @@ void Reached_Train_rotating( gentity_t *ent ) {
 		ent->s.pos.trDuration = (next->duration * 1000);	
 	else	
 		ent->s.pos.trDuration = length * 1000 / speed;
+	/* SetMoverState(MOVER_1TO2) consumes gDuration, not trDuration. */
+	ent->gDuration = ent->s.pos.trDuration;
 
 	// Rotate the train
 	frames = floor(ent->s.pos.trDuration / 100);

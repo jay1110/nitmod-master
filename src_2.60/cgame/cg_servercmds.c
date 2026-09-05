@@ -96,18 +96,27 @@ and whenever the server updates any serverinfo flagged cvars
 void CG_ParseServerinfo( void ) {
 	const char	*info;
 	char	*mapname;
+	int value;
+	float floatValue;
 
 	info = CG_ConfigString( CS_SERVERINFO );
-	cg_gameType.integer = cgs.gametype = atoi( Info_ValueForKey( info, "g_gametype" ) );
-	cg_antilag.integer = cgs.antilag = atoi( Info_ValueForKey( info, "g_antilag" ) );
+	if( !NITMOD_ParseProtocolInteger(Info_ValueForKey(info, "g_gametype"), &value) ||
+		value < GT_WOLF || value >= GT_MAX_GAME_TYPE ) value = GT_WOLF;
+	cg_gameType.integer = cgs.gametype = value;
+	if( !NITMOD_ParseProtocolInteger(Info_ValueForKey(info, "g_antilag"), &value) ) value = 0;
+	cg_antilag.integer = cgs.antilag = value;
 	if ( !cgs.localServer ) {
 		trap_Cvar_Set("g_gametype", va("%i", cgs.gametype));
 		trap_Cvar_Set("g_antilag", va("%i", cgs.antilag));
 		trap_Cvar_Update( &cg_antilag );
 		trap_Cvar_Update( &cg_gameType );
 	}
-	cgs.timelimit = atof( Info_ValueForKey( info, "timelimit" ) );
-	cgs.maxclients = atoi( Info_ValueForKey( info, "sv_maxclients" ) );
+	if( !NITMOD_ParseProtocolFloat(Info_ValueForKey(info, "timelimit"), &floatValue) || floatValue < 0.f )
+		floatValue = 0.f;
+	cgs.timelimit = floatValue;
+	if( !NITMOD_ParseProtocolInteger(Info_ValueForKey(info, "sv_maxclients"), &value) ||
+		value < 1 || value > MAX_CLIENTS ) value = MAX_CLIENTS;
+	cgs.maxclients = value;
 	mapname = Info_ValueForKey( info, "mapname" );
 	Q_strncpyz( cgs.rawmapname, mapname, sizeof(cgs.rawmapname) );
 	Com_sprintf( cgs.mapname, sizeof( cgs.mapname ), "maps/%s.bsp", mapname );
@@ -590,6 +599,10 @@ static void CG_ConfigStringModified( void ) {
 		if(num < 0) return;
 	}
 	str = CG_ConfigString( num );
+	if(num == CS_ENDGAME_STATS) {
+		cgs.dbAwardsParsed = qfalse;
+		return;
+	}
 	/* Handle original TAGCONNECT slots before native ranges can interpret
 	 * these same indices as objective/dlight data. */
 	if (NITMOD_TagConnectBase() != CS_TAGCONNECTS &&
@@ -1543,10 +1556,10 @@ static qboolean CG_NitmodValidateWeaponStatsTuple( int *clientOut ) {
 		client < 0 || client >= MAX_CLIENTS || rounds < 0 || weaponMask < 0 ) {
 		return qfalse;
 	}
-	for( weapon = WS_KNIFE; weapon < WS_MAX; ++weapon )
+	for( weapon = WS_KNIFE; weapon < NITMOD_WeaponStatCount(); ++weapon )
 		validWeapons |= 1u << weapon;
 	if( (unsigned int)weaponMask & ~validWeapons ) return qfalse;
-	for( weapon = WS_KNIFE; weapon < WS_MAX; ++weapon ) {
+	for( weapon = WS_KNIFE; weapon < NITMOD_WeaponStatCount(); ++weapon ) {
 		int hits, shots, kills, deaths, headshots;
 		if( !( weaponMask & ( 1 << weapon ) ) ) continue;
 		if( !CG_NitmodStatsArg( &index, &hits ) ||
@@ -1604,29 +1617,31 @@ void CG_topshotsParse_cmd(qboolean doBest)
 {
 	int iArg = 1;
 	int iWeap;
-	topshotStats_t *ts = &cgs.topshots;
+	topshotStats_t next;
+	topshotStats_t *ts = &next;
 	(void)doBest;
 
-	ts->cWeapons = 0;
+	memset(ts, 0, sizeof(*ts));
 	if( !CG_NitmodStatsArg( &iArg, &iWeap ) ) return;
 	while(iWeap) {
 		int cnum, hits, atts, kills, deaths;
 		float acc;
 		char name[32];
-		if( iWeap < 1 || iWeap > WS_MAX ||
+		if( iWeap < 1 || iWeap > NITMOD_WeaponStatCount() ||
 			!CG_NitmodStatsArg( &iArg, &cnum ) ||
 			!CG_NitmodStatsArg( &iArg, &hits ) ||
 			!CG_NitmodStatsArg( &iArg, &atts ) ||
 			!CG_NitmodStatsArg( &iArg, &kills ) ||
 			!CG_NitmodStatsArg( &iArg, &deaths ) ||
-			cnum < 0 || cnum >= MAX_CLIENTS ) return;
-		acc = (atts > 0) ? (float)(hits * 100) / (float)atts : 0.0f;
+			cnum < 0 || cnum >= MAX_CLIENTS || hits < 0 || atts < 0 ||
+			kills < 0 || deaths < 0 ) return;
+		acc = (atts > 0) ? (float)(100.0 * hits / atts) : 0.0f;
 
-		if(ts->cWeapons < WS_MAX * 2) {
+		if(ts->cWeapons < NITMOD_WeaponStatCount() * 2) {
 			BG_cleanName(cgs.clientinfo[cnum].name, name, 17, qfalse);
 			Q_strncpyz(ts->strWS[ts->cWeapons++],
 						va("%-12s %5.1f %4d/%-4d %5d  %s",
-															aWeaponInfo[iWeap-1].pszName,
+															NITMOD_WeaponStatName(iWeap-1),
 															acc, hits, atts,
 															kills,
 															name),
@@ -1635,6 +1650,8 @@ void CG_topshotsParse_cmd(qboolean doBest)
 
 		if( !CG_NitmodStatsArg( &iArg, &iWeap ) ) return;
 	}
+	if(iArg != trap_Argc()) return;
+	cgs.topshots = next;
 }
 
 void CG_ParseWeaponStats( void ) {
@@ -1690,7 +1707,7 @@ void CG_parseWeaponStatsGS_cmd(void)
 	if(weaponMask != 0) {
 		char strName[MAX_STRING_CHARS];
 
-		for(i=WS_KNIFE; i<WS_MAX; i++) {
+		for(i=WS_KNIFE; i<NITMOD_WeaponStatCount(); i++) {
 			if(weaponMask & (1 << i)) {
 				int nHits = atoi(CG_Argv(iArg++));
 				int nShots = atoi(CG_Argv(iArg++));
@@ -1698,7 +1715,7 @@ void CG_parseWeaponStatsGS_cmd(void)
 				int nDeaths = atoi(CG_Argv(iArg++));
 				int nHeadshots = atoi(CG_Argv(iArg++));
 
-				Q_strncpyz(strName, va("%-12s  ", aWeaponInfo[i].pszName), sizeof(strName));
+				Q_strncpyz(strName, va("%-12s  ", NITMOD_WeaponStatName(i)), sizeof(strName));
 				if(nShots > 0 || nHits > 0) {
 					Q_strcat(strName, sizeof(strName), va("%5.1f %4d/%-4d ",
 														((nShots == 0) ? 0.0 : (float)(nHits*100.0/(float)nShots)),
@@ -1708,7 +1725,7 @@ void CG_parseWeaponStatsGS_cmd(void)
 				}
 
 				Q_strncpyz(gs->strWS[gs->cWeapons++],
-						   va("%s%5d %6d%s", strName, nKills, nDeaths, ((aWeaponInfo[i].fHasHeadShots) ? va(" %9d", nHeadshots) : "")),
+						   va("%s%5d %6d%s", strName, nKills, nDeaths, (NITMOD_WeaponStatHasHeadshots(i) ? va(" %9d", nHeadshots) : "")),
 						   sizeof(gs->strWS[0]));
 
 				if(nShots > 0 || nHits > 0 || nKills > 0 || nDeaths) {
@@ -1736,7 +1753,7 @@ void CG_parseWeaponStatsGS_cmd(void)
 		}
 	}
 
-	Q_strncpyz(gs->strRank, va("%-13s %d", ((ci->team == TEAM_AXIS) ? rankNames_Axis : rankNames_Allies)[ci->rank], xp), sizeof(gs->strRank));
+	Q_strncpyz(gs->strRank, va("%-13s %d", NITMOD_ClientRankName(ci->team, ci->rank), xp), sizeof(gs->strRank));
 
 	if(skillMask != 0) {
 		char *str;
@@ -1747,16 +1764,18 @@ void CG_parseWeaponStatsGS_cmd(void)
 				continue;
 			}
 
-			if(ci->skill[i] >= 0 && ci->skill[i] < NUM_SKILL_LEVELS - 1) {
-				str = va("%4d/%-4d", ci->skillpoints[i], skillLevels[ci->skill[i]+1]);
+			int level = NITMOD_UsesOriginalProtocol() ? ci->nitmodSkillLevels[i] : ci->skill[i];
+			int threshold = NITMOD_ClientSkillNextThreshold(i, level);
+			if(threshold >= 0) {
+				str = va("%4d/%-4d", ci->skillpoints[i], threshold);
 			} else {
 				str = va("%d", ci->skillpoints[i]);
 			}
 
 			if(cgs.gametype == GT_WOLF_CAMPAIGN) {
-				Q_strncpyz(gs->strSkillz[gs->cSkills++], va("%-15s %3d %s %12d", skillNames[i], ci->skill[i], str, ci->medals[i]), sizeof(gs->strSkillz[0]));
+				Q_strncpyz(gs->strSkillz[gs->cSkills++], va("%-15s %3d %s %12d", skillNames[i], level, str, ci->medals[i]), sizeof(gs->strSkillz[0]));
 			} else {
-				Q_strncpyz(gs->strSkillz[gs->cSkills++], va("%-15s %3d %s", skillNames[i], ci->skill[i], str),	sizeof(gs->strSkillz[0]));
+				Q_strncpyz(gs->strSkillz[gs->cSkills++], va("%-15s %3d %s", skillNames[i], level, str),	sizeof(gs->strSkillz[0]));
 			}
 		}
 	}
@@ -1800,7 +1819,7 @@ void CG_parseWeaponStats_cmd(void (txt_dump)(char *))
 	if(!dwWeaponMask) {
 		txt_dump("^3No weapon info available.\n");
 	} else {
-		for(i=WS_KNIFE; i<WS_MAX; i++) {
+		for(i=WS_KNIFE; i<NITMOD_WeaponStatCount(); i++) {
 			if(dwWeaponMask & (1 << i)) {
 				hits = atoi(CG_Argv(iArg++));
 				atts = atoi(CG_Argv(iArg++));
@@ -1808,7 +1827,7 @@ void CG_parseWeaponStats_cmd(void (txt_dump)(char *))
 				deaths = atoi(CG_Argv(iArg++));
 				headshots = atoi(CG_Argv(iArg++));
 
-				Q_strncpyz(strName, va("^3%-9s: ", aWeaponInfo[i].pszName), sizeof(strName));
+				Q_strncpyz(strName, va("^3%-9s: ", NITMOD_WeaponStatName(i)), sizeof(strName));
 				if(atts > 0 || hits > 0) {
 					fHasStats = qtrue;
 					Q_strcat(strName, sizeof(strName), va("^7%5.1f ^5%4d/%-4d ",
@@ -1820,9 +1839,9 @@ void CG_parseWeaponStats_cmd(void (txt_dump)(char *))
 				}
 
 				if(fFull)
-					txt_dump(va("%s^2%5d ^1%6d%s\n", strName, kills, deaths, ((aWeaponInfo[i].fHasHeadShots) ? va(" ^3%9d", headshots) : "")));
+					txt_dump(va("%s^2%5d ^1%6d%s\n", strName, kills, deaths, (NITMOD_WeaponStatHasHeadshots(i) ? va(" ^3%9d", headshots) : "")));
 				else
-					txt_dump(va("%s^2%3d ^1%3d%s\n", strName, kills, deaths, ((aWeaponInfo[i].fHasHeadShots) ? va(" ^3%2d", headshots) : "")));
+					txt_dump(va("%s^2%3d ^1%3d%s\n", strName, kills, deaths, (NITMOD_WeaponStatHasHeadshots(i) ? va(" ^3%2d", headshots) : "")));
 			}
 		}
 
@@ -1853,7 +1872,7 @@ void CG_parseWeaponStats_cmd(void (txt_dump)(char *))
 		}
 	}
 
-	txt_dump(va("\n^2Rank: ^7%s (%d XP)\n", ((ci->team == TEAM_AXIS) ? rankNames_Axis : rankNames_Allies)[ci->rank], xp));
+	txt_dump(va("\n^2Rank: ^7%s (%d XP)\n", NITMOD_ClientRankName(ci->team, ci->rank), xp));
 
 	if(!fFull) {
 		txt_dump("\n\n\n");
@@ -1878,10 +1897,12 @@ void CG_parseWeaponStats_cmd(void (txt_dump)(char *))
 				continue;
 			}
 
-			if(ci->skill[i] >= 0 && ci->skill[i] < NUM_SKILL_LEVELS - 1) {
-				str = va("%d (%d/%d)", ci->skill[i], ci->skillpoints[i], skillLevels[ci->skill[i]+1]);
+			int level = NITMOD_UsesOriginalProtocol() ? ci->nitmodSkillLevels[i] : ci->skill[i];
+			int threshold = NITMOD_ClientSkillNextThreshold(i, level);
+			if(threshold >= 0) {
+				str = va("%d (%d/%d)", level, ci->skillpoints[i], threshold);
 			} else {
-				str = va("%d (%d)", ci->skill[i], ci->skillpoints[i]);
+				str = va("%d (%d)", level, ci->skillpoints[i]);
 			}
 
 			if(cgs.gametype == GT_WOLF_CAMPAIGN) {
@@ -1917,24 +1938,24 @@ void CG_parseBestShotsStats_cmd(qboolean doTop, void (txt_dump)(char *))
 
 	while(iWeap) {
 		int cnum, hits, atts, kills, deaths;
-		if(iWeap < 1 || iWeap > WS_MAX ||
+		if(iWeap < 1 || iWeap > NITMOD_WeaponStatCount() ||
 		   !CG_NitmodStatsArg(&iArg, &cnum) ||
 		   !CG_NitmodStatsArg(&iArg, &hits) ||
 		   !CG_NitmodStatsArg(&iArg, &atts) ||
 		   !CG_NitmodStatsArg(&iArg, &kills) ||
 		   !CG_NitmodStatsArg(&iArg, &deaths) ||
 		   cnum < 0 || cnum >= MAX_CLIENTS) return;
-		float acc = (atts > 0) ? (float)(hits*100)/(float)atts : 0.0;
+		float acc = (atts > 0) ? (float)(100.0 * hits / atts) : 0.0;
 		char name[32];
 
 		if(fFull) {
 			BG_cleanName(cgs.clientinfo[cnum].name, name, 30, qfalse);
 			txt_dump(va("^3%s ^7%5.1f ^5%4d/%-4d ^2%5d ^1%6d ^7%s\n",
-							aWeaponInfo[iWeap-1].pszCode, acc, hits, atts, kills, deaths, name));
+							NITMOD_WeaponStatCode(iWeap-1), acc, hits, atts, kills, deaths, name));
 		} else {
 			BG_cleanName(cgs.clientinfo[cnum].name, name, 12, qfalse);
 			txt_dump(va("^3%s ^7%5.1f ^5%4d/%-4d ^2%3d ^1%3d ^7%s\n",
-							aWeaponInfo[iWeap-1].pszCode, acc, hits, atts, kills, deaths, name));
+							NITMOD_WeaponStatCode(iWeap-1), acc, hits, atts, kills, deaths, name));
 		}
 
 		if(!CG_NitmodStatsArg(&iArg, &iWeap)) return;
@@ -1948,10 +1969,10 @@ void CG_parseTopShotsStats_cmd(qboolean doTop, void (txt_dump)(char *))
 	if(!txt_dump || !CG_NitmodStatsArg(&iArg, &cClients) ||
 	   !CG_NitmodStatsArg(&iArg, &iWeap) ||
 	   !CG_NitmodStatsArg(&iArg, &wBestAcc) || cClients < 0 ||
-	   cClients > MAX_CLIENTS || iWeap < WS_KNIFE || iWeap >= WS_MAX) return;
+	   cClients > MAX_CLIENTS || iWeap < 0 || iWeap >= NITMOD_WeaponStatCount()) return;
 
 	txt_dump(va("Weapon accuracies for: ^3%s\n",
-							(iWeap >= WS_KNIFE && iWeap < WS_MAX) ? aWeaponInfo[iWeap].pszName : "UNKNOWN"));
+							NITMOD_WeaponStatName(iWeap)));
 
 	txt_dump("\n^3  Acc Hits/Atts Kills Deaths\n");
 	txt_dump(    "----------------------------------------------------------\n");
@@ -1969,7 +1990,7 @@ void CG_parseTopShotsStats_cmd(qboolean doTop, void (txt_dump)(char *))
 		   !CG_NitmodStatsArg(&iArg, &kills) ||
 		   !CG_NitmodStatsArg(&iArg, &deaths) ||
 		   cnum < 0 || cnum >= MAX_CLIENTS) return;
-		float acc = (atts > 0) ? (float)(hits*100)/(float)atts : 0.0;
+		float acc = (atts > 0) ? (float)(100.0 * hits / atts) : 0.0;
 		const char* color = (((doTop)?acc:((float)wBestAcc) + 0.999) >= ((doTop)?wBestAcc:acc)) ? "^3" : "^7";
 		char name[32];
 
@@ -2229,6 +2250,10 @@ static void CG_ServerCommand( void ) {
 	}
 	if ( !strcmp( cmd, "#" ) ) {
 		NITMOD_GameStateCommand();
+		return;
+	}
+	if ( !Q_stricmp( cmd, "nch" ) && NITMOD_ServerSupports( NITMOD_FEATURE_CLASS_HEALTH ) ) {
+		NITMOD_ClassHealthCommand();
 		return;
 	}
 	if(!Q_stricmp(cmd, "nsh") && NITMOD_ServerSupports(NITMOD_FEATURE_SHOVE_SOUND)) {
@@ -2630,7 +2655,7 @@ static void CG_ServerCommand( void ) {
 		int fadeTime = 0;	// default to instant start
 
 		Q_strncpyz( text, CG_Argv(2), MAX_SAY_TEXT );
-		if(text && strlen(text)){
+		if(text[0]){
 			fadeTime = atoi(text);
 		}
 
@@ -2642,7 +2667,7 @@ static void CG_ServerCommand( void ) {
 		int fadeTime = 0;	// default to instant start
 
 		Q_strncpyz( text, CG_Argv(2), MAX_SAY_TEXT );
-		if(text && strlen(text)){
+		if(text[0]){
 			fadeTime = atoi(text);
 		}
 
@@ -2654,7 +2679,7 @@ static void CG_ServerCommand( void ) {
 		int fadeTime = 0;	// default to instant stop
 
 		Q_strncpyz( text, CG_Argv(1), MAX_SAY_TEXT );
-		if(text && strlen(text)){
+		if(text[0]){
 			fadeTime = atoi(text);
 		}
 

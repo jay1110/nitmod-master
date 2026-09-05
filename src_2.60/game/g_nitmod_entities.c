@@ -1,11 +1,56 @@
 #include "g_local.h"
 #include "g_nitmod_entities.h"
+#include "g_nitmod_legacy_cvars.h"
 #include "nitmod_entity_array.h"
 
 /* Engine owns the entities. Registration order matches the original list;
  * a reused entity slot must be removed before it acquires a new owner. */
 static nitmodEntityArray_t satchels;
 static nitmodEntityArray_t landmines;
+
+static void G_NITMOD_ArtilleryHintThink( gentity_t *hint ) {
+	int i;
+
+	if( hint->count ) {
+		G_FreeEntity( hint );
+		return;
+	}
+	for( i = MAX_CLIENTS; i < level.num_entities; ++i ) {
+		gentity_t *shell = &g_entities[i];
+		if( shell->inuse && shell->s.eType == ET_MISSILE && shell->s.weapon == WP_ARTY &&
+			shell->parent == hint->parent && shell->s.pos.trTime == hint->s.pos.trTime ) {
+			hint->nextthink = level.time + 1000;
+			return;
+		}
+	}
+	/* Preserve the original one-second terminal state before unlink/free so
+	 * every snapshot observes a clean end to the marker's lifetime. */
+	hint->count = 1;
+	hint->nextthink = level.time + 1000;
+}
+
+void G_NITMOD_SpawnArtilleryHint( gentity_t *shell ) {
+	gentity_t *hint;
+
+	if( !shell || !shell->parent ||
+		G_NITMOD_LegacyCvarInteger( "g_artilleryHints", 1 ) != 1 ) {
+		return;
+	}
+	hint = G_Spawn();
+	hint->classname = "arty_hint";
+	hint->s.eType = ET_LANDMINESPOT_HINT; /* original Nitmod wire type 58 */
+	hint->s.teamNum = shell->parent->client ?
+		shell->parent->client->sess.sessionTeam : shell->s.teamNum;
+	hint->s.pos.trType = TR_STATIONARY;
+	hint->s.pos.trTime = shell->s.pos.trTime;
+	VectorCopy( shell->s.pos.trBase, hint->s.pos.trBase );
+	VectorCopy( shell->s.pos.trBase, hint->r.currentOrigin );
+	hint->parent = shell->parent;
+	hint->r.svFlags = SVF_BROADCAST;
+	hint->think = G_NITMOD_ArtilleryHintThink;
+	hint->nextthink = level.time + 1;
+	trap_LinkEntity( hint );
+}
 
 int G_NITMOD_ExplodeSatchels( gentity_t *owner, nitmodEntityRelease_t explode ) {
 	struct {

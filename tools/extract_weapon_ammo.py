@@ -1,8 +1,8 @@
 """Read original qagame ammoTableMP's verified ten-int prefix, ELF32.
 
 The full record is 72 bytes, NOT sizeof(native ammotable_t). Only the first
-40 bytes and the independently verified auto-reload flag at +56 are decoded;
-other later original fields have a different layout.
+40 bytes, damage/splash/radius at +40/+44/+48, and the independently
+verified auto-reload flag at +56 are decoded. Other fields differ.
 """
 import hashlib
 import json
@@ -37,6 +37,8 @@ def extract(root=ROOT, module='qagame'):
             result = {i: dict(zip(FIELDS, struct.unpack_from('<10i', data, offset + i * 72)))
                       for i in range(52)}
             for i, row in result.items():
+                row.update(zip(('damage', 'splashDamage', 'splashRadius'),
+                               struct.unpack_from('<3i', data, offset + i * 72 + 40)))
                 row['requiresAutoReloadSetting'] = struct.unpack_from('<i', data, offset + i * 72 + 56)[0]
             return result
     raise ValueError('unmapped ammo table')

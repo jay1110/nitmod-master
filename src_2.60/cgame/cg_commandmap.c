@@ -1,5 +1,6 @@
 #include "cg_local.h"
 #include "cg_nitmod_config.h"
+#include "cg_nitmod_hud.h"
 #include <limits.h>
 
 static mapEntityData_t mapEntities[MAX_GENTITIES];
@@ -286,6 +287,13 @@ void CG_ParseMapEntityInfo( int axis_number, int allied_number ) {
 static qboolean gridInitDone = qfalse;
 static vec2_t gridStartCoord, gridStep;
 
+/* Grid lines share the map's HUD transform, but remain one physical pixel thick. */
+static void CG_MapGridLine( vec4_t line, qboolean vertical ) {
+	CG_AdjustFrom640( &line[0], &line[1], &line[2], &line[3] );
+	line[vertical ? 2 : 3] = 1.f;
+	trap_R_DrawStretchPic( line[0], line[1], line[2], line[3], 0, 0, 0, 1, cgs.media.whiteShader );
+}
+
 static void CG_DrawGrid( float x, float y, float w, float h, mapScissor_t *scissor ) {
 	vec2_t step;
 	vec2_t dim_x, dim_y;
@@ -361,10 +369,7 @@ static void CG_DrawGrid( float x, float y, float w, float h, mapScissor_t *sciss
 			} else {
 				Vector4Set( line, x + grid_x, y + dim_y[0], 1.f, h );
 			}
-			line[0] *= cgs.screenXScale;
-			line[1] *= cgs.screenYScale;
-			line[3] *= cgs.screenYScale;
-			trap_R_DrawStretchPic( line[0], line[1], line[2], line[3], 0, 0, 0, 1, cgs.media.whiteShader );
+			CG_MapGridLine( line, qtrue );
 		}
 
 		for( ; grid_y < dim_y[1]; grid_y += step[1] )
@@ -388,10 +393,7 @@ static void CG_DrawGrid( float x, float y, float w, float h, mapScissor_t *sciss
 			} else {
 				Vector4Set( line, x + dim_x[0], y + grid_y, w, 1 );
 			}			
-			line[0] *= cgs.screenXScale;
-			line[1] *= cgs.screenYScale;
-			line[2] *= cgs.screenXScale;
-			trap_R_DrawStretchPic( line[0], line[1], line[2], line[3], 0, 0, 0, 1, cgs.media.whiteShader );
+			CG_MapGridLine( line, qfalse );
 		}
 		trap_R_SetColor( NULL );
 	} else {
@@ -438,10 +440,7 @@ static void CG_DrawGrid( float x, float y, float w, float h, mapScissor_t *sciss
 			trap_R_SetColor( gridColour );
 
 			Vector4Set( line, x + grid_x, y + dim_y[0], 1, dim_x[1] - dim_x[0] );
-			line[0] *= cgs.screenXScale;
-			line[1] *= cgs.screenYScale;
-			line[3] *= cgs.screenYScale;
-			trap_R_DrawStretchPic( line[0], line[1], line[2], line[3], 0, 0, 0, 1, cgs.media.whiteShader );
+			CG_MapGridLine( line, qtrue );
 		}
 
 		for( coord_int = -1; grid_y < dim_y[1]; grid_y += step[1], coord_int++ )
@@ -455,10 +454,7 @@ static void CG_DrawGrid( float x, float y, float w, float h, mapScissor_t *sciss
 			trap_R_SetColor( gridColour );
 
 			Vector4Set( line, x + dim_x[0], y + grid_y, dim_y[1] - dim_y[0], 1 );
-			line[0] *= cgs.screenXScale;
-			line[1] *= cgs.screenYScale;
-			line[2] *= cgs.screenXScale;
-			trap_R_DrawStretchPic( line[0], line[1], line[2], line[3], 0, 0, 0, 1, cgs.media.whiteShader );
+			CG_MapGridLine( line, qfalse );
 		}
 		trap_R_SetColor( NULL );
 	}
@@ -986,7 +982,8 @@ void CG_DrawMap( float x, float y, float w, float h, int mEntFilter, mapScissor_
 	exspawn = CG_DrawSpawnPointInfo( x, y, w, h, qfalse, scissor, -1 );
 
 	for(i = 0, mEnt = &mapEntities[0]; i < mapEntityCount; i++, mEnt++ ) {
-		if( mEnt->team != CG_LimboPanel_GetRealTeam() ) {
+		if( mEnt->team != CG_LimboPanel_GetRealTeam() &&
+			!(NITMOD_UsesOriginalProtocol() && snap->ps.persistant[PERS_TEAM] == TEAM_SPECTATOR) ) {
 			continue;
 		}
 
@@ -1003,7 +1000,8 @@ void CG_DrawMap( float x, float y, float w, float h, int mEntFilter, mapScissor_
 	CG_DrawMortarMarker( x, y, w, h, qtrue, scissor, exspawn );
 
 	for(i = 0, mEnt = &mapEntities[0]; i < mapEntityCount; i++, mEnt++ ) {
-		if( mEnt->team != CG_LimboPanel_GetRealTeam() ) {
+		if( mEnt->team != CG_LimboPanel_GetRealTeam() &&
+			!(NITMOD_UsesOriginalProtocol() && snap->ps.persistant[PERS_TEAM] == TEAM_SPECTATOR) ) {
 			continue;
 		}
 
@@ -1017,6 +1015,7 @@ void CG_DrawMap( float x, float y, float w, float h, int mEntFilter, mapScissor_
 }
 
 void CG_DrawExpandedAutoMap( void ) {
+	nitmodHudAnchor_t previous;
 	float x, y, w, h;
 	float b_x, b_y, b_w, b_h;
 	float s1, t1, s2, t2;
@@ -1043,6 +1042,7 @@ void CG_DrawExpandedAutoMap( void ) {
 		}
 	}
 
+	previous = CG_NitmodHudAnchor(NITMOD_HUD_RIGHT);
 	CG_DrawMap( x, y, w, h, cgs.ccFilter, NULL, qfalse, .7f, qfalse );
 
 	// Draw the border
@@ -1136,6 +1136,7 @@ void CG_DrawExpandedAutoMap( void ) {
 	b_h = h;
 	CG_AdjustFrom640( &b_x, &b_y, &b_w, &b_h );
 	trap_R_DrawStretchPic( b_x, b_y, b_w, b_h, s1, t1, s2, t2, cgs.media.commandCentreAutomapBorder2Shader );
+	CG_NitmodHudAnchor(previous);
 }
 
 void CG_DrawAutoMap( void ) {
@@ -1153,14 +1154,14 @@ void CG_DrawAutoMap( void ) {
 	y = 20;
 	w = 100;
 	h = 100;
-	if ( NITMOD_UsesOriginalProtocol() ) {
+	if ( NITMOD_UsesNitmodHud() ) {
 		x = 54; y = 390; w = h = 70;
 		if ( cgs.autoMapExpanded || cg.time - cgs.autoMapExpandTime < 250 ) {
 			CG_DrawExpandedAutoMap();
 		}
 	}
 
-	if ( NITMOD_UsesOriginalProtocol() ) {
+	if ( NITMOD_UsesNitmodHud() ) {
 		/* Unlike ET, Nitmod does not slide or hide the compact map. */
 	} else if( cgs.autoMapExpanded ) {
 		if( cg.time - cgs.autoMapExpandTime < 100.f ) {

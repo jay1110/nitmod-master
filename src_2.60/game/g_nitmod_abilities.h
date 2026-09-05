@@ -7,6 +7,7 @@ struct gentity_s;
  * Invalid negative client numbers are rejected deliberately. */
 int G_NITMOD_IsDemoClient( int clientNum, int demoState, int demoClients );
 int G_NITMOD_CanCheckWeapons( const struct gentity_s *entity, int isDemoClient );
+unsigned int G_NITMOD_FirstAidUnlocks( const struct gclient_s *client );
 /* Adrenaline subset with original outer guards, not the complete original
  * weapon check (war mode and generic restrictions are separate). */
 int G_NITMOD_CheckAdrenaline( struct gentity_s *entity, int isDemoClient,

@@ -56,6 +56,16 @@ static int CheckWideUI(void) {
         if(width < 640) width = 640;
         offset = (width - 640) * .5f; sx = dc.xscale * 640 / width;
         if(fabs(UI_NitmodWideWidth(&dc) - width) > .001f) ++errors;
+        if(fabs(UI_NitmodWideX(&dc, 320.f) - width * .5f) > .001f ||
+           fabs(UI_NitmodWideXOffset(&dc) - offset) > .001f) ++errors;
+		{
+			rectDef_t transformed = {20, 30, 100, 60};
+			UI_NitmodWideRect(&dc, &transformed);
+			if(fabs(transformed.x - 20*sx) > .001f ||
+			   fabs(transformed.w - 100*sx) > .001f ||
+			   fabs(transformed.y - 30*dc.yscale) > .001f ||
+			   fabs(transformed.h - 60*dc.yscale) > .001f) ++errors;
+		}
         x = 20; y = 30; w = 100; h = 60;
         UI_AdjustFrom640(&x, &y, &w, &h);
         if(fabs(x - 20*sx) > .001f || fabs(w - 100*sx) > .001f ||

@@ -11,6 +11,7 @@
 #include "cg_nitmod_weapon_pose.h"
 #include "cg_nitmod_config.h"
 #include "cg_nitmod_events.h"
+#include "cg_nitmod_debug.h"
 #include "../game/bg_classes.h"
 #include "../game/nitmod_weapon_paths.h"
 
@@ -157,7 +158,7 @@ void CG_NitmodDrawMortarBipod(const weaponInfo_t *weapon, const refEntity_t *par
 }
 
 void CG_NitmodMissileMedia(const weaponInfo_t *weapon, int weaponNum, int team, refEntity_t *ent) {
-	if(weaponNum == WP_LANDMINE || weaponNum == WP_DYNAMITE) team %= 4;
+	if(weaponNum == WP_LANDMINE || weaponNum == WP_POISON_MINE || weaponNum == WP_DYNAMITE) team %= 4;
 	ent->hModel = weapon->missileModel;
 	ent->customSkin = 0;
 	if(team == TEAM_AXIS || team == TEAM_ALLIES) {
@@ -1649,20 +1650,88 @@ static qboolean CG_RW_ParseClient( int handle, weaponInfo_t *weaponInfo )
 /* Original Nitmod's cgame skips shared gameplay definitions. They are not
  * weaponInfo_t media fields. Keep malformed blocks bounded and release the
  * parser source through the same error path as the client block. */
-static qboolean CG_RW_SkipSharedDefinition( int handle ) {
+static int *CG_RW_AmmoField(ammotable_t *ammo, const char *name) {
+	if(!Q_stricmp(name, "maxammo")) return &ammo->maxammo;
+	if(!Q_stricmp(name, "maxclip")) return &ammo->maxclip;
+	if(!Q_stricmp(name, "defaultStartingAmmo")) return &ammo->defaultStartingAmmo;
+	if(!Q_stricmp(name, "defaultStartingClip")) return &ammo->defaultStartingClip;
+	if(!Q_stricmp(name, "reloadTime")) return &ammo->reloadTime;
+	if(!Q_stricmp(name, "fireDelayTime")) return &ammo->fireDelayTime;
+	if(!Q_stricmp(name, "nextShotTime")) return &ammo->nextShotTime;
+	if(!Q_stricmp(name, "maxHeat")) return &ammo->maxHeat;
+	if(!Q_stricmp(name, "coolRate")) return &ammo->coolRate;
+	return NULL;
+}
+
+static qboolean CG_RW_ParseSharedDefinition( int handle, qboolean selected,
+	weaponInfo_t *weaponInfo, ammotable_t *ammo ) {
 	pc_token_t token;
 	int depth = 1;
-	if( !trap_PC_ReadToken( handle, &token ) || strcmp( token.string, "{" ) ) {
+	if( !trap_PC_ReadToken( handle, &token ) || token.type == TT_STRING || strcmp( token.string, "{" ) ) {
 		return CG_RW_ParseError( handle, "expected '{'" );
 	}
 	while( trap_PC_ReadToken( handle, &token ) ) {
+		if(token.type == TT_STRING) continue; /* Shared names/messages are data. */
 		if( !strcmp( token.string, "{" ) ) ++depth;
 		else if( !strcmp( token.string, "}" ) && !--depth ) return qtrue;
+		else if( selected && depth == 1 ) {
+			int *field = CG_RW_AmmoField(ammo, token.string);
+			if(!Q_stricmp(token.string, "noMidclipReload")) {
+				weaponInfo->noMidclipReload = qtrue;
+			} else if(field) {
+				if( !trap_PC_ReadToken( handle, &token ) || token.type != TT_NUMBER )
+					return CG_RW_ParseError( handle, "expected numeric value for shared weapon field" );
+				*field = token.intvalue;
+			} else if(!Q_stricmp( token.string, "movementSpeedScale" )) {
+			if( !trap_PC_ReadToken( handle, &token ) || token.type != TT_NUMBER )
+				return CG_RW_ParseError( handle, "expected numeric movementSpeedScale" );
+			weaponInfo->movementSpeedScale = token.floatvalue;
+			} else if(!Q_stricmp(token.string, "recoilDuration")) {
+				if(!trap_PC_ReadToken(handle, &token) || token.type != TT_NUMBER)
+					return CG_RW_ParseError(handle, "expected numeric recoilDuration");
+				weaponInfo->customRecoilDuration = token.intvalue;
+				weaponInfo->customRecoilEnabled = qtrue;
+			} else if(!Q_stricmp(token.string, "recoilYaw") || !Q_stricmp(token.string, "recoilPitch")) {
+				qboolean yaw = !Q_stricmp(token.string, "recoilYaw");
+				if(!trap_PC_ReadToken(handle, &token) || token.type != TT_NUMBER)
+					return CG_RW_ParseError(handle, "expected numeric recoil angle");
+				if(yaw) weaponInfo->customRecoilYaw = token.floatvalue;
+				else weaponInfo->customRecoilPitch = token.floatvalue;
+				weaponInfo->customRecoilEnabled = qtrue;
+			} else if(!Q_stricmp(token.string, "SpreadScaleAdd") || !Q_stricmp(token.string, "SpreadScaleAddRand")) {
+				qboolean random = !Q_stricmp(token.string, "SpreadScaleAddRand");
+				if(!trap_PC_ReadToken(handle, &token) || token.type != TT_NUMBER)
+					return CG_RW_ParseError(handle, "expected numeric spread scale value");
+				if(random) weaponInfo->spreadScaleAddRand = token.intvalue;
+				else weaponInfo->spreadScaleAdd = token.intvalue;
+			} else if(!Q_stricmp(token.string, "spreadRatio")) {
+				if(!trap_PC_ReadToken(handle, &token) || token.type != TT_NUMBER)
+					return CG_RW_ParseError(handle, "expected numeric spreadRatio");
+				weaponInfo->spreadRatio = token.floatvalue;
+			} else if(!Q_stricmp(token.string, "velocity2spread") || !Q_stricmp(token.string, "viewchange2spread")) {
+				qboolean velocity = !Q_stricmp(token.string, "velocity2spread");
+				int value;
+				if(!trap_PC_ReadToken(handle, &token))
+					return CG_RW_ParseError(handle, "expected yes/no spread option");
+				if(!Q_stricmp(token.string, "yes")) value = 1;
+				else if(!Q_stricmp(token.string, "no")) value = 2;
+				else return CG_RW_ParseError(handle, "expected yes/no spread option");
+				if(velocity) weaponInfo->velocityToSpread = value;
+				else weaponInfo->viewChangeToSpread = value;
+			} else if(!Q_stricmp(token.string, "KillMessage") || !Q_stricmp(token.string, "KillMessage2")) {
+				qboolean suffix = !Q_stricmp(token.string, "KillMessage2");
+				if(!trap_PC_ReadToken(handle, &token))
+					return CG_RW_ParseError(handle, "expected custom kill message");
+				Q_strncpyz(suffix ? weaponInfo->killMessage2 : weaponInfo->killMessage,
+					token.string, suffix ? sizeof(weaponInfo->killMessage2) : sizeof(weaponInfo->killMessage));
+			}
+		}
 	}
 	return CG_RW_ParseError( handle, "unterminated shared weapon definition" );
 }
 
-static qboolean CG_RegisterWeaponFromWeaponFile( const char *filename, weaponInfo_t *weaponInfo )
+static qboolean CG_RegisterWeaponFromWeaponFile( const char *filename,
+	weaponInfo_t *weaponInfo, qboolean alternate, ammotable_t *ammo )
 {
 	pc_token_t token;
 	int handle;
@@ -1699,7 +1768,13 @@ static qboolean CG_RegisterWeaponFromWeaponFile( const char *filename, weaponInf
 			clientComplete = qtrue;
 		} else if( !Q_stricmp( token.string, "both" ) ||
 			!Q_stricmp( token.string, "both_altweap" ) ) {
-			if( !CG_RW_SkipSharedDefinition( handle ) ) return qfalse;
+			qboolean selected = !Q_stricmp(token.string, "both_altweap") ? alternate : !alternate;
+			if( !CG_RW_ParseSharedDefinition( handle, selected, weaponInfo, ammo ) ) return qfalse;
+		} else if( !Q_stricmp( token.string, "server" ) ) {
+			/* Some server override packs keep a server-only block in the same
+			 * .weap file.  It is not client media and must be consumed, not
+			 * rejected; qagame parses its authoritative values separately. */
+			if( !CG_RW_ParseSharedDefinition( handle, qfalse, weaponInfo, ammo ) ) return qfalse;
 		} else {
 			return CG_RW_ParseError( handle, "unknown token '%s'", token.string );
 		}
@@ -1710,38 +1785,38 @@ static qboolean CG_RegisterWeaponFromWeaponFile( const char *filename, weaponInf
 	return qtrue;
 }
 
+float CG_NitmodWeaponMovementScale(int weapon) {
+	if(weapon <= WP_NONE || weapon >= WP_NUM_WEAPONS ||
+		!cg_weapons[weapon].registered) return 0.f;
+	return cg_weapons[weapon].movementSpeedScale;
+}
+
 /*
 =================
 CG_RegisterWeapon
 =================
 */
-/* Private wire identities retain separate typed media, never alias an ET
- * gameplay weapon or change the shared engine ABI. */
-static weaponInfo_t nitmodPrivateMedia[4];
-static const int nitmodPrivateIds[4] = {47, 48, 50, 51};
+/* All original extensions now use the same typed media as inventory/rendering.
+ * Keep the wire-facing accessor without loading a duplicate private pool. */
 const weaponInfo_t *CG_NitmodPrivateWeaponMedia(int wireWeapon) {
-	int i;
-	for(i = 0; i < 4; ++i)
-		if(nitmodPrivateIds[i] == wireWeapon && nitmodPrivateMedia[i].registered)
-			return &nitmodPrivateMedia[i];
-	return NULL;
+	int weapon;
+	if(!NITMOD_UsesOriginalProtocol() ||
+		(wireWeapon != 47 && wireWeapon != 48 && wireWeapon != 50 && wireWeapon != 51)) return NULL;
+	weapon = NITMOD_WeaponFromWire(wireWeapon);
+	return weapon > WP_NONE && weapon < WP_NUM_WEAPONS && cg_weapons[weapon].registered ? &cg_weapons[weapon] : NULL;
 }
 void CG_NitmodRegisterPrivateWeaponMedia(void) {
-	static const char *files[4] = {"weapons/poison.weap", "weapons/bomb.weap",
-		"weapons/poisongas.weap", "weapons/landmine_pgas.weap"};
+	static const int weapons[] = {WP_POISON_SYRINGE, WP_BOMB, WP_POISON_BOMB, WP_POISON_MINE};
 	int i;
-	memset(nitmodPrivateMedia, 0, sizeof(nitmodPrivateMedia));
 	if(!NITMOD_UsesOriginalProtocol()) return;
-	for(i = 0; i < 4; ++i) {
-		weaponInfo_t *media = &nitmodPrivateMedia[i];
-		if(CG_RegisterWeaponFromWeaponFile(files[i], media)) media->registered = qtrue;
-		else memset(media, 0, sizeof(*media));
-	}
+	for(i = 0; i < sizeof(weapons) / sizeof(weapons[0]); ++i)
+		CG_RegisterWeapon(weapons[i], qfalse);
 }
 
 void CG_RegisterWeapon( int weaponNum, qboolean force ) {
 	weaponInfo_t	*weaponInfo;
 	weaponInfo_t previous;
+	ammotable_t parsedAmmo;
 	const char *filename;
 	const nitmodWeaponPath_t *path;
 
@@ -1755,6 +1830,7 @@ void CG_RegisterWeapon( int weaponNum, qboolean force ) {
 	}
 
 	previous = *weaponInfo;
+	parsedAmmo = ammoTableMP[weaponNum];
 	memset( weaponInfo, 0, sizeof( *weaponInfo ) );
 	weaponInfo->registered = qtrue;
 
@@ -1771,13 +1847,19 @@ void CG_RegisterWeapon( int weaponNum, qboolean force ) {
 		return;
 	}
 
-	if( !CG_RegisterWeaponFromWeaponFile( va( "weapons/%s", filename ), weaponInfo ) ) {
+	if( !CG_RegisterWeaponFromWeaponFile( va( "weapons/%s", filename ), weaponInfo,
+		path ? !!path->alternate : qfalse, &parsedAmmo ) ) {
 		// Never expose a half-parsed model hierarchy. Keep a prior valid
 		// registration on forced reload; otherwise retain an empty cached failure.
 		if(previous.registered) *weaponInfo = previous;
 		else memset(weaponInfo, 0, sizeof(*weaponInfo));
 		weaponInfo->registered = qtrue;
 		CG_Printf( S_COLOR_RED "WARNING: failed to register media for weapon %i from %s\n", weaponNum, filename );
+	} else {
+		/* Commit shared prediction values only after the complete definition and
+		 * client media block parsed successfully. Custom PK3 overrides therefore
+		 * cannot leave a half-updated global ammo record. */
+		ammoTableMP[weaponNum] = parsedAmmo;
 	}
 }
 
@@ -1849,6 +1931,12 @@ qboolean CG_GetPartFramesFromWeap( centity_t *cent, refEntity_t *part, refEntity
 	unsigned int bit;
 	animation_t *anim;
 	if(!cent || !part || !parent || !wi || partid < 0 || partid > W_MAX_PARTS) return qfalse;
+	/* Debug animation switches freeze geometry; they must not make the
+	 * primary model disappear because no lerp animation was initialized. */
+	if(cg_noPlayerAnims.integer || !cg_animSpeed.integer) {
+		part->frame = part->oldframe = 0; part->backlerp = 0;
+		return qtrue;
+	}
 	animationNumber = cent->pe.weap.animationNumber & ~ANIM_TOGGLEBIT;
 	if(animationNumber < 0 || animationNumber >= MAX_WP_ANIMATIONS) return qfalse;
 	anim = cent->pe.weap.animation;
@@ -1950,7 +2038,11 @@ void CG_RunWeapLerpFrame( clientInfo_t *ci, weaponInfo_t *wi, lerpFrame_t *lf, i
 	}
 
 	// see if the animation sequence is switching
-	if(!lf->animation ) {
+	/* A weapon switch can keep the same animation number (notably idle).
+	 * Never animate the new hand model with the previous weapon's frames. */
+	if(!lf->animation || (lf->animationNumber & ~ANIM_TOGGLEBIT) < 0 ||
+	   (lf->animationNumber & ~ANIM_TOGGLEBIT) >= MAX_WP_ANIMATIONS ||
+	   lf->animation != &wi->weapAnimations[lf->animationNumber & ~ANIM_TOGGLEBIT]) {
 		CG_ClearWeapLerpFrame(wi, lf, newAnimation );
 	}
 	else if ( newAnimation != lf->animationNumber ) {
@@ -2133,7 +2225,7 @@ static void CG_CalculateWeaponPosition( vec3_t origin, vec3_t angles ) {
 		VectorMA(origin, angles[ROLL], right, origin);
 
 		// pitch the gun down a bit to show that firing is not allowed when leaning
-		angles[PITCH] += (abs(cg.predictedPlayerState.leanf)/2.0f);
+		angles[PITCH] += fabsf(cg.predictedPlayerState.leanf) / 2.0f;
 
 		// this gives you some impression that the weapon stays in relatively the same
 		// position while you lean, so you appear to 'peek' over the weapon
@@ -2214,6 +2306,13 @@ CG_AddWeaponWithPowerups
 ========================
 */
 static void CG_AddWeaponWithPowerups( refEntity_t *gun, int powerups, playerState_t *ps, centity_t *cent ) {
+	qhandle_t viewShader;
+	/* cg_drawGun 2..6 are original Nitmod model-inspection modes.  Apply the
+	 * override centrally so the hand weapon, linked parts and mounted model
+	 * cannot disagree. Third-person/world weapons retain their own skins. */
+	if(ps && !cg.renderingThirdPerson &&
+		(viewShader = CG_NitmodViewWeaponShader(cg_drawGun.integer)) != 0)
+		gun->customShader = viewShader;
 	// add powerup effects
 	// DHM - Nerve :: no powerup effects on weapons
 	trap_R_AddRefEntityToScene( gun );
@@ -2254,7 +2353,8 @@ void CG_AddPlayerWeapon( refEntity_t *parent, playerState_t *ps, centity_t *cent
 	// (SA) might as well have this check consistant throughout the routine
 	isPlayer = (qboolean)(cent->currentState.clientNum == cg.snap->ps.clientNum);
 
-	weaponNum = cent->currentState.weapon;
+	weaponNum = ps ? ps->weapon : cent->currentState.weapon;
+	if(weaponNum <= WP_NONE || weaponNum >= WP_NUM_WEAPONS) return;
 
 	if(ps && cg.cameraMode) {
 		return;
@@ -2408,18 +2508,18 @@ void CG_AddPlayerWeapon( refEntity_t *parent, playerState_t *ps, centity_t *cent
 	if( drawpart ) {
 		if( weaponNum == WP_AMMO ) {
 			if( ps ) {
-				if( cgs.clientinfo[ ps->clientNum ].skill[ SK_SIGNALS ] >= 1 ) {
+				if( NITMOD_ClientSkillUnlocked(ps->clientNum, SK_SIGNALS, 1) ) {
 					gun.customShader = weapon->modModels[0];
 				}
 			} else {
-				if( cgs.clientinfo[ cent->currentState.clientNum ].skill[ SK_SIGNALS ] >= 1 ) {
+				if( NITMOD_ClientSkillUnlocked(cent->currentState.clientNum, SK_SIGNALS, 1) ) {
 					gun.customShader = weapon->modModels[0];
 				}
 			}
 		}
 		if( !ps ) {
 			if( weaponNum == WP_MEDIC_SYRINGE ) {
-				if( cgs.clientinfo[ cent->currentState.clientNum ].skill[ SK_FIRST_AID ] >= 3 ) {
+				if( NITMOD_ClientSkillUnlocked(cent->currentState.clientNum, SK_FIRST_AID, 3) ) {
 					gun.customShader = weapon->modModels[ 0 ];
 				}
 			}
@@ -2515,7 +2615,7 @@ void CG_AddPlayerWeapon( refEntity_t *parent, playerState_t *ps, centity_t *cent
 				if( drawpart ) {
 
 					if( weaponNum == WP_MEDIC_SYRINGE && i == W_PART_1 ) {
-						if( cgs.clientinfo[ ps->clientNum ].skill[ SK_FIRST_AID ] >= 3 ) {
+						if( NITMOD_ClientSkillUnlocked(ps->clientNum, SK_FIRST_AID, 3) ) {
 							barrel.customShader = weapon->modModels[ 0 ];
 						}
 					}
@@ -2757,6 +2857,10 @@ void CG_AddPlayerWeapon( refEntity_t *parent, playerState_t *ps, centity_t *cent
 		weaponNum == WP_SATCHEL ||
 		weaponNum == WP_SATCHEL_DET ||
 		weaponNum == WP_TRIPMINE ||
+		weaponNum == WP_BOMB ||
+		weaponNum == WP_POISON_SYRINGE ||
+		weaponNum == WP_POISON_BOMB ||
+		weaponNum == WP_POISON_MINE ||
 		weaponNum == WP_SMOKE_BOMB ||
 		weaponNum == WP_MEDIC_SYRINGE ||
 		weaponNum == WP_MEDIC_ADRENALINE
@@ -3072,6 +3176,9 @@ CG_WeaponSelectable
 */
 qboolean CG_WeaponSelectable( int i ) {
 	if(i < WP_NONE || i >= WP_NUM_WEAPONS) return qfalse;
+	/* Original CG_WeaponSelectable accepts the unarmed sentinel before
+	 * mounted/ownership/ammunition checks. Keep native ET behavior below. */
+	if(i == WP_NONE && NITMOD_UsesOriginalProtocol()) return qtrue;
 
 	// allow the player to unselect all weapons
 //	if(i == WP_NONE)
@@ -3591,7 +3698,7 @@ void CG_AltWeapon_f(void)
 		}
 	}
 
-	if(cg.time - cg.weaponSelectTime < cg_weaponCycleDelay.integer)
+	if((double)cg.time - cg.weaponSelectTime < cg_weaponCycleDelay.integer)
 		return;	// force pause so holding it down won't go too fast
 
 	// Don't try to switch when in the middle of reloading.
@@ -3995,7 +4102,7 @@ void CG_LastWeaponUsed_f( void ) {
 		return;
 	}
 
-	if(cg.time - cg.weaponSelectTime < cg_weaponCycleDelay.integer)
+	if((double)cg.time - cg.weaponSelectTime < cg_weaponCycleDelay.integer)
 		return;	// force pause so holding it down won't go too fast
 
 	if( cg.weaponSelect == WP_MORTAR_SET || cg.weaponSelect == WP_MOBILE_MG42_SET ) {
@@ -4036,7 +4143,7 @@ void CG_NextWeaponInBank_f ( void ) {
 		return;
 	}
 
-	if(cg.time - cg.weaponSelectTime < cg_weaponCycleDelay.integer)
+	if((double)cg.time - cg.weaponSelectTime < cg_weaponCycleDelay.integer)
 		return;	// force pause so holding it down won't go too fast
 	
 	// this cvar is an option that lets the player use his weapon switching keys (probably the mousewheel)
@@ -4070,7 +4177,7 @@ void CG_PrevWeaponInBank_f ( void ) {
 		return;
 	}
 
-	if(cg.time - cg.weaponSelectTime < cg_weaponCycleDelay.integer)
+	if((double)cg.time - cg.weaponSelectTime < cg_weaponCycleDelay.integer)
 		return;	// force pause so holding it down won't go too fast
 	
 	// this cvar is an option that lets the player use his weapon switching keys (probably the mousewheel)
@@ -4130,7 +4237,7 @@ void CG_NextWeapon_f( void ) {
 		}
 	}
 
-	if(cg.time - cg.weaponSelectTime < cg_weaponCycleDelay.integer)
+	if((double)cg.time - cg.weaponSelectTime < cg_weaponCycleDelay.integer)
 		return;	// force pause so holding it down won't go too fast
 
 	cg.weaponSelectTime = cg.time;	// flash the current weapon icon
@@ -4188,7 +4295,7 @@ void CG_PrevWeapon_f( void ) {
 		}
 	}
 
-	if(cg.time - cg.weaponSelectTime < cg_weaponCycleDelay.integer)
+	if((double)cg.time - cg.weaponSelectTime < cg_weaponCycleDelay.integer)
 		return;	// force pause so holding it down won't go too fast
 	
 	cg.weaponSelectTime = cg.time;	// flash the current weapon icon
@@ -4224,7 +4331,7 @@ void CG_WeaponBank_f(void) {
 	if ( cg.snap->ps.pm_flags & PMF_FOLLOW )
 		return;
 
-	if(cg.time - cg.weaponSelectTime < cg_weaponCycleDelay.integer)
+	if((double)cg.time - cg.weaponSelectTime < cg_weaponCycleDelay.integer)
 		return;	// force pause so holding it down won't go too fast
 	
 	if( cg.weaponSelect == WP_MORTAR_SET || cg.weaponSelect == WP_MOBILE_MG42_SET ) {
@@ -6152,7 +6259,7 @@ void CG_Bullet( vec3_t end, int sourceEntityNum, vec3_t normal, qboolean flesh, 
 		VectorSubtract(tmpv, origin, tmpv2);
 		headshot = (VectorLength(tmpv2) < 10);
 
-		if (headshot && cg_blood.integer) {
+		if (headshot && cg_gibs.integer) {
 			for (i=0;i<5;i++) {
 				rnd = random();
 				VectorScale(smokedir,25.0+random()*25,tmpv);
@@ -6193,7 +6300,7 @@ void CG_Bullet( vec3_t end, int sourceEntityNum, vec3_t normal, qboolean flesh, 
 		}
 
 		// if we haven't dropped a blood spat in a while, check if this is a good scenario
-		if (cg_blood.integer && (lastBloodSpat > cg.time || lastBloodSpat < cg.time - 500) )
+		if (cg_gibs.integer && (lastBloodSpat > cg.time || lastBloodSpat < cg.time - 500) )
 		{
 			vec4_t	color;
 			

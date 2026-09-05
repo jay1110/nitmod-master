@@ -20,7 +20,7 @@ int main( void ) {
         ++count;
         alternatives += path->alternate;
     }
-    CHECK( count == 44 && alternatives == 4 );
+    CHECK( count == 48 && alternatives == 4 );
     CHECK( !NITMOD_WeaponPath(-1) && !NITMOD_WeaponPath(INT_MIN) );
     CHECK( !NITMOD_WeaponPath(WP_NUM_WEAPONS) && !NITMOD_WeaponPath(INT_MAX) );
     CHECK( !strcmp(NITMOD_WeaponPath(WP_MORTAR_SET)->filename, "mortar_set.weap") );

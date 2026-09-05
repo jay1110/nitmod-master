@@ -1,5 +1,6 @@
 #include "g_local.h"
 #include "g_nitmod_config.h"
+#include "g_nitmod_legacy_cvars.h"
 
 
 void InitTrigger( gentity_t *self) {
@@ -526,6 +527,7 @@ void heal_touch( gentity_t *self, gentity_t *other, trace_t *trace ) {
 		}
 
 		touchClients[i]->health += healvalue;
+		G_NITMOD_CurePoisonFromHealth(touchClients[i], NULL, qtrue);
 		// add the medicheal event (to get sound, etc.)
 		G_AddPredictableEvent( other, EV_ITEM_PICKUP, BG_FindItemForClassName("item_health_cabinet")-bg_itemlist );
 
@@ -759,7 +761,16 @@ SP_misc_cabinet_supply
 */
 /*QUAKED misc_cabinet_supply (.5 .5 .5) (-20 -20 0) (20 20 60)
 */
-void SP_misc_cabinet_supply( gentity_t* self ) {	
+void SP_misc_cabinet_supply( gentity_t* self ) {
+	/* Original Deathmatch option: remove map supply cabinets before they are
+	 * linked or exposed to clients. Trigger-based ammo/health entities remain
+	 * independent and retain their map-defined behavior. */
+	if( g_gametype.integer == GT_WOLF_DM &&
+		(G_NITMOD_LegacyCvarInteger("g_DMOptions", 0) & 128) ) {
+		G_FreeEntity(self);
+		return;
+	}
+
 	VectorSet (self->r.mins, -20, -20, 0);
 	VectorSet (self->r.maxs, 20, 20, 60);
 

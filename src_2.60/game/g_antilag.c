@@ -1,4 +1,5 @@
 #include "g_local.h"
+#include "g_nitmod_legacy_cvars.h"
 
 void G_StoreClientPosition( gentity_t* ent ) {
 	int	top;
@@ -139,6 +140,33 @@ void G_ResetMarkers( gentity_t* ent ) {
 	}
 }
 
+/* Recovered nitrox_HitboxHeight (qagame 0x0010f460). */
+float G_NITMOD_HitboxHeight( const gentity_t *target, const gentity_t *attacker ) {
+	int realBody;
+	int flags;
+
+	if ( !target ) return 0.0f;
+	if ( !target->client ) return target->r.maxs[2];
+
+	realBody = G_NITMOD_LegacyCvarInteger( "g_realBody", 0 );
+	flags = target->client->ps.eFlags;
+	if ( !( flags & ( EF_DEAD | EF_PRONE | EF_SPARE0 ) ) ) {
+		if ( !( flags & EF_CROUCHING ) )
+			return ( realBody & 2 ) ? 36.0f : 48.0f;
+		if ( realBody & 8 ) return 18.0f;
+	} else {
+		if ( attacker && attacker->client &&
+			( attacker->s.weapon == WP_POISON_SYRINGE ||
+			  attacker->s.weapon == WP_MEDIC_SYRINGE ||
+			  attacker->s.weapon == WP_KNIFE ) )
+			return 32.0f;
+		if ( ( realBody & 4 ) ||
+			G_NITMOD_LegacyCvarInteger( "g_hitboxes", 0 ) )
+			return 4.0f;
+	}
+	return 24.0f;
+}
+
 void G_AttachBodyParts(gentity_t* ent) {
 	int	i;
 	gentity_t	*list;
@@ -153,12 +181,23 @@ void G_AttachBodyParts(gentity_t* ent) {
  			(list->health > 0) &&
  			!(list->client->ps.pm_flags & PMF_LIMBO) &&
 			(list->client->ps.pm_type == PM_NORMAL)
- 		) {
+		) {
 			list->client->tempHead = G_BuildHead( list );
 			list->client->tempLeg = G_BuildLeg( list );
+			VectorCopy( list->r.mins, list->client->nitmodSavedBodyMins );
+			VectorCopy( list->r.maxs, list->client->nitmodSavedBodyMaxs );
+			list->client->nitmodBodyBoundsAdjusted = qtrue;
+			if ( G_NITMOD_LegacyCvarInteger( "g_realBody", 0 ) & 1 ) {
+				list->r.mins[0] += 3.0f;
+				list->r.mins[1] += 3.0f;
+				list->r.maxs[0] -= 3.0f;
+				list->r.maxs[1] -= 3.0f;
+			}
+			list->r.maxs[2] = G_NITMOD_HitboxHeight( list, ent );
 		} else {
 			list->client->tempHead = NULL;
 			list->client->tempLeg = NULL;
+			list->client->nitmodBodyBoundsAdjusted = qfalse;
 		}
 	}
 }
@@ -174,6 +213,11 @@ void G_DettachBodyParts() {
 		}
 		if( list->client->tempLeg ) {
 			G_FreeEntity( list->client->tempLeg );
+		}
+		if ( list->client->nitmodBodyBoundsAdjusted ) {
+			VectorCopy( list->client->nitmodSavedBodyMins, list->r.mins );
+			VectorCopy( list->client->nitmodSavedBodyMaxs, list->r.maxs );
+			list->client->nitmodBodyBoundsAdjusted = qfalse;
 		}
 	}
 }

@@ -71,6 +71,14 @@ tryagain:
 		weaponNum = WP_MP40;
 		goto tryagain;
 	}
+	/* Nitmod throwable previews have complete world models but deliberately no
+	 * muzzle-flash companion. Do not probe a synthetic *_flash.md3 path or
+	 * replace a valid private weapon preview with the MP40 fallback. */
+	if(weaponNum == WP_BOMB || weaponNum == WP_POISON_BOMB ||
+		weaponNum == WP_POISON_MINE || weaponNum == WP_TRIPMINE) {
+		VectorClear(pi->flashDlightColor);
+		return;
+	}
 
 	strcpy( path, item->world_model[0] );
 	COM_StripExtension( path, path );

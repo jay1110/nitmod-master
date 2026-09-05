@@ -15,7 +15,7 @@ void G_NITMOD_RemoveWeapons( gclient_t *client ) {
         WP_GRENADE_LAUNCHER, WP_BINOCULARS, WP_PLIERS, WP_DYNAMITE,
         WP_LANDMINE, WP_MEDIC_ADRENALINE, WP_MEDIC_SYRINGE, WP_MEDKIT,
         WP_AMMO, WP_ARTY, WP_SMOKE_MARKER, WP_SMOKE_BOMB, WP_SATCHEL,
-        WP_TRIPMINE
+        WP_TRIPMINE, WP_BOMB, WP_POISON_SYRINGE, WP_POISON_BOMB, WP_POISON_MINE
     };
     unsigned int words[sizeof(client->ps.weapons) / sizeof(client->ps.weapons[0])];
     unsigned int i;

@@ -46,6 +46,26 @@ static int CheckWeaponLerp(void) {
     CG_RunWeapLerpFrame(NULL, &weapon, &lf, 1 | ANIM_TOGGLEBIT, 1);
     if(lf.animationNumber != (1 | ANIM_TOGGLEBIT) || lf.animationTime != 2147483647 ||
        lf.frame < 30 || lf.frame > 33 || !(lf.backlerp >= 0 && lf.backlerp <= 1)) ++errors;
+    {
+        static weaponInfo_t previousWeapon;
+        int animation;
+        memset(&previousWeapon, 0, sizeof(previousWeapon));
+        for(animation = 0; animation < MAX_WP_ANIMATIONS; ++animation) {
+            memset(&lf, 0, sizeof(lf));
+            previousWeapon.weapAnimations[animation].firstFrame = 900;
+            previousWeapon.weapAnimations[animation].numFrames = 20;
+            previousWeapon.weapAnimations[animation].frameLerp = 50;
+            weapon.weapAnimations[animation].firstFrame = 0;
+            weapon.weapAnimations[animation].numFrames = 1;
+            weapon.weapAnimations[animation].frameLerp = 50;
+            weapon.weapAnimations[animation].initialLerp = 50;
+            lf.animation = &previousWeapon.weapAnimations[animation];
+            lf.animationNumber = animation; lf.frame = lf.oldFrame = 900;
+            cg.time = 100;
+            CG_RunWeapLerpFrame(NULL, &weapon, &lf, animation, 1);
+            if(lf.animation != &weapon.weapAnimations[animation] || lf.frame || lf.oldFrame) ++errors;
+        }
+    }
     cg.snap = savedSnap; cg.time = savedTime; cg_animSpeed.integer = savedSpeed; cg_debugAnim.integer = savedDebug;
     return errors;
 }

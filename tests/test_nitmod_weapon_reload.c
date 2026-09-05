@@ -517,7 +517,7 @@ static int TestReloadDecision( void ) {
             ++count;
         }
     }
-    CHECK(count == 28512);
+    CHECK(count == 31104);
     decision.action = NITMOD_RELOAD_ACTION_UNSCOPE; decision.weapon = -17;
     CHECK(!NITMOD_DecideReload(NULL, WP_COLT, &policy, table, WP_NUM_WEAPONS, &decision));
     CHECK(!NITMOD_DecideReload(&state, WP_COLT, NULL, table, WP_NUM_WEAPONS, &decision));
@@ -585,7 +585,7 @@ static int TestReloadInput( void ) {
             CHECK(!policy.manualRequested);
         }
     }
-    CHECK(supported == 44 && exempt == 23);
+    CHECK(supported == 48 && exempt == 27);
     return 0;
 }
 

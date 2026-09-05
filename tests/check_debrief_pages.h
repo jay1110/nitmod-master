@@ -20,7 +20,7 @@ static int CheckDebriefPages(void) {
     panel_button_t focus;
     panel_button_t *savedFocus = BG_PanelButtons_GetFocusButton();
     int protocol, game, options, flags, step, expected, count, enabled, errors = 0, oldTime = cg.time;
-    const int pages[] = {3,1,2,0};
+    const int pages[] = {1,2,3,0};
     saved = cgs; memset(&focus, 0, sizeof(focus)); dllEntry(DebriefEngine);
     cgs.gameState.stringOffsets[CS_SERVERINFO] = 1;
     for(protocol = 0; protocol < 2; ++protocol) for(game = 3; game <= 8; ++game)
@@ -33,7 +33,7 @@ static int CheckDebriefPages(void) {
         if(CG_NitmodMapVoteEnabled() != enabled) ++errors;
         cgs.dbMode = 0;
         for(step = 0; step < 12; ++step) {
-            expected = enabled ? pages[step % 4] : (step + 1) % 3;
+            expected = enabled ? pages[step % 4] : 1 + (step % 3);
             BG_PanelButtons_SetFocusButton(&focus);
             if(CG_Debriefing_NextButton_KeyDown(NULL, K_ENTER) || BG_PanelButtons_GetFocusButton() != &focus) ++errors;
             if(!CG_Debriefing_NextButton_KeyDown(NULL, K_MOUSE1) || cgs.dbMode != expected || BG_PanelButtons_GetFocusButton()) ++errors;

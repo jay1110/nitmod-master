@@ -2,6 +2,7 @@
 // -------------------------------------------
 //
 #include "g_local.h"
+#include <limits.h>
 #include "../../pak/ui/menudef.h"
 
 int iWeap = WS_MAX;
@@ -21,6 +22,12 @@ typedef struct {
 	const char *pszHelpInfo;
 } cmd_reference_t;
 
+/* The command table returns void, while the referee vote API returns a
+ * status. A function-pointer cast is not a signature adapter on WASM. */
+static void G_CallVoteCommand(gentity_t *ent, unsigned int command, qboolean value) {
+	(void)Cmd_CallVote_f(ent, command, value);
+}
+
 // VC optimizes for dup strings :)
 static const cmd_reference_t aCommandInfo[] = {
 	{ "+stats",			qtrue,	qtrue,	NULL, ":^7 HUD overlay showing current weapon stats info" },
@@ -30,7 +37,7 @@ static const cmd_reference_t aCommandInfo[] = {
 	{ "autoscreenshot",	qtrue,	qtrue,	NULL, ":^7 Creates a screenshot with a consistent naming scheme" },
 	{ "bottomshots",	qtrue,	qfalse,	G_weaponRankings_cmd, ":^7 Shows WORST player for each weapon. Add ^3<weapon_ID>^7 to show all stats for a weapon" },
 //	{ "callvote",		qtrue,	qfalse,	Cmd_CallVote_f, " <params>:^7 Calls a vote" },
-	{ "callvote",		qtrue,	qfalse,	(void(*)(gentity_t *, unsigned int, qboolean))Cmd_CallVote_f, " <params>:^7 Calls a vote" },
+	{ "callvote",		qtrue,	qfalse,	G_CallVoteCommand, " <params>:^7 Calls a vote" },
 //	{ "captains",		qtrue,	qtrue,	NULL, ":^7 Shows team captains" },
 //	{ "coach",			qtrue,	qtrue,	NULL, ":^7 Accepts coach invitation/restarts coach view" },
 //	{ "coachdecline",	qtrue,	qtrue,	NULL, ":^7 Declines coach invitation or resigns coach status" },
@@ -625,6 +632,14 @@ int QDECL SortStats( const void *a, const void *b )
 }
 
 // Shows the most accurate players for each weapon to the requesting client
+static int G_StatsAccuracyBucket(float accuracy) {
+	/* Float rounds INT_MAX upward on both native and WASM. Do not cast
+     * that rounded value (or a larger multi-hit percentage) to int. */
+	if((double)accuracy >= (double)INT_MAX) return INT_MAX;
+	if(!(accuracy > 0)) return 0;
+	return (int)accuracy;
+}
+
 void G_weaponStatsLeaders_cmd(gentity_t* ent, qboolean doTop, qboolean doWindow)
 {
 	int i, iWeap, shots, wBestAcc, cClients, cPlaces;
@@ -650,7 +665,7 @@ void G_weaponStatsLeaders_cmd(gentity_t* ent, qboolean doTop, qboolean doWindow)
 				acc = (float)((cl->sess.aWeaponStats[iWeap].hits) * 100.0) / (float)shots;
 				aClients[cClients++] = level.sortedClients[i];
 				if(((doTop) ? acc : (float)wBestAcc) > ((doTop) ? wBestAcc : acc)) {
-					wBestAcc = (int)acc;
+					wBestAcc = G_StatsAccuracyBucket(acc);
 					cPlaces++;
 				}
 			}
@@ -663,14 +678,20 @@ void G_weaponStatsLeaders_cmd(gentity_t* ent, qboolean doTop, qboolean doWindow)
 			acc = (float)(cl->sess.aWeaponStats[iWeap].hits * 100.0) / (float)(cl->sess.aWeaponStats[iWeap].atts);
 
 			if(((doTop)?acc:(float)wBestAcc+0.999) >= ((doTop)?wBestAcc:acc)) {
-				Q_strcat(z, sizeof(z), va(" %d %d %d %d %d %d", iWeap+1, aClients[i],
+				char row[128];
+				Com_sprintf(row, sizeof(row), " %d %d %d %d %d %d", iWeap+1, aClients[i],
 																cl->sess.aWeaponStats[iWeap].hits,
 																cl->sess.aWeaponStats[iWeap].atts,
 																cl->sess.aWeaponStats[iWeap].kills,
-																cl->sess.aWeaponStats[iWeap].deaths));
+																cl->sess.aWeaponStats[iWeap].deaths);
+				/* Preserve complete rows plus the command prefix and sentinel
+                 * within the engine's reliable-command string limit. */
+				if(strlen(z) + strlen(row) + 16 >= sizeof(z)) goto sendLeaders;
+				Q_strcat(z, sizeof(z), row);
 			}
 		}
 	}
+sendLeaders:
 	CP(va("%sbstats%s %s 0", ((doWindow)?"w":""), ((doTop)?"":"b"), z));
 }
 
@@ -721,14 +742,17 @@ void G_weaponRankings_cmd(gentity_t *ent, unsigned int dwCommand, qboolean state
 		shots = cl->sess.aWeaponStats[iWeap].atts;
 		if(shots >= cQualifyingShots[iWeap]) {
 			float acc = (float)(cl->sess.aWeaponStats[iWeap].hits * 100.0) / (float)shots;
+			char row[128];
+			Com_sprintf(row, sizeof(row), " %d %d %d %d %d", level.sortedStats[i],
+				cl->sess.aWeaponStats[iWeap].hits, shots,
+				cl->sess.aWeaponStats[iWeap].kills, cl->sess.aWeaponStats[iWeap].deaths);
+			/* 64 players can exceed one reliable command. The advertised
+             * count must describe only the complete rows actually sent. */
+			if(strlen(z) + strlen(row) + 48 >= sizeof(z)) break;
 
 			c++;
-			wBestAcc = (((state)?acc:wBestAcc) > ((state)?wBestAcc:acc)) ? (int)acc : wBestAcc;
-			Q_strcat(z, sizeof(z), va(" %d %d %d %d %d", level.sortedStats[i],
-														 cl->sess.aWeaponStats[iWeap].hits,
-														 shots,
-														 cl->sess.aWeaponStats[iWeap].kills,
-														 cl->sess.aWeaponStats[iWeap].deaths));
+			wBestAcc = (((state)?acc:wBestAcc) > ((state)?wBestAcc:acc)) ? G_StatsAccuracyBucket(acc) : wBestAcc;
+			Q_strcat(z, sizeof(z), row);
 		}
 	}
 

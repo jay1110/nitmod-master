@@ -33,6 +33,8 @@ const nitmodMapEndStats_t *NITMOD_MapEndStats( void );
 const nitmodObjectiveEvent_t *NITMOD_LastObjectiveEvent( void );
 void NITMOD_SimpleConfigCommand( void );
 void NITMOD_GameStateCommand( void );
+void NITMOD_ClassHealthCommand( void );
+int NITMOD_ClassMaxHealth( int playerClass );
 void NITMOD_MapEndStatsCommand( void );
 void NITMOD_TeamScoresCommand( void );
 void NITMOD_TDMScoreLimitCommand( void );
@@ -52,6 +54,7 @@ void nitrox_ConfigStringModified( void );
 /* TAGCONNECT wire range; original Nitmod differs from native ET 2.60. */
 int NITMOD_TagConnectBase(void);
 qboolean NITMOD_UsesOriginalProtocol(void);
+qboolean NITMOD_UsesNitmodHud(void);
 int CG_NitmodEventDispatch(int wireEvent);
 /* Private dispatch result: original-only death4 handled before native switch. */
 #define NITMOD_EVENT_DEATH4 (-2)
@@ -69,6 +72,12 @@ const weaponInfo_t *CG_NitmodPrivateWeaponMedia(int wireWeapon);
 int NITMOD_HintFromWire(int hint);
 bg_playerclass_t *CG_NitmodPlayerClass(int team, int cls);
 int NITMOD_WeaponToWire(int weapon);
+int NITMOD_WeaponStatForWeapon(int weapon);
+int NITMOD_WeaponStatCount(void);
+const char *NITMOD_WeaponStatName(int stat);
+const char *NITMOD_WeaponStatCode(int stat);
+qboolean NITMOD_WeaponStatHasHeadshots(int stat);
+const char *NITMOD_ClientRankName(int team, int rank);
 void NITMOD_NormalizePredictedEvents(playerState_t *state);
 void NITMOD_TranslateSnapshotPersistant(snapshot_t *snapshot);
 typedef enum {
@@ -101,11 +110,16 @@ void NITMOD_DrawBanner(void);
 int NITMOD_ParseLatchedClass(const char *info, int currentClass);
 int NITMOD_ParseCountryCode(const char *value);
 void NITMOD_ParseClientExtras(const char *info, clientInfo_t *client);
+qboolean NITMOD_ClientSkillUnlocked(int client, int skill, int level);
+unsigned int NITMOD_NewSkillUnlocks(int oldMask, int newMask);
+qboolean NITMOD_UpdateClientSkillThresholds(const char *info);
+int NITMOD_ClientSkillNextThreshold(int skill, int level);
 qboolean NITMOD_DecodeClientSkills(const char *text, int *nativeLevels, int *displayLevels);
 const char *CG_NitmodSpectatorLabel(const clientInfo_t *client, int ping);
 qboolean NITMOD_ClassIsDisabled(int team, int playerClass);
 qboolean NITMOD_WeaponQuotaDisabled(int weapon, int playerClass, int teamCount, int weaponCount);
 void NITMOD_ApplyForcedCvars(void);
+void NITMOD_RestoreForcedCvars(void);
 void CG_AddToTeamChat(const char *str, int clientnum);
 void NITMOD_PrivateMessageSound(int clientNum);
 #endif

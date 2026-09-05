@@ -10,6 +10,8 @@ qboolean CG_NitmodDrawGlobalStats(void);
 qboolean CG_NitmodGlobalAwardCommand(void);
 void CG_NitmodDrawGlobalAward(void);
 void CG_NitmodGlobalAwardClear(void);
+qboolean CG_NitmodGlobalAwardActive(void);
+float CG_NitmodGlobalAwardAlpha(int now, float hold, float fade);
 const char *CG_NitmodGlobalAwardTitle(int award);
 const char *CG_NitmodGlobalAwardDescription(int award);
 qboolean CG_NitmodParseGlobalStats(int argc, const char *(*argv)(int),

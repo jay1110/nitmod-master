@@ -1,5 +1,7 @@
 #include "ui_local.h"
 #include "ui_shared.h"
+#include <limits.h>
+#include <float.h>
 
 qboolean	bg_loadscreeninited = qfalse;
 fontInfo_t	bg_loadscreenfont1;
@@ -12,10 +14,6 @@ void UI_LoadPanel_RenderPercentageMeter( panel_button_t* button );
 /* Original Nitmod UI 0x21f90/0x22000.  These coordinates deliberately stay
  * in the 640-wide virtual space: the normal panel is 4:3 while status text
  * may use the additional width exposed by a widescreen renderer. */
-static float UI_NitmodWideXOffset( void ) {
-	return (UI_NitmodWideWidth(&uiInfo.uiDC) - 640) * .5f;
-}
-
 static qboolean UI_NitmodDownloading( void ) {
 	uiClientState_t cstate;
 	char downloadName[MAX_INFO_VALUE];
@@ -35,9 +33,11 @@ static void UI_NitmodDrawDownloadBar( void ) {
 	float x, y, w, h;
 	vec4_t background = { 1.f, 1.f, 1.f, .25f };
 
-	if( downloadSize <= 0.f ) {
+	if( !(downloadSize > 0.f) || downloadSize > FLT_MAX ) {
 		return;
 	}
+	if(!(downloadCount >= 0.f)) downloadCount = 0.f;
+	if(downloadCount > downloadSize) downloadCount = downloadSize;
 	fraction = downloadCount / downloadSize;
 	if( fraction < 0.f ) fraction = 0.f;
 	if( fraction > 1.f ) fraction = 1.f;
@@ -220,7 +220,7 @@ void UI_DrawLoadPanel( qboolean forcerefresh, qboolean ownerdraw, qboolean uihac
 	 * positions so reinitializing or changing resolution cannot add twice. */
 	for(i = 0; loadpanelButtons[i]; ++i) {
 		panelX[i] = loadpanelButtons[i]->rect.x;
-		loadpanelButtons[i]->rect.x += UI_NitmodWideXOffset();
+		loadpanelButtons[i]->rect.x += UI_NitmodWideXOffset(&uiInfo.uiDC);
 	}
 	BG_PanelButtonsRender( loadpanelButtons );
 	for(i = 0; loadpanelButtons[i]; ++i) loadpanelButtons[i]->rect.x = panelX[i];
@@ -338,6 +338,21 @@ void UI_LoadPanel_RenderHeaderText( panel_button_t* button ) {
 }
 
 #define ESTIMATES 80
+int UI_DownloadCounter(const char *name) {
+	double value = trap_Cvar_VariableValue(name);
+	if(!(value >= 0)) return 0;
+	if(value >= INT_MAX) return INT_MAX;
+	return (int)value;
+}
+int UI_DownloadPercent(int count, int size) {
+	if(size <= 0 || count <= 0) return 0;
+	return count >= size ? 100 : (int)((double)count * 100.0 / size);
+}
+int UI_DownloadRate(int count, int started, int now) {
+	double elapsed = ((double)now - started) / 1000.0;
+	if(count <= 0 || started <= 0 || elapsed < 1) return 0;
+	return count / (int)elapsed;
+}
 const char *UI_DownloadInfo( const char *downloadName )
 {
 	static int	tleEstimates[ESTIMATES] = { 60,60,60,60,60,60,60,60,60,60,60,60,60,60,60,60,60,60,60,60,
@@ -347,17 +362,16 @@ const char *UI_DownloadInfo( const char *downloadName )
 	static int	tleIndex = 0;
 	char xferRateBuf[64], dlTimeBuf[64];
 	int downloadSize, downloadCount, downloadTime;
-	int elapsed, xferRate;
+	int xferRate;
 	const char *progress;
 
-	downloadSize = trap_Cvar_VariableValue( "cl_downloadSize" );
-	downloadCount = trap_Cvar_VariableValue( "cl_downloadCount" );
-	downloadTime = trap_Cvar_VariableValue( "cl_downloadTime" );
+	if(!downloadName) downloadName = "";
+	downloadSize = UI_DownloadCounter( "cl_downloadSize" );
+	downloadCount = UI_DownloadCounter( "cl_downloadCount" );
+	downloadTime = UI_DownloadCounter( "cl_downloadTime" );
 
 	if( downloadSize > 0 ) {
-		int percent = (int)( (float)downloadCount * 100.f / (float)downloadSize );
-		if( percent < 0 ) percent = 0;
-		if( percent > 100 ) percent = 100;
+		int percent = UI_DownloadPercent(downloadCount, downloadSize);
 		progress = va( "%s (%d%%)", downloadName, percent );
 	} else {
 		progress = downloadName;
@@ -367,20 +381,19 @@ const char *UI_DownloadInfo( const char *downloadName )
 		return va( "Estimating download time for '%s'...", downloadName );
 	}
 
-	elapsed = ( uiInfo.uiDC.realTime - downloadTime ) / 1000;
-	xferRate = elapsed > 0 ? downloadCount / elapsed : 0;
+	xferRate = UI_DownloadRate(downloadCount, downloadTime, uiInfo.uiDC.realTime);
 	UI_ReadableSize( xferRateBuf, sizeof(xferRateBuf), xferRate );
 	dlTimeBuf[0] = '\0';
 	if( downloadSize > 0 && xferRate > 0 ) {
 		int totalSeconds = downloadSize / xferRate;
 		int remaining = totalSeconds - downloadCount / xferRate;
-		int average = 0;
+		double average = 0;
 		int i;
 		if( remaining < 0 ) remaining = 0;
 		tleEstimates[tleIndex++] = remaining;
 		if( tleIndex >= ESTIMATES ) tleIndex = 0;
 		for( i = 0; i < ESTIMATES; ++i ) average += tleEstimates[i];
-		UI_PrintTime( dlTimeBuf, sizeof(dlTimeBuf), average / ESTIMATES );
+		UI_PrintTime( dlTimeBuf, sizeof(dlTimeBuf), (int)(average / ESTIMATES) );
 	}
 	if( xferRate > 0 ) {
 		return va( "File: '%s'\nSpeed: %s/s\n\n^0%s -- %s remaining^7",
@@ -445,7 +458,7 @@ void UI_LoadPanel_RenderLoadingText( panel_button_t* button )
 	//UI_DrawRect( button->rect.x, button->rect.y, button->rect.w, button->rect.h, colorRed );
 
 	y = button->rect.y + 12;
-	textX = UI_NitmodWideXOffset();
+	textX = UI_NitmodWideXOffset(&uiInfo.uiDC);
 
 	s = p = buff;
 

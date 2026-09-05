@@ -15,7 +15,7 @@ def main():
         start = SOURCE.index("void " + function)
         body = SOURCE[start:SOURCE.find("\nvoid ", start + 6)]
         assert "CG_NitmodStatsArg" in body, function
-    assert "iWeap < 1 || iWeap > WS_MAX" in SOURCE
+    assert "iWeap < 1 || iWeap > NITMOD_WeaponStatCount()" in SOURCE
     assert "cnum < 0 || cnum >= MAX_CLIENTS" in SOURCE
     assert "cClients > MAX_CLIENTS" in SOURCE
     assert "trap_Argc() != 3" in SOURCE

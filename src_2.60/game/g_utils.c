@@ -6,6 +6,7 @@
 */
 
 #include "g_local.h"
+#include "g_nitmod_etbot_lifecycle.h"
 #include "g_nitmod_config.h"
 #include "g_nitmod_entities.h"
 #include "nitmod_config_index.h"
@@ -488,6 +489,7 @@ void G_InitGentity( gentity_t *e ) {
 	e->spawnCount++;
 	// mark the time
 	e->spawnTime = level.time;
+	Bot_Queue_EntityCreated(e);
 }
 
 /*
@@ -584,6 +586,7 @@ void G_FreeEntity( gentity_t *ed ) {
 	/* Original deletion notification/serial update precedes callbacks and
 	 * neverFree. Only its serial-table mutation is currently reconstructed. */
 	G_NITMOD_BotEntityDeleted( ed );
+	Bot_Event_EntityDeleted(ed);
 
 	/* Remove before callbacks and before the engine can reuse this slot. */
 	G_NITMOD_UnregisterSatchel( ed );

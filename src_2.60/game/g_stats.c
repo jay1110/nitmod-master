@@ -1,4 +1,6 @@
 #include "g_local.h"
+#include "nitmod_skills.h"
+#include "g_nitmod_legacy_cvars.h"
 
 void G_LogDeath( gentity_t* ent, weapon_t weap ) {
 	weap = BG_DuplicateWeapon(weap);
@@ -106,14 +108,31 @@ void G_PrintAccuracyLog( gentity_t *ent ) {
 }
 
 void G_SetPlayerSkill( gclient_t *client, skillType_t skill ) {
-	int i;
+	static const char *thresholdCvars[SK_NUM_SKILLS] = {
+		"skill_battlesense", "skill_engineer", "skill_medic", "skill_fieldops",
+		"skill_lightweapons", "skill_soldier", "skill_covertops"
+	};
+	static const char *maximumCvars[SK_NUM_SKILLS] = {
+		"g_maxLevelBattleSense", "g_maxLevelEngineer", "g_maxLevelMedic",
+		"g_maxLevelFieldOp", "g_maxLevelLightWeapons", "g_maxLevelSoldier",
+		"g_maxLevelCovertOp"
+	};
+	nitmodSkillThresholds_t thresholds;
+	nitmodSkillProgress_t progress;
+	char value[MAX_CVAR_VALUE_STRING];
+	int maximum;
 
-	for( i = NUM_SKILL_LEVELS - 1; i >= 0; i-- ) {
-		if( client->sess.skillpoints[skill] >= skillLevels[i] ) {
-			client->sess.skill[skill] = i;
-			break;
-		}
-	}
+	if(!client || skill < 0 || skill >= SK_NUM_SKILLS) return;
+	NITMOD_DefaultSkillThresholds(&thresholds);
+	trap_Cvar_VariableStringBuffer(thresholdCvars[skill], value, sizeof(value));
+	NITMOD_ParseSkillThresholdRow(value, thresholds.threshold[skill]);
+	maximum = G_NITMOD_LegacyCvarInteger(maximumCvars[skill], NITMOD_SKILL_LEVEL_COUNT);
+	if(maximum < 0) maximum = 0;
+	if(maximum > NITMOD_SKILL_LEVEL_COUNT) maximum = NITMOD_SKILL_LEVEL_COUNT;
+	if(!NITMOD_EvaluateSkill(&thresholds, skill, client->sess.skillpoints[skill],
+		maximum, G_NITMOD_LegacyCvarInteger("n_noSkillUpgrades", 0), &progress)) return;
+	client->sess.skill[skill] = progress.level;
+	client->sess.nitmodSkillMasks[skill] = progress.unlocked;
 
 	G_SetPlayerScore( client );
 }
@@ -123,37 +142,11 @@ extern qboolean AddWeaponToPlayer( gclient_t *client, weapon_t weapon, int ammo,
 // TAT 11/6/2002
 //		Local func to actual do skill upgrade, used by both MP skill system, and SP scripted skill system
 static void G_UpgradeSkill( gentity_t *ent, skillType_t skill ) {
-	int i, cnt = 0;
-
-	// See if this is the first time we've reached this skill level
-	for( i = 0; i < SK_NUM_SKILLS; i++ ) {
-		if( i == skill )
-			continue;
-
-		if( ent->client->sess.skill[skill] <= ent->client->sess.skill[i] )
-			break;
-	}
-
 	G_DebugAddSkillLevel( ent, skill );
-
-	if( i == SK_NUM_SKILLS ) {
-		// increase rank
-		ent->client->sess.rank++;
-	}
-
-	if( ent->client->sess.rank >=4 ) {
-		// Gordon: count the number of maxed out skills
-		for( i = 0; i < SK_NUM_SKILLS; i++ ) {
-			if( ent->client->sess.skill[ i ] >= 4 ) {
-				cnt++;
-			}
-		}
-
-		ent->client->sess.rank = cnt + 3;
-		if( ent->client->sess.rank > 10 ) {
-			ent->client->sess.rank = 10;
-		}
-	}
+	/* Match session restoration without recalculating XP or granting another
+	 * skill. The existing userinfo update publishes the new bounded rank. */
+	ent->client->sess.rank = 0;
+	NITMOD_CalculateRank(ent->client->sess.skill, &ent->client->sess.rank);
 
 	ClientUserinfoChanged( ent-g_entities );
 
@@ -211,6 +204,9 @@ void G_LoseSkillPoints( gentity_t *ent, skillType_t skill, float points ) {
 
 void G_AddSkillPoints( gentity_t *ent, skillType_t skill, float points ) {
 	int oldskill;
+	int maxXP;
+	int oldScore;
+	int i;
 	
 	if( !ent->client ) {
 		return;
@@ -229,11 +225,44 @@ void G_AddSkillPoints( gentity_t *ent, skillType_t skill, float points ) {
 		return; // Gordon: no xp in LMS
 	}
 
+	/* Original Nitmod treats g_maxXP as an account-wide ceiling, not as a
+	 * per-skill clamp. Reaching (not merely exceeding) it resets all XP. */
+	maxXP = G_NITMOD_LegacyCvarInteger("g_maxXP", -1);
+	oldScore = ent->client->ps.persistant[PERS_SCORE];
+	if( maxXP >= 0 && (float)oldScore + points >= (float)maxXP ) {
+		for( i = 0; i < SK_NUM_SKILLS; ++i ) {
+			level.teamXP[i][ent->client->sess.sessionTeam - TEAM_AXIS] -=
+				ent->client->sess.skillpoints[i];
+			if( level.teamXP[i][ent->client->sess.sessionTeam - TEAM_AXIS] < 0.f )
+				level.teamXP[i][ent->client->sess.sessionTeam - TEAM_AXIS] = 0.f;
+		}
+		level.teamScores[ent->client->ps.persistant[PERS_TEAM]] -= oldScore;
+		if( level.teamScores[ent->client->ps.persistant[PERS_TEAM]] < 0 )
+			level.teamScores[ent->client->ps.persistant[PERS_TEAM]] = 0;
+		memset(ent->client->sess.skillpoints, 0, sizeof(ent->client->sess.skillpoints));
+		memset(ent->client->sess.skill, 0, sizeof(ent->client->sess.skill));
+		memset(ent->client->sess.medals, 0, sizeof(ent->client->sess.medals));
+		ent->client->sess.rank = 0;
+		ent->client->ps.persistant[PERS_SCORE] = 0;
+		ClientUserinfoChanged(ent - g_entities);
+		if( maxXP != 0 ) {
+			trap_SendServerCommand(ent - g_entities,
+				"cp \"You've reached the max XP allowed on this server. Your XP has been reset =(\" 1");
+		}
+		return;
+	}
+
 	level.teamXP[ skill ][ ent->client->sess.sessionTeam - TEAM_AXIS ] += points;
 
 	ent->client->sess.skillpoints[skill] += points;
 
-	level.teamScores[ ent->client->ps.persistant[PERS_TEAM] ] += points;
+	/* Original Nitmod g_TDMOptions bit 1 changes the TDM team score from
+	 * accumulated XP to one point per kill. Personal skill progression and
+	 * the per-skill team XP totals continue to advance normally. */
+	if( g_gametype.integer != GT_WOLF_TDM ||
+		!(G_NITMOD_LegacyCvarInteger("g_TDMOptions", 0) & 1) ) {
+		level.teamScores[ ent->client->ps.persistant[PERS_TEAM] ] += points;
+	}
 
 //	G_Printf( "%s just got %f skill points for skill %s\n", ent->client->pers.netname, points, skillNames[skill] );
 
@@ -247,6 +276,62 @@ void G_AddSkillPoints( gentity_t *ent, skillType_t skill, float points ) {
 	if( oldskill != ent->client->sess.skill[skill] ) {
 		// TAT - call the new func that encapsulates the skill giving behavior
 		G_UpgradeSkill( ent, skill );
+	}
+}
+
+/* Original Nitmod G_XPDecay (qagame 0x000df300), mapped onto the typed ET
+ * session and team-XP fields. The option bits are intentionally independent:
+ * 1 enables decay, 4 protects the current class skill, 8 protects spectators,
+ * 16 limits decay to active play, 32 limits active-play decay to spectators,
+ * 64 protects Battle Sense and 128 protects Light Weapons. */
+void G_NITMOD_XPDecay( gentity_t *ent, int minutes, qboolean force ) {
+	static const skillType_t classSkills[NUM_PLAYER_CLASSES] = {
+		SK_HEAVY_WEAPONS, SK_FIRST_AID, SK_EXPLOSIVES_AND_CONSTRUCTION,
+		SK_SIGNALS, SK_MILITARY_INTELLIGENCE_AND_SCOPED_WEAPONS
+	};
+	int options, skill, teamIndex;
+	float rate, floor;
+
+	if(!ent || !ent->client || minutes <= 0) return;
+	options = G_NITMOD_LegacyCvarInteger("g_XPDecay", 0);
+	rate = G_NITMOD_LegacyCvarValue("g_XPDecayRate", 0.f);
+	floor = G_NITMOD_LegacyCvarValue("g_XPDecayFloor", 0.f);
+	if(!(options & 1) || rate == 0.f || floor < 0.f || g_gametype.integer == GT_WOLF_LMS) return;
+
+	if(!force) {
+		if((options & 8) && ent->client->sess.sessionTeam == TEAM_SPECTATOR) return;
+		if((options & 16) && g_gamestate.integer != GS_PLAYING) return;
+		if((options & 32) && g_gamestate.integer == GS_PLAYING &&
+			(ent->client->sess.sessionTeam == TEAM_AXIS ||
+			 ent->client->sess.sessionTeam == TEAM_ALLIES)) return;
+	}
+
+	teamIndex = ent->client->sess.sessionTeam - TEAM_AXIS;
+	for(skill = 0; skill < SK_NUM_SKILLS; ++skill) {
+		float oldPoints, loss;
+		if(!force) {
+			if((options & 4) && ent->client->sess.playerType >= 0 &&
+				ent->client->sess.playerType < NUM_PLAYER_CLASSES &&
+				classSkills[ent->client->sess.playerType] == skill) continue;
+			if(skill == SK_BATTLE_SENSE && (options & 64)) continue;
+			if(skill == SK_LIGHT_WEAPONS && (options & 128)) continue;
+		}
+		oldPoints = ent->client->sess.skillpoints[skill];
+		if(oldPoints < floor) continue;
+		loss = minutes * rate;
+		if(loss > oldPoints - floor) loss = oldPoints - floor;
+		if(loss > oldPoints) loss = oldPoints;
+		if(loss <= 0.f) continue;
+
+		ent->client->sess.skillpoints[skill] = oldPoints - loss;
+		G_SetPlayerSkill(ent->client, (skillType_t)skill);
+		if(teamIndex >= 0 && teamIndex < 2) {
+			level.teamXP[skill][teamIndex] -= loss;
+			if(level.teamXP[skill][teamIndex] < 0.f) level.teamXP[skill][teamIndex] = 0.f;
+			level.teamScores[ent->client->sess.sessionTeam] -= loss;
+			if(level.teamScores[ent->client->sess.sessionTeam] < 0)
+				level.teamScores[ent->client->sess.sessionTeam] = 0;
+		}
 	}
 }
 
@@ -331,6 +416,17 @@ void G_AddKillSkillPoints( gentity_t *attacker, meansOfDeath_t mod, hitRegion_t 
 	if( !attacker->client )
 		return;
 
+	/* This function is reached for a credited hostile kill. In Nitmod's
+	 * frag-score TDM mode the original increments the attacker's team once,
+	 * independently of the weapon-specific XP awarded below. */
+	if( g_gametype.integer == GT_WOLF_TDM &&
+		(G_NITMOD_LegacyCvarInteger("g_TDMOptions", 0) & 1) ) {
+		team_t team = attacker->client->sess.sessionTeam;
+		if( team == TEAM_AXIS || team == TEAM_ALLIES ) {
+			level.teamScores[team]++;
+		}
+	}
+
 	switch( mod ) {
 		// light weapons
 		case MOD_KNIFE:
@@ -383,6 +479,16 @@ void G_AddKillSkillPoints( gentity_t *attacker, meansOfDeath_t mod, hitRegion_t 
 			break;
 
 		// misc weapons (individual handling)
+		/* Original G_AddKillSkillPoints: wire causes 58 and 66. Keep the
+		 * native MOD values here; protocol translation belongs to cgame. */
+		case MOD_GOOMBA:
+			G_AddSkillPoints( attacker, SK_BATTLE_SENSE, 5.f );
+			G_DebugAddSkillPoints( attacker, SK_BATTLE_SENSE, 5.f, "goomba kill" );
+			break;
+		case MOD_TRIPMINE:
+			G_AddSkillPoints( attacker, SK_EXPLOSIVES_AND_CONSTRUCTION, 4.f );
+			G_DebugAddSkillPoints( attacker, SK_EXPLOSIVES_AND_CONSTRUCTION, 4.f, "tripmine kill" );
+			break;
 		case MOD_SATCHEL:
 			G_AddSkillPoints( attacker, SK_MILITARY_INTELLIGENCE_AND_SCOPED_WEAPONS, 5.f );
 			G_DebugAddSkillPoints( attacker, SK_MILITARY_INTELLIGENCE_AND_SCOPED_WEAPONS, 5.f, "satchel charge kill" );

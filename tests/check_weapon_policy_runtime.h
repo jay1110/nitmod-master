@@ -1,4 +1,7 @@
 #include "g_nitmod_teamcount.h"
+#include "g_nitmod_weapon_definition.h"
+
+static int policyDefinitionEnabled, policyDefinitionCursor, policyDefinitionOpens;
 
 static int policyValues[11], policyBadInput;
 static int policyMedicOptions;
@@ -15,6 +18,25 @@ static int QDECL PolicyRuntimeEngine(int command, ...) {
     const char *name;
     char *output;
     int size, i;
+    if(command == BOTLIB_PC_LOAD_SOURCE) {
+        ++policyDefinitionOpens; policyDefinitionCursor = 0;
+        return policyDefinitionEnabled ? 23 : 0;
+    }
+    if(command == BOTLIB_PC_FREE_SOURCE) return 1;
+    if(command == BOTLIB_PC_READ_TOKEN) {
+        static const char *tokens[] = {"weaponDef", "{", "both", "{", "name", "Test weapon",
+            "damage", "18", "HeadshotWeapon", "yes", "movementSpeedScale", "0.9",
+            "KillMessage", "was killed by", "classes", "31", "}", "}"};
+        pc_token_t *token;
+        va_start(args, command); i = va_arg(args, int); token = va_arg(args, pc_token_t *); va_end(args);
+        if(i != 23) exit(2);
+        if(policyDefinitionCursor == sizeof(tokens) / sizeof(tokens[0])) return 0;
+        memset(token, 0, sizeof(*token));
+        token->type = policyDefinitionCursor == 5 || policyDefinitionCursor == 9 ||
+            policyDefinitionCursor == 13 ? TT_STRING : TT_NAME;
+        Q_strncpyz(token->string, tokens[policyDefinitionCursor++], sizeof(token->string));
+        return 1;
+    }
     if(policyClassMode && command==G_ARGC) return policyClassMode==1 ? 1 : 4;
     if(policyClassMode && command==G_ARGV) {
         va_start(args,command); i=va_arg(args,int); output=va_arg(args,char *);
@@ -218,6 +240,18 @@ static int CheckWeaponPolicyRuntime(void) {
         if(!G_CanPickupWeapon(w,&g_entities[0])) ++errors;
     policyValues[6]=0;
     if(G_CanPickupWeapon(WP_PANZERFAUST,&g_entities[0])) ++errors;
+    /* Real source parser -> cache -> pickup policy: custom class permissions
+     * apply without granting inventory or bypassing heavy-weapon caps. */
+    policyValues[1] = 0; policyDefinitionEnabled = 1; policyDefinitionOpens = 0;
+    G_NITMOD_ResetPickupDefinitions();
+    for(team = PC_SOLDIER; team <= PC_COVERTOPS; ++team) {
+        clients[0].sess.playerType = team; before = clients[0];
+        if(!G_CanPickupWeapon(WP_FG42, &g_entities[0])) ++errors;
+        if(memcmp(&before, &clients[0], sizeof(before))) ++errors;
+    }
+    if(policyDefinitionOpens != 1) ++errors;
+    if(G_CanPickupWeapon(WP_PANZERFAUST, &g_entities[0]) || policyDefinitionOpens != 1) ++errors;
+    policyDefinitionEnabled = 0; G_NITMOD_ResetPickupDefinitions();
     if(G_CanPickupWeapon(WP_MP40,NULL) || G_CanPickupWeapon(WP_NUM_WEAPONS,&g_entities[0])) ++errors;
     level=savedLevel; memcpy(g_entities,savedEntities,sizeof(savedEntities));
     g_heavyWeaponRestriction=savedHeavy; G_NITMOD_ResetTeamPopulation();

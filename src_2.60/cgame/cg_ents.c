@@ -11,6 +11,7 @@
 #include "cg_nitmod_hints.h"
 #include "cg_nitmod_names.h"
 #include "cg_nitmod_projectiles.h"
+#include "cg_nitmod_view.h"
 
 /*
 ======================
@@ -125,7 +126,7 @@ void CG_AddLightstyle(centity_t *cent)
 	int		otime;
 	int		lastch, nextch;
 
-	if(!cent->dl_stylestring)
+	if(!cent->dl_stylestring[0])
 		return;
 
 	otime = cg.time - cent->dl_time;
@@ -862,10 +863,16 @@ static void CG_Bomb( centity_t *cent ) {
 	const weaponInfo_t		*weapon;
 	vec3_t			end;
 	trace_t			trace;
+	byte beamColor[4] = {255, 0, 0, 255};
+	int presentation = 2;
 
 	memset(&ent, 0, sizeof(ent));
 
 	s1 = &cent->currentState;
+	if(NITMOD_UsesOriginalProtocol()) {
+		presentation = CG_NitmodTripminePresentation(s1, beamColor);
+		if(!presentation) return;
+	}
 
 	weapon = &cg_weapons[WP_TRIPMINE];
 
@@ -880,6 +887,7 @@ static void CG_Bomb( centity_t *cent ) {
 	ent.renderfx = weapon->missileRenderfx | RF_NOSHADOW;
 
 	CG_AddRefEntityWithPowerups( &ent, s1->powerups, TEAM_FREE, s1, vec3_origin );
+	if(presentation == 1) return;
 
 	
 	memset(&beam, 0, sizeof(beam));
@@ -895,10 +903,7 @@ static void CG_Bomb( centity_t *cent ) {
 	beam.reType = RT_RAIL_CORE;
 	beam.renderfx = RF_NOSHADOW;
 	beam.customShader = cgs.media.railCoreShader;
-	beam.shaderRGBA[0] = 255;
-	beam.shaderRGBA[1] = 0;
-	beam.shaderRGBA[2] = 0;
-	beam.shaderRGBA[3] = 255;
+	memcpy(beam.shaderRGBA, beamColor, sizeof(beamColor));
 
 
 	AxisClear( beam.axis );
@@ -1001,11 +1006,13 @@ void CG_Missile( centity_t *cent ) {
 	   cg.clientNum < 0 || cg.clientNum >= MAX_CLIENTS ||
 	   cg.snap->ps.clientNum < 0 || cg.snap->ps.clientNum >= MAX_CLIENTS) return;
 	weapon = &cg_weapons[s1->weapon];
+	CG_NitmodMissileCameraTrack(cent);
 
 	// calculate the axis
 	VectorCopy( s1->angles, cent->lerpAngles);
 
-	if( s1->weapon == WP_SMOKE_BOMB ) {
+	if( s1->weapon == WP_SMOKE_BOMB || s1->weapon == WP_POISON_BOMB ||
+		(s1->weapon == WP_POISON_MINE && s1->teamNum >= 8) ) {
 		// Arnout: the smoke effect
 		CG_RenderSmokeGrenadeSmoke( cent, weapon );
 	} else if( s1->weapon == WP_SATCHEL && s1->clientNum == cg.snap->ps.clientNum ) {
@@ -1027,7 +1034,10 @@ void CG_Missile( centity_t *cent ) {
 		|| cent->currentState.eType == ET_FIRE_COLUMN_SMOKE
 		|| cent->currentState.eType == ET_RAMJET) {
 		CG_RocketTrail (cent, NULL);
-	} else if( weapon->missileTrailFunc ) {
+	/* Poison mines must not inherit the generic/team-coloured missile trail
+	 * while thrown or armed. Their only smoke is the triggered poison cloud
+	 * driven by effect1Time through CG_RenderSmokeGrenadeSmoke above. */
+	} else if( weapon->missileTrailFunc && s1->weapon != WP_POISON_MINE ) {
 		weapon->missileTrailFunc( cent, weapon );
 	}
 
@@ -1103,7 +1113,7 @@ void CG_Missile( centity_t *cent ) {
 	}
 	ent.renderfx = weapon->missileRenderfx | RF_NOSHADOW;
 
-	if( cent->currentState.weapon == WP_LANDMINE ) {
+	if( cent->currentState.weapon == WP_LANDMINE || cent->currentState.weapon == WP_POISON_MINE ) {
 		if(NITMOD_UsesOriginalProtocol()) {
 			qboolean marker;
 			if(!CG_NitmodPrepareMine(cent, &ent, &marker)) return;

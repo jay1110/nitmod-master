@@ -9,4 +9,6 @@
 int NITMOD_WeaponAmmoDefaults( int weapon, ammotable_t *ammo );
 /* Original ammo-record +0x38, kept outside native ammotable_t. */
 int NITMOD_WeaponAutoReloadDefault( int weapon, int *requiresSetting );
+/* Original +40/+44/+48, separate from native ammo record layout. */
+int NITMOD_WeaponBlastDefaults(int weapon, int *damage, int *splash, int *radius);
 #endif

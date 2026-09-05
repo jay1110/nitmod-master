@@ -1,4 +1,7 @@
 #include "g_local.h"
+#include "g_nitmod_etbot_lifecycle.h"
+#include "g_nitmod_legacy_cvars.h"
+#include "g_nitmod_abilities.h"
 #include <limits.h>
 
 void NITMOD_SetSpawnProtection(gclient_t *client, qboolean revived) {
@@ -798,11 +801,114 @@ qboolean AddWeaponToPlayer( gclient_t *client, weapon_t weapon, int ammo, int am
 
 	// skill handling
 	AddExtraSpawnAmmo( client, weapon );
+	Bot_Event_AddWeapon(client->ps.clientNum, Bot_WeaponGameToBot(weapon));
 
 	return qtrue;
 }
 
 void BotSetPOW(int entityNum, qboolean isPOW);
+
+static int G_NITMOD_ClassChargeTime(const gclient_t *client) {
+	int team;
+
+	if(!client || client->sess.sessionTeam < TEAM_AXIS ||
+		client->sess.sessionTeam > TEAM_ALLIES) return 0;
+	team = client->sess.sessionTeam - TEAM_AXIS;
+	switch(client->sess.playerType) {
+	case PC_MEDIC: return level.medicChargeTime[team];
+	case PC_ENGINEER: return level.engineerChargeTime[team];
+	case PC_FIELDOPS: return level.lieutenantChargeTime[team];
+	case PC_COVERTOPS: return level.covertopsChargeTime[team];
+	case PC_SOLDIER:
+	default: return level.soldierChargeTime[team];
+	}
+}
+
+static void G_NITMOD_ApplySlashKillCharge(gclient_t *client) {
+	int options;
+
+	if(!client || !client->nitmodSlashKillPending) return;
+	options = G_NITMOD_LegacyCvarInteger("g_slashKill", 0);
+	if(options & 1) {
+		client->ps.classWeaponTime = level.time - G_NITMOD_ClassChargeTime(client) / 2;
+	} else if(options & 2) {
+		client->ps.classWeaponTime = level.time;
+	} else if(options & 4) {
+		client->ps.classWeaponTime = client->nitmodSlashKillChargeTime +
+			(level.time - client->nitmodSlashKillDeathTime);
+	}
+	client->nitmodSlashKillPending = qfalse;
+}
+
+/* Original SetWolfSpawnWeapons branch at qagame 0x0005c5c7.  The recovered
+ * binary uses the old wire weapon numbers here; keep those out of the live
+ * code and express the loadout with the typed ET weapon enum instead. */
+static qboolean G_NITMOD_GrantWarLoadout(gclient_t *client) {
+	const unsigned int options =
+		(unsigned int)G_NITMOD_LegacyCvarInteger("n_sniperWarOptions", 7);
+	const int warMode = G_NITMOD_ConfiguredWarMode();
+	weapon_t rifle;
+	weapon_t scopedRifle;
+
+	if(!client || warMode < 1 || warMode > 4) return qfalse;
+
+	/* The knife was installed by the common prefix.  Mode 4 intentionally
+	 * adds nothing else. */
+	if(warMode == 4) return qtrue;
+
+	/* Original modes 1 and 3 also carry the otherwise surprising empty K43
+	 * scope slot. Preserve it by typed identity; it shares ammunition with
+	 * the base K43 and therefore must precede the real mode loadout. */
+	if(warMode == 1 || warMode == 3)
+		AddWeaponToPlayer(client, WP_K43_SCOPE, 0, 0, qfalse);
+
+	if(warMode == 1) {
+		AddWeaponToPlayer(client, WP_PANZERFAUST, 1, 0, qtrue);
+		return qtrue;
+	}
+
+	if(warMode == 3) {
+		weapon_t rifleGrenade;
+
+		if(client->sess.sessionTeam == TEAM_AXIS) {
+			rifle = WP_KAR98;
+			rifleGrenade = WP_GPG40;
+		} else {
+			rifle = WP_CARBINE;
+			rifleGrenade = WP_M7;
+		}
+		AddWeaponToPlayer(client, rifle, 500, 10, qtrue);
+		AddWeaponToPlayer(client, rifleGrenade, 500,
+			GetAmmoTableData(rifleGrenade)->defaultStartingClip, qfalse);
+		client->sess.rifleGrenadeStatus = 1;
+		return qtrue;
+	}
+
+	if(options & 1u) {
+		AddWeaponToPlayer(client, WP_BINOCULARS, 1, 0, qfalse);
+		client->ps.stats[STAT_KEYS] |= (1 << INV_BINOCS);
+	}
+
+	/* Bit 4 grants the Axis scoped rifle independently of team.  This looks
+	 * unusual, but is an explicit operation in the original before its
+	 * team-specific rifle pair is installed. */
+	if(options & 4u)
+		AddWeaponToPlayer(client, WP_K43_SCOPE, 0, 0, qfalse);
+
+	if(client->sess.sessionTeam == TEAM_AXIS) {
+		rifle = WP_K43;
+		scopedRifle = WP_K43_SCOPE;
+	} else {
+		rifle = WP_GARAND;
+		scopedRifle = WP_GARAND_SCOPE;
+	}
+
+	/* Nitmod deliberately gives effectively unlimited war-mode reserve ammo,
+	 * rather than applying the ordinary class/skill spawn-ammo calculation. */
+	AddWeaponToPlayer(client, rifle, 500, 10, qtrue);
+	AddWeaponToPlayer(client, scopedRifle, 500, 10, qfalse);
+	return qtrue;
+}
 
 /*
 ===========
@@ -820,10 +926,12 @@ void SetWolfSpawnWeapons( gclient_t *client )
 
 	if ( client->sess.sessionTeam == TEAM_SPECTATOR )
 		return;
+	Bot_Event_ResetWeapons(client->ps.clientNum);
 	if(pc == PC_MEDIC) G_NITMOD_ReadMedicOptions(&medicOptions);
 
 	// Reset special weapon time
 	client->ps.classWeaponTime = -999999;
+	G_NITMOD_ApplySlashKillCharge(client);
 
 	// Communicate it to cgame
 	client->ps.stats[STAT_PLAYER_CLASS] = pc;
@@ -851,6 +959,9 @@ void SetWolfSpawnWeapons( gclient_t *client )
 	AddWeaponToPlayer( client, WP_KNIFE, 1, 0, qtrue );
 
 	client->ps.weaponstate = WEAPON_READY;
+
+	/* War modes replace the normal class loadout in the original game. */
+	if(G_NITMOD_GrantWarLoadout(client)) return;
 
 	// Engineer gets dynamite
 	if ( pc == PC_ENGINEER ) {
@@ -902,9 +1013,22 @@ void SetWolfSpawnWeapons( gclient_t *client )
 	if ( g_knifeonly.integer != 1 ) {
 		// Field ops gets binoculars, ammo pack, artillery, and a grenade
 		if ( pc == PC_FIELDOPS ) {
+			unsigned int fieldOpsOptions =
+				(unsigned int)G_NITMOD_LegacyCvarInteger("g_fieldOps", 0);
+			qboolean grantBinoculars = qtrue;
+
 			AddWeaponToPlayer( client, WP_AMMO, 0, 1, qfalse );
 
-			if( AddWeaponToPlayer( client, WP_BINOCULARS, 1, 0, qfalse ) ) {
+			/* Original bit 1 removes the unconditional loadout grant.  Either
+			 * Battle Sense or Signals' first unlock restores it. */
+			if( fieldOpsOptions & 1u ) {
+				grantBinoculars =
+					(client->sess.nitmodSkillMasks[SK_BATTLE_SENSE] & 2u) ||
+					(client->sess.nitmodSkillMasks[SK_SIGNALS] & 2u);
+			}
+
+			if( grantBinoculars &&
+				AddWeaponToPlayer( client, WP_BINOCULARS, 1, 0, qfalse ) ) {
 				client->ps.stats[STAT_KEYS] |= ( 1 << INV_BINOCS );
 			}
 
@@ -925,9 +1049,6 @@ void SetWolfSpawnWeapons( gclient_t *client )
 			}
 
 			AddWeaponToPlayer( client, WP_MEDIC_SYRINGE, GetAmmoTableData(WP_MEDIC_SYRINGE)->defaultStartingAmmo, GetAmmoTableData(WP_MEDIC_SYRINGE)->defaultStartingClip, qfalse );
-			if( client->sess.skill[SK_FIRST_AID] >= 4 )
-				AddWeaponToPlayer( client, WP_MEDIC_ADRENALINE, GetAmmoTableData(WP_MEDIC_ADRENALINE)->defaultStartingAmmo, GetAmmoTableData(WP_MEDIC_ADRENALINE)->defaultStartingClip, qfalse );
-
 			AddWeaponToPlayer( client, WP_MEDKIT, GetAmmoTableData(WP_MEDKIT)->defaultStartingAmmo, GetAmmoTableData(WP_MEDKIT)->defaultStartingClip, qfalse );
 
 			if (client->sess.sessionTeam == TEAM_AXIS) {
@@ -1151,6 +1272,21 @@ void SetWolfSpawnWeapons( gclient_t *client )
 			pc == PC_MEDIC ? 0 : GetAmmoTableData(extra)->defaultStartingAmmo,
 			GetAmmoTableData(extra)->defaultStartingClip, qfalse);
 	}
+	if(g_knifeonly.integer != 1) {
+		G_NITMOD_GrantAdrenalineSpawn(client, G_NITMOD_FirstAidUnlocks(client),
+			(unsigned int)G_NITMOD_LegacyCvarInteger("g_adrenClasses", 2),
+			(unsigned int)G_NITMOD_LegacyCvarInteger("g_adrenaline", 0),
+			G_NITMOD_ConfiguredWarMode(), GetAmmoTableData(WP_MEDIC_ADRENALINE));
+		/* Original G_AddClassWeapons grants wire weapon 47 when poison is
+		 * enabled and the fifth First Aid reward is unlocked. Use the typed
+		 * weapon row so custom weapon definitions keep their ammo contract. */
+		if(g_poison.integer && (G_NITMOD_FirstAidUnlocks(client) & 16u)) {
+			const ammotable_t *poisonAmmo = GetAmmoTableData(WP_POISON_SYRINGE);
+			AddWeaponToPlayer(client, WP_POISON_SYRINGE,
+				poisonAmmo->defaultStartingAmmo,
+				poisonAmmo->defaultStartingClip, qfalse);
+		}
+	}
 }
 
 int G_CountTeamMedics( team_t team, qboolean alivecheck ) {
@@ -1187,21 +1323,48 @@ int G_CountTeamMedics( team_t team, qboolean alivecheck ) {
 //
 // AddMedicTeamBonus
 //
+int G_NITMOD_ClassMaxHealth(int playerClass) {
+	char text[MAX_CVAR_VALUE_STRING], *cursor, *token;
+	int i, override = 0;
+	Q_strncpyz(text, n_classesMaxHP.string, sizeof(text));
+	cursor = text;
+	for(i = 0; i < NUM_PLAYER_CLASSES; ++i) {
+		token = COM_Parse(&cursor);
+		if(!*token) break;
+		if(i == playerClass &&
+			(!NITMOD_ParseProtocolSigned(token, &override) || override < 0 || override > 32767))
+			override = 0;
+	}
+	return override;
+}
+
+void G_NITMOD_SetHealthLimits(gclient_t *client, int numMedics, int war, int gametype, int override) {
+	int maximum;
+	if(!client || numMedics < 0 || numMedics > MAX_CLIENTS || override < 0 || override > 32767) return;
+	/* Original AddMedicTeamBonus: either special mode suppresses team and
+	 * battle-sense bonuses. The medic overhealth exception requires BOTH. */
+	maximum = 100;
+	if(!war && gametype != 8) {
+		maximum += numMedics >= 3 ? 25 : numMedics * 10;
+		if(client->sess.skill[SK_BATTLE_SENSE] >= 3) maximum += 15;
+	}
+	if(override > 0) maximum = override;
+	client->pers.maxHealth = client->ps.stats[STAT_MAX_HEALTH] = maximum;
+	client->ps.stats[STAT_NITMOD_MAX_HEALTH] =
+		client->sess.playerType == PC_MEDIC && !override && !(war && gametype == 8) ?
+		(int)(maximum * 1.12) : maximum;
+}
+
+int G_NITMOD_SpawnHealth(const gclient_t *client, int war, int gametype, int override) {
+	if(!client) return 0;
+	return client->ps.stats[STAT_MAX_HEALTH] -
+		(!war && gametype != 8 && !override && client->sess.skill[SK_BATTLE_SENSE] >= 3 ? 15 : 0);
+}
+
 void AddMedicTeamBonus( gclient_t *client ) {
-	int numMedics = G_CountTeamMedics( client->sess.sessionTeam, qfalse );
-
-	// compute health mod
-	client->pers.maxHealth = 100 + 10 * numMedics;
-
-	if( client->pers.maxHealth > 125 ) {
-		client->pers.maxHealth = 125;
-	}
-
-	if( client->sess.skill[SK_BATTLE_SENSE] >= 3 ) {
-		client->pers.maxHealth += 15;
-	}
-
-	client->ps.stats[STAT_MAX_HEALTH] = client->pers.maxHealth;
+	if(!client) return;
+	G_NITMOD_SetHealthLimits(client, G_CountTeamMedics(client->sess.sessionTeam, qfalse),
+		G_NITMOD_ConfiguredWarMode(), g_gametype.integer, G_NITMOD_ClassMaxHealth(client->sess.playerType));
 }
 
 /*
@@ -1287,6 +1450,26 @@ static void ClientCleanName( const char *in, char *out, int outSize )
 	}
 }
 
+/* Nitmod counts only visible, non-space characters for n_minNameLength.
+ * A colour escape consumes both bytes and does not contribute to the count. */
+static int G_NITMOD_VisibleNameLength( const char *name )
+{
+	int length = 0;
+
+	while( name && *name ) {
+		if( *name == Q_COLOR_ESCAPE && name[1] ) {
+			name += 2;
+			continue;
+		}
+		if( *name != ' ' ) {
+			length++;
+		}
+		name++;
+	}
+
+	return length;
+}
+
 void G_StartPlayerAppropriateSound(gentity_t *ent, char *soundType) {
 }
 
@@ -1310,6 +1493,7 @@ void ClientUserinfoChanged( int clientNum ) {
 	int		i;
 	char	skillStr[16] = "";
 	char	medalStr[16] = "";
+	char	xpStr[128] = "";
 	int		characterIndex;
 
 
@@ -1379,6 +1563,12 @@ void ClientUserinfoChanged( int clientNum ) {
 	Q_strncpyz( oldname, client->pers.netname, sizeof( oldname ) );
 	s = Info_ValueForKey (userinfo, "name");
 	ClientCleanName( s, client->pers.netname, sizeof(client->pers.netname) );
+	if( G_NITMOD_CensorText("g_censorNames", client->pers.netname,
+		sizeof(client->pers.netname)) &&
+		(G_NITMOD_LegacyCvarInteger("g_censorPenalty", 1) & 2) ) {
+		trap_DropClient(clientNum, "Name censor. Please change your name.", 0);
+		return;
+	}
 
 	if ( client->pers.connected == CON_CONNECTED ) {
 		if ( strcmp( oldname, client->pers.netname ) ) {
@@ -1390,6 +1580,8 @@ void ClientUserinfoChanged( int clientNum ) {
 	for( i = 0; i < SK_NUM_SKILLS; i++ ) {
 		Q_strcat( skillStr, sizeof(skillStr), va("%i",client->sess.skill[i]) );
 		Q_strcat( medalStr, sizeof(medalStr), va("%i",client->sess.medals[i]) );
+		Q_strcat( xpStr, sizeof(xpStr), va("%s%u", i ? " " : "",
+			client->sess.nitmodSkillMasks[i]) );
 		// FIXME: Gordon: wont this break if medals > 9 arnout? JK: Medal count is tied to skill count :() Gordon: er, it's based on >> skill per map, so for a huuuuuuge campaign it could break...
 	}
 
@@ -1460,7 +1652,8 @@ void ClientUserinfoChanged( int clientNum ) {
 	trap_GetConfigstring( CS_PLAYERS + clientNum, oldname, sizeof( oldname ) );
 
 	/* Optional original equipment field; stock clients ignore unknown keys. */
-	s = va( "%s\\rn\\%i\\lc\\%i", s, client->sess.rifleGrenadeStatus, client->sess.latchPlayerType );
+	s = va( "%s\\rn\\%i\\lc\\%i\\xp\\%s", s, client->sess.rifleGrenadeStatus,
+		client->sess.latchPlayerType, xpStr );
 
 	trap_SetConfigstring( CS_PLAYERS + clientNum, s );
 
@@ -1497,7 +1690,9 @@ char *ClientConnect( int clientNum, qboolean firstTime, qboolean isBot ) {
 	char		*value;
 	gclient_t	*client;
 	char		userinfo[MAX_INFO_STRING];
+	char		cleanName[MAX_NETNAME];
 	gentity_t	*ent;
+	int		minimumNameLength;
 #ifdef USEXPSTORAGE
 	ipXPStorage_t* xpBackup;
 	int			i;
@@ -1506,6 +1701,32 @@ char *ClientConnect( int clientNum, qboolean firstTime, qboolean isBot ) {
 	ent = &g_entities[ clientNum ];
 
 	trap_GetUserinfo( clientNum, userinfo, sizeof( userinfo ) );
+
+	/* Bots keep their script-selected names.  Human names are cleaned with the
+	 * same routine used by ClientUserinfoChanged before applying Nitmod's
+	 * visible-character minimum. */
+	minimumNameLength = G_NITMOD_LegacyCvarInteger("n_minNameLength", 0);
+	if( !isBot && minimumNameLength > 0 ) {
+		ClientCleanName( Info_ValueForKey( userinfo, "name" ), cleanName,
+			sizeof(cleanName) );
+		if( G_NITMOD_VisibleNameLength(cleanName) < minimumNameLength ) {
+			G_LogPrintf("[DROPCLIENT] Client %d Name too short (%s)\n",
+				clientNum, cleanName);
+			return va("Your name is too short, it must contain at least %d visible characters.\n",
+				minimumNameLength);
+		}
+	}
+	if( !isBot ) {
+		ClientCleanName( Info_ValueForKey( userinfo, "name" ), cleanName,
+			sizeof(cleanName) );
+		if( G_NITMOD_CensorText("g_censorNames", cleanName,
+			sizeof(cleanName)) &&
+			(G_NITMOD_LegacyCvarInteger("g_censorPenalty", 1) & 2) ) {
+			G_LogPrintf("[DROPCLIENT] Client %d censored name (%s)\n",
+				clientNum, cleanName);
+			return "Name censor. Please change your name.";
+		}
+	}
 
 	// IP filtering
 	// https://zerowing.idsoftware.com/bugzilla/show_bug.cgi?id=500
@@ -1562,6 +1783,11 @@ char *ClientConnect( int clientNum, qboolean firstTime, qboolean isBot ) {
 
 
 	memset( client, 0, sizeof(*client) );
+	client->pers.nitmodLastAmmoClient = -1;
+	client->pers.nitmodLastKillerClient = -1;
+	client->pers.nitmodLastHealthClient = -1;
+	client->pers.nitmodLastKilledClient = -1;
+	client->pers.nitmodLastReviverClient = -1;
 
 	client->pers.connected = CON_CONNECTING;
 	client->pers.connectTime = level.time;			// DHM - Nerve
@@ -1616,7 +1842,11 @@ char *ClientConnect( int clientNum, qboolean firstTime, qboolean isBot ) {
 			}
 		}
 
-		if( !G_BotConnect( clientNum, !firstTime ) ) {
+		/* External Omni-bot clients are driven through ETInterface.  Feeding
+		 * them into ET 2.60's legacy botlib starts the removed AAS syscall
+		 * range (304+) on ET:Legacy and crashes the WASM server. */
+		if (!G_NITMOD_LegacyCvarInteger("omnibot_enable", 0) &&
+			!G_BotConnect( clientNum, !firstTime )) {
 			return "BotConnectfailed";
 		}
 	}
@@ -1670,6 +1900,7 @@ char *ClientConnect( int clientNum, qboolean firstTime, qboolean isBot ) {
 	// count current clients and rank for scoreboard
 	CalculateRanks();
 	G_NITMOD_RefreshTeamPopulation();
+	Bot_Event_ClientConnected(clientNum, isBot);
 
 	return NULL;
 }
@@ -2159,11 +2390,8 @@ void ClientSpawn( gentity_t *ent, qboolean revived )
 	// JPW NERVE ***NOTE*** the following line is order-dependent and must *FOLLOW* SetWolfSpawnWeapons() in multiplayer
 	// AddMedicTeamBonus() now adds medic team bonus and stores in ps.stats[STAT_MAX_HEALTH].
 
-	if( client->sess.skill[SK_BATTLE_SENSE] >= 3 )
-		// We get some extra max health, but don't spawn with that much
-		ent->health = client->ps.stats[STAT_HEALTH] = client->ps.stats[STAT_MAX_HEALTH] - 15;
-	else
-		ent->health = client->ps.stats[STAT_HEALTH] = client->ps.stats[STAT_MAX_HEALTH];
+	ent->health = client->ps.stats[STAT_HEALTH] = G_NITMOD_SpawnHealth(client,
+		G_NITMOD_ConfiguredWarMode(), g_gametype.integer, G_NITMOD_ClassMaxHealth(client->sess.playerType));
 
 	G_SetOrigin( ent, spawn_origin );
 	VectorCopy( spawn_origin, client->ps.origin );
@@ -2281,6 +2509,7 @@ void ClientDisconnect( int clientNum ) {
 	vec3_t		launchvel;
 	int			i;
 
+	Bot_Event_ClientDisConnected(clientNum);
 	G_NITMOD_ResetClient( clientNum );
 	ent = g_entities + clientNum;
 	if ( !ent->client ) {
@@ -2322,6 +2551,9 @@ void ClientDisconnect( int clientNum ) {
 
 	if( g_landminetimeout.integer ) {
 		G_ExplodeMines(ent);
+	}
+	if(G_NITMOD_LegacyCvarInteger("n_tripmineTimeout", 1)) {
+		G_NITMOD_RemoveTripmines(ent);
 	}
 	G_FadeItems(ent, MOD_SATCHEL);
 
@@ -2410,7 +2642,8 @@ void ClientDisconnect( int clientNum ) {
 	CalculateRanks();
 	G_NITMOD_RefreshTeamPopulation();
 
-	if ( ent->r.svFlags & SVF_BOT ) {
+	if ((ent->r.svFlags & SVF_BOT) &&
+		!G_NITMOD_LegacyCvarInteger("omnibot_enable", 0)) {
 		BotAIShutdownClient( clientNum );
 	}
 

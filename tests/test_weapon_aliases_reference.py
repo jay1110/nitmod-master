@@ -62,7 +62,7 @@ inverse[0] = 'WP_NONE'
 header = (root / 'src_2.60/game/bg_public.h').read_text()
 enum = re.split(r'^\s*WP_NUM_WEAPONS\b', header.split('WP_NONE,', 1)[1], maxsplit=1, flags=re.M)[0]
 names = ['WP_NONE'] + re.findall(r'^\s*(WP_\w+|VERYBIGEXPLOSION)\s*,', enum, re.M)
-assert len(names) == 50
+assert len(names) == 54
 native = {}
 ammo_spec = importlib.util.spec_from_file_location('ammo_defaults', root / 'tools/extract_weapon_ammo.py')
 ammo_module = importlib.util.module_from_spec(ammo_spec)
@@ -96,7 +96,7 @@ for line in subprocess.check_output([sys.argv[2]], text=True).splitlines():
         recovered[names[weapon]] = (names[own_ammo], names[own_clip])
     else:
         assert (own_ammo, own_clip) == (-7, -9)
-assert set(native) == set(range(50))
+assert set(native) == set(range(len(names)))
 assert set(recovered) == set(identities)
 differences = {}
 for name, weapon in identities.items():
@@ -108,8 +108,8 @@ for name, weapon in identities.items():
     if actual != expected:
         differences[name] = (expected, actual)
 assert differences == {}, differences
-print('44 alias pairs match, including independent adrenaline inventory')
-print('44 recovered alias pairs match both original modules; unsupported identities reject unchanged')
+print('48 alias pairs match, including independent adrenaline inventory')
+print('48 recovered alias pairs match both original modules; unsupported identities reject unchanged')
 seen = set()
 for line in subprocess.check_output([sys.argv[2], '--switch-times'], text=True).splitlines():
     old, new, supported, duration = map(int, line.split())
@@ -121,5 +121,5 @@ for line in subprocess.check_output([sys.argv[2], '--switch-times'], text=True).
     assert supported == int(paired)
     expected_duration = (50 if original_old in (31, 41) else 250) if paired else -19
     assert duration == expected_duration
-assert seen == {(a, b) for a in range(50) for b in range(50)}
-print('44 native alternate entries match both originals; 2500 executed scope timing lookups checked')
+assert seen == {(a, b) for a in range(len(names)) for b in range(len(names))}
+print('48 native alternate entries match both originals; 2916 executed scope timing lookups checked')

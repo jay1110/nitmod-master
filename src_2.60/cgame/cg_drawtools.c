@@ -10,7 +10,7 @@ void CG_NitmodDrawOverlay(float x, float y, float w, float h, qhandle_t shader, 
         if(w < 0) { w = -w; s0 = 1; s1 = 0; }
         if(h < 0) { h = -h; t0 = 1; t1 = 0; }
     }
-    if(NITMOD_UsesOriginalProtocol()) {
+    if(NITMOD_UsesNitmodHud()) {
         float xs = cgs.glconfig.vidWidth / 640.0f;
         x *= xs; w *= xs;
         y *= cgs.screenYScale; h *= cgs.screenYScale;
@@ -221,8 +221,10 @@ Coords are virtual 640x480
 ================
 */
 void CG_DrawSides( float x, float y, float w, float h, float size ) {
+	float sx = 0, sy = 0, sw = size, sh = 0;
+	CG_AdjustFrom640(&sx, &sy, &sw, &sh);
 	CG_AdjustFrom640( &x, &y, &w, &h );
-	size *= cgs.screenXScale;
+	size = sw;
 	trap_R_DrawStretchPic( x, y, size, h, 0, 0, 0, 0, cgs.media.whiteShader );
 	trap_R_DrawStretchPic( x + w - size, y, size, h, 0, 0, 0, 0, cgs.media.whiteShader );
 }

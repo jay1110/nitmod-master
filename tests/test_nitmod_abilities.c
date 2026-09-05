@@ -10,9 +10,15 @@ static gentity_t entity;
 int main( void ) {
     static const int classes[] = { PC_SOLDIER, PC_MEDIC, PC_ENGINEER, PC_FIELDOPS, PC_COVERTOPS };
     static const int clips[] = { 12, 0, 12, 0, 1, 1, 1, 1 };
+    static const unsigned int firstAidMasks[] = { 0, 0, 4, 4, 20, 52 };
     unsigned int mask, unlocks;
     int index, level, expected;
     entity.client = &client;
+    for( level = 0; level < 6; ++level ) {
+        client.sess.skill[SK_FIRST_AID] = level;
+        CHECK( G_NITMOD_FirstAidUnlocks(&client) == firstAidMasks[level] );
+    }
+    CHECK( G_NITMOD_FirstAidUnlocks(NULL) == 0 );
     for( index = 0; index < 5; index++ ) for( mask = 0; mask < 64; mask++ )
     for( unlocks = 0; unlocks < 64; unlocks++ ) for( level = 0; level < 6; level++ ) {
         client.sess.playerType = classes[index];

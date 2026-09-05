@@ -44,7 +44,7 @@ int TestRecoveredReloadBegin( void ) {
             state.ammo[WP_COLT] = 99; state.eFlags = prone ? EF_PRONE : 0;
             expected = state; expectedMove = move; expectedMove.ps = &expected;
             body = weapon != WP_GRENADE_LAUNCHER && weapon != WP_GRENADE_PINEAPPLE &&
-                weapon != WP_DYNAMITE && weapon != WP_SMOKE_BOMB && weapon != WP_TRIPMINE;
+                weapon != WP_DYNAMITE && weapon != WP_SMOKE_BOMB && weapon != WP_TRIPMINE && weapon != WP_BOMB && weapon != WP_POISON_BOMB;
             calls = badCall = 0; proneExpected = prone; scriptResult = missing ? -1 : 0;
             result = NITMOD_ReloadWeaponEligible(weapon) ? NITMOD_RELOAD_START_INVENTORY_ALLOWED : NITMOD_RELOAD_START_BLOCKED;
             if( result == NITMOD_RELOAD_START_INVENTORY_ALLOWED ) {

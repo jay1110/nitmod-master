@@ -18,6 +18,12 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <limits.h>
+/* Engine fixture failures must identify their guard, not silently exit. */
+static void TestEngineExit(int code, int line) {
+    fprintf(stderr, "engine fixture exit %d at line %d\n", code, line);
+    exit(code);
+}
+#define exit(code) TestEngineExit((code), __LINE__)
 #include "check_doublejump.h"
 #include "check_lean.h"
 #include "check_reload_runtime.h"
@@ -45,8 +51,418 @@ static vec3_t leanStart, leanEnd;
 static int locationTest, locationPvsCalls;
 static int centerRenderTest, centerGlyphs;
 static float centerRects[8][4];
-static int crosshairRenderTest, crosshairDraws, crosshairShaders[32];
-static float crosshairRects[32][4];
+static int crosshairRenderTest, crosshairDraws, crosshairShaders[1024];
+static int awardRenderTest;
+static char accuracyOutput[4096];
+static const char *skillCommandArgs;
+static void CaptureAccuracyOutput(char *text) {
+    Q_strcat(accuracyOutput, sizeof(accuracyOutput), text);
+}
+static int globalStatsRenderTest, globalStatsRequests;
+static char globalStatsRequest[64];
+static float crosshairRects[1024][4];
+extern int CG_Debriefing_ScrollGetCount(panel_button_t *);
+extern int CG_LimboPanel_GetMaxObjectives(void);
+static int CheckObjectiveBounds(void) {
+    static cgs_t saved;
+    const char *counts[] = {"0", "3", "9999", "-1", "bad", "2147483648"};
+    int expected[] = {0, 3, MAX_OBJECTIVES, 0, 0, 0};
+    int mode, i, errors = 0;
+    saved = cgs;
+    cgs.gameState.stringOffsets[CS_SERVERINFO] = 1;
+    cgs.gameState.stringOffsets[CS_MULTI_INFO] = 128;
+    cgs.ccSelectedTeam = 1;
+    for(mode = 0; mode < 2; ++mode) for(i = 0; i < 6; ++i) {
+        strcpy(cgs.gameState.stringData + 1, mode ? "\\gamename\\nitmod" : "\\gamename\\etmain");
+        Com_sprintf(cgs.gameState.stringData + 128, 128, "\\numobjectives\\%s", counts[i]);
+        if(CG_LimboPanel_GetMaxObjectives() != expected[i]) ++errors;
+        cgs.ccSelectedObjective = INT_MAX;
+        crosshairRenderTest = globalStatsRenderTest = 1; globalStatsRequests = 0;
+        CG_LimboPanel_RequestObjective();
+        if(globalStatsRequests != 1 || strcmp(globalStatsRequest, "obj -1") ||
+           cgs.ccSelectedObjective != expected[i]) ++errors;
+        if(expected[i]) {
+            cgs.ccSelectedObjective = 0; CG_LimboPanel_RequestObjective();
+            if(strcmp(globalStatsRequest, "obj 0")) ++errors;
+        }
+        crosshairRenderTest = globalStatsRenderTest = 0;
+    }
+    cgs = saved;
+    if(errors) fprintf(stderr, "objective bounds failures: %d\n", errors);
+    return errors;
+}
+extern void CG_LimboPanel_RenderClassButton(panel_button_t *);
+static int CheckClassSkillWedges(void) {
+    static cgs_t saved;
+    panel_button_t button;
+    int cls, mode, level, spectator, i, count, errors = 0, oldClient = cg.clientNum;
+    saved = cgs; cg.clientNum = 0;
+    memset(&button, 0, sizeof(button)); button.rect.w = button.rect.h = 32;
+    cgs.gameState.stringOffsets[CS_SERVERINFO] = 1;
+    cgs.media.limboClassButton2Wedge_on = 8001; cgs.media.limboClassButton2Wedge_off = 8002;
+    cgs.media.limboClassButtonLevel5_on = 8003; cgs.media.limboClassButtonLevel5_off = 8004;
+    crosshairRenderTest = 1;
+    for(mode = 0; mode < 2; ++mode) for(cls = 0; cls < 5; ++cls)
+    for(level = 0; level <= (mode ? 5 : 4); ++level) for(spectator = 0; spectator < 2; ++spectator) {
+        int shader = (mode && level == 5 ? 8003 : 8001) + spectator;
+        strcpy(cgs.gameState.stringData + 1, mode ? "\\gamename\\nitmod" : "\\gamename\\etmain");
+        button.data[1] = cgs.ccSelectedClass = cls; cgs.ccSelectedTeam = spectator ? 2 : 1;
+        cgs.clientinfo[0].skill[BG_ClassSkillForClass(cls)] = mode ? 0 : level;
+        cgs.clientinfo[0].nitmodSkillLevels[BG_ClassSkillForClass(cls)] = mode ? level : 5;
+        crosshairDraws = 0; CG_LimboPanel_RenderClassButton(&button); count = 0;
+        for(i = 0; i < crosshairDraws; ++i) if(crosshairShaders[i] == shader) ++count;
+        if(count != (level > 4 ? 4 : level)) ++errors;
+    }
+    crosshairDraws = 0; CG_LimboPanel_RenderClassButton(NULL);
+    button.data[1] = 5; CG_LimboPanel_RenderClassButton(&button);
+    if(crosshairDraws) ++errors;
+    crosshairRenderTest = 0; cg.clientNum = oldClient; cgs = saved;
+    if(errors) fprintf(stderr, "class skill wedge failures: %d\n", errors);
+    return errors;
+}
+static int CheckUnarmedSelection(void) {
+    static gameState_t savedGame;
+    playerState_t savedPlayer = cg.predictedPlayerState;
+    int mode, mounted, errors = 0;
+    savedGame = cgs.gameState;
+    {
+        int item = NITMOD_ItemFromWire(54);
+        if(item <= 0 || item >= bg_numItems || bg_itemlist[item].giTag != WP_BOMB ||
+           strcmp(bg_itemlist[item].classname, "weapon_bomb")) ++errors;
+        {
+            const int wireItems[] = {30, 53, 49};
+            const int weapons[] = {WP_POISON_SYRINGE, WP_POISON_BOMB, WP_POISON_MINE};
+            int i;
+            for(i = 0; i < 3; ++i) {
+                float size; vec4_t color;
+                item = NITMOD_ItemFromWire(wireItems[i]);
+                if(item <= 0 || item >= bg_numItems || bg_itemlist[item].giTag != weapons[i] ||
+                   BG_FindAmmoForWeapon(weapons[i]) != weapons[i] || BG_FindClipForWeapon(weapons[i]) != weapons[i]) ++errors;
+                CG_NitmodSmokeSpriteStyle(weapons[i], &size, color);
+                if(i && (size != 7 || color[3] != .25f || color[0] != .15f ||
+                         color[1] != .8f || color[2] != .1f)) ++errors;
+                if(!i && (size != 16 || color[0] != .35f || color[1] != .35f || color[3] != .8f)) ++errors;
+            }
+            if(NITMOD_ItemFromWire(49) == NITMOD_ItemFromWire(48)) ++errors;
+        }
+    }
+    cgs.gameState.stringOffsets[CS_SERVERINFO] = 1;
+    for(mode = 0; mode < 2; ++mode) for(mounted = 0; mounted < 2; ++mounted) {
+        strcpy(cgs.gameState.stringData + 1, mode ? "\\gamename\\nitmod" : "\\gamename\\etmain");
+        memset(&cg.predictedPlayerState, 0, sizeof(cg.predictedPlayerState));
+        cg.predictedPlayerState.eFlags = mounted ? EF_MG42_ACTIVE : 0;
+        if(CG_WeaponSelectable(WP_NONE) != mode || CG_WeaponSelectable(-1) ||
+           CG_WeaponSelectable(WP_NUM_WEAPONS) || CG_WeaponSelectable(WP_MP40)) ++errors;
+        COM_BitSet(cg.predictedPlayerState.weapons, WP_MP40);
+        if(CG_WeaponSelectable(WP_MP40)) ++errors;
+        cg.predictedPlayerState.ammoclip[BG_FindClipForWeapon(WP_MP40)] = 1;
+        if(CG_WeaponSelectable(WP_MP40) != !mounted) ++errors;
+        COM_BitSet(cg.predictedPlayerState.weapons, WP_KNIFE);
+        COM_BitSet(cg.predictedPlayerState.weapons, WP_PLIERS);
+        if(CG_WeaponSelectable(WP_KNIFE) != !mounted || CG_WeaponSelectable(WP_PLIERS) != !mounted) ++errors;
+        COM_BitSet(cg.predictedPlayerState.weapons, WP_BOMB);
+        if(CG_WeaponSelectable(WP_BOMB)) ++errors;
+        cg.predictedPlayerState.ammoclip[WP_BOMB] = 1;
+        if(CG_WeaponSelectable(WP_BOMB) != !mounted) ++errors;
+    }
+    {
+        pmove_t move;
+        playerState_t state, before;
+        int weapon, enabled, alt, held, anim, toggle;
+        memset(&move, 0, sizeof(move)); move.ps = &state;
+        for(weapon = WP_KNIFE; weapon < WP_NUM_WEAPONS; ++weapon)
+        for(enabled = 0; enabled < 2; ++enabled) for(alt = 0; alt < 2; ++alt)
+        for(held = 0; held < 2; ++held) for(anim = WEAP_IDLE1; anim <= WEAP_ATTACK_LASTSHOT; ++anim)
+        for(toggle = 0; toggle < 2; ++toggle) {
+            int expected = enabled && (weapon == WP_KNIFE &&
+                (alt || held || anim == WEAP_ATTACK2 || anim == WEAP_ATTACK_LASTSHOT));
+            memset(&state, 0, sizeof(state)); state.weapon = weapon;
+            state.weapAnim = anim | (toggle ? ANIM_TOGGLEBIT : 0);
+            state.grenadeTimeLeft = held ? 100 : 0;
+            state.ammoclip[weapon] = 1; before = state;
+            move.nitmodAuthoritativeWeapons = enabled;
+            move.cmd.buttons = BUTTON_ATTACK;
+            move.cmd.wbuttons = alt ? WBUTTON_ATTACK2 : 0;
+            if(PM_NitmodAuthoritativeWeapon(&move) != expected || memcmp(&before, &state, sizeof(state))) ++errors;
+        }
+        if(PM_NitmodAuthoritativeWeapon(NULL)) ++errors;
+        move.ps = NULL;
+        if(PM_NitmodAuthoritativeWeapon(&move)) ++errors;
+    }
+    cgs.gameState = savedGame; cg.predictedPlayerState = savedPlayer;
+    if(errors) fprintf(stderr, "unarmed selection failures: %d\n", errors);
+    return errors;
+}
+extern int CG_LimboPanel_RenderCounter_ValueForButton(panel_button_t *);
+extern int CG_LimboPanel_RenderCounter_NumRollers(panel_button_t *);
+static int CheckLimboWeaponStatProtocol(void) {
+    static gameState_t saved;
+    static const int expected[52] = {
+        -1,0,1,3,9,7,8,2,4,9,5,14,-1,13,1,11,13,-1,-1,-1,-1,12,
+        20,19,19,17,-1,15,-1,18,20,6,18,10,2,1,16,16,2,19,20,6,
+        10,-1,2,1,18,21,22,23,24,25
+    };
+    int mode, wire, weapon, errors = 0;
+    saved = cgs.gameState; cgs.gameState.stringOffsets[CS_SERVERINFO] = 1;
+    for(mode = 0; mode < 2; ++mode) {
+        strcpy(cgs.gameState.stringData + 1, mode ? "\\gamename\\nitmod" : "\\gamename\\etmain");
+        for(wire = 0; wire < 52; ++wire) {
+            int stat;
+            weapon = NITMOD_WeaponFromWire(wire);
+            if(wire && weapon == WP_NONE) continue; /* Private weapons have no typed inventory yet. */
+            stat = BG_WeapStatForWeapon(weapon);
+            if(NITMOD_WeaponStatForWeapon(weapon) != (mode ? expected[wire] : stat == WS_MAX ? -1 : stat)) ++errors;
+        }
+        if(NITMOD_WeaponStatForWeapon(-1) != -1 || NITMOD_WeaponStatForWeapon(WP_NUM_WEAPONS) != -1) ++errors;
+    }
+    cgs.gameState = saved;
+    if(errors) fprintf(stderr, "limbo weapon stat protocol failures: %d\n", errors);
+    return errors;
+}
+extern void CG_LimboPanel_RenderCounter(panel_button_t *);
+static int CheckLimboCounterTransitions(void) {
+    static cgs_t saved;
+    panel_button_t button;
+    int mode, errors = 0, oldTime = cg.time, oldGame = cg_gameType.integer;
+    saved = cgs; cgs.gameState.stringOffsets[CS_SERVERINFO] = 1;
+    for(mode = 0; mode < 2; ++mode) {
+        strcpy(cgs.gameState.stringData + 1, mode ? "\\gamename\\nitmod" : "\\gamename\\etmain");
+        memset(&button, 0, sizeof(button)); button.data[0] = 6; button.data[1] = 2;
+        cgs.ccWeaponHits = cgs.ccWeaponShots = INT_MAX;
+        if(CG_LimboPanel_RenderCounter_ValueForButton(&button) != 100) ++errors;
+        cgs.ccWeaponShots = 1;
+        if(CG_LimboPanel_RenderCounter_ValueForButton(&button) != INT_MAX) ++errors;
+        cgs.ccWeaponShots = 0;
+        if(CG_LimboPanel_RenderCounter_ValueForButton(&button)) ++errors;
+        cgs.ccWeaponShots = 3; cgs.ccWeaponHits = 2;
+        if(CG_LimboPanel_RenderCounter_ValueForButton(&button) != 66) ++errors;
+        button.data[1] = 0; button.rect.w = 40; button.rect.h = 20;
+        button.data[3] = button.data[5] = INT_MIN; button.data[4] = INT_MIN;
+        cgs.ccWeaponShots = INT_MAX; cg.time = INT_MAX;
+        crosshairRenderTest = 1; crosshairDraws = 0;
+        CG_LimboPanel_RenderCounter(&button);
+        if(button.data[5] != INT_MIN + 5 || button.data[4] != INT_MAX || crosshairDraws != 8) ++errors;
+        cg.time = 0; crosshairDraws = 0;
+        CG_LimboPanel_RenderCounter(&button);
+        if(button.data[3] != INT_MAX || button.data[5] != INT_MAX || button.data[4] != 0) ++errors;
+        button.data[0] = 2; cg_gameType.integer = GT_WOLF_LMS; crosshairDraws = 0;
+        CG_LimboPanel_RenderCounter(&button);
+        if(crosshairDraws) ++errors;
+        crosshairRenderTest = 0;
+    }
+    cgs = saved; cg.time = oldTime; cg_gameType.integer = oldGame;
+    if(errors) fprintf(stderr, "limbo counter transition failures: %d\n", errors);
+    return errors;
+}
+static int CheckLimboPopulationCounters(void) {
+    static cgs_t saved;
+    panel_button_t button;
+    int limits[] = {-1, 0, 1, 8, 64, INT_MAX};
+    int mode, n, i, team, kind, errors = 0, oldClient = cg.clientNum;
+    saved = cgs; cg.clientNum = 0;
+    memset(&button, 0, sizeof(button));
+    cgs.gameState.stringOffsets[CS_SERVERINFO] = 1;
+    for(i = 0; i < MAX_CLIENTS; ++i) {
+        cgs.clientinfo[i].infoValid = i % 4 != 3;
+        cgs.clientinfo[i].team = i % 2 ? TEAM_AXIS : TEAM_ALLIES;
+        cgs.clientinfo[i].cls = i % NUM_PLAYER_CLASSES;
+    }
+    /* Spectators may inspect both combat teams, as in the original. */
+    cgs.clientinfo[0].team = TEAM_SPECTATOR;
+    for(mode = 0; mode < 2; ++mode) for(n = 0; n < 6; ++n)
+    for(team = 0; team < 3; ++team) for(kind = 0; kind < 2; ++kind) {
+        int limit = mode ? limits[n] : MAX_CLIENTS, expected = 0;
+        team_t selected = team == 0 ? TEAM_ALLIES : team == 1 ? TEAM_AXIS : TEAM_SPECTATOR;
+        if(limit < 0) limit = 0;
+        if(limit > MAX_CLIENTS) limit = MAX_CLIENTS;
+        strcpy(cgs.gameState.stringData + 1, mode ? "\\gamename\\nitmod" : "\\gamename\\etmain");
+        cgs.maxclients = limits[n]; cgs.ccSelectedTeam = team;
+        button.data[0] = kind; button.data[1] = kind ? team : PC_ENGINEER;
+        for(i = 0; i < limit; ++i)
+            if(cgs.clientinfo[i].infoValid && cgs.clientinfo[i].team == selected &&
+               (kind || (selected != TEAM_SPECTATOR && cgs.clientinfo[i].cls == PC_ENGINEER))) ++expected;
+        if(CG_LimboPanel_RenderCounter_ValueForButton(&button) != expected) ++errors;
+    }
+    button.data[0] = 1; button.data[1] = -1;
+    if(CG_LimboPanel_RenderCounter_ValueForButton(&button)) ++errors;
+    button.data[1] = INT_MAX;
+    if(CG_LimboPanel_RenderCounter_ValueForButton(&button) || CG_LimboPanel_RenderCounter_ValueForButton(NULL)) ++errors;
+    cgs = saved; cg.clientNum = oldClient;
+    if(errors) fprintf(stderr, "limbo population counter failures: %d\n", errors);
+    return errors;
+}
+extern int CG_LimboPanel_RenderCounter_RollTimeForButton(panel_button_t *);
+static int CheckLimboRollTimes(void) {
+    static cgs_t saved;
+    panel_button_t button;
+    int mode, kind, delta, errors = 0;
+    saved = cgs; memset(&button, 0, sizeof(button));
+    cgs.gameState.stringOffsets[CS_SERVERINFO] = 1;
+    for(mode = 0; mode < 2; ++mode) {
+        strcpy(cgs.gameState.stringData + 1, mode ? "\\gamename\\nitmod" : "\\gamename\\etmain");
+        for(kind = 0; kind < 6; ++kind) {
+            int expected = kind < 2 ? 100 : kind == 2 ? (mode ? 15 : 50) : kind == 4 ? 1000 : 50;
+            button.data[0] = kind;
+            if(CG_LimboPanel_RenderCounter_RollTimeForButton(&button) != expected) ++errors;
+        }
+        button.data[0] = 6; cgs.ccWeaponShots = 100;
+        for(delta = -8; delta <= 8; ++delta) {
+            int distance = abs(delta), expected = distance && distance < 5 ? 200 / distance : 50;
+            button.data[3] = 100 + delta;
+            if(CG_LimboPanel_RenderCounter_RollTimeForButton(&button) != expected) ++errors;
+        }
+        button.data[3] = INT_MIN; cgs.ccWeaponShots = INT_MAX;
+        if(CG_LimboPanel_RenderCounter_RollTimeForButton(&button) != 50) ++errors;
+        button.data[3] = INT_MAX; cgs.ccWeaponShots = INT_MIN;
+        if(CG_LimboPanel_RenderCounter_RollTimeForButton(&button) != 50) ++errors;
+    }
+    cgs = saved;
+    if(errors) fprintf(stderr, "limbo roll time failures: %d\n", errors);
+    return errors;
+}
+static int CheckLimboSkillCounters(void) {
+    static cgs_t saved;
+    panel_button_t button;
+    int mode, level, kind, i, errors = 0, oldClient = cg.clientNum, oldGame = cg_gameType.integer;
+    saved = cgs; memset(&button, 0, sizeof(button)); button.data[0] = 4;
+    cgs.gameState.stringOffsets[CS_SERVERINFO] = 1; cg.clientNum = 0; cg_gameType.integer = GT_WOLF;
+    for(mode = 0; mode < 2; ++mode) {
+        strcpy(cgs.gameState.stringData + 1, mode ? "\\gamename\\nitmod" : "\\gamename\\etmain");
+        if(CG_LimboPanel_RenderCounter_NumRollers(&button) != (mode ? 5 : 4)) ++errors;
+        for(level = 0; level <= (mode ? 5 : 4); ++level) {
+            for(i = 0; i < SK_NUM_SKILLS; ++i) {
+                cgs.clientinfo[0].skill[i] = mode ? 0 : level;
+                cgs.clientinfo[0].nitmodSkillLevels[i] = mode ? level : 5;
+            }
+            for(kind = 0; kind < 2; ++kind) {
+                button.data[1] = kind;
+                if(CG_LimboPanel_RenderCounter_ValueForButton(&button) != (1 << level) - 1) ++errors;
+            }
+        }
+        cg_gameType.integer = GT_WOLF_LMS;
+        if(CG_LimboPanel_RenderCounter_NumRollers(&button)) ++errors;
+        cg_gameType.integer = GT_WOLF;
+    }
+    cgs.clientinfo[0].nitmodSkillLevels[SK_LIGHT_WEAPONS] = INT_MAX;
+    if(CG_LimboPanel_RenderCounter_ValueForButton(&button)) ++errors;
+    cg.clientNum = MAX_CLIENTS;
+    if(CG_LimboPanel_RenderCounter_ValueForButton(&button)) ++errors;
+    cgs = saved; cg.clientNum = oldClient; cg_gameType.integer = oldGame;
+    if(errors) fprintf(stderr, "limbo skill counter failures: %d\n", errors);
+    return errors;
+}
+extern int QDECL CG_SortPlayersByXP(const void *, const void *);
+static int CheckDebriefSorting(void) {
+    static cgs_t saved;
+    int mode, game, i, j, errors = 0;
+    int ids[5] = {0, 1, 2, -1, MAX_CLIENTS};
+    int order[3];
+    saved = cgs;
+    memset(&cgs, 0, sizeof(cgs));
+    cgs.gameState.stringOffsets[CS_SERVERINFO] = 1;
+    cgs.clientinfo[0].infoValid = cgs.clientinfo[1].infoValid = qtrue;
+    cgs.clientinfo[0].score = INT_MAX; cgs.clientinfo[1].score = INT_MIN;
+    cgs.clientinfo[0].kills = 1; cgs.clientinfo[1].kills = 9;
+    for(mode = 0; mode < 2; ++mode) for(game = 0; game <= 8; ++game) {
+        strcpy(cgs.gameState.stringData + 1, mode ? "\\gamename\\nitmod" : "\\gamename\\etmain");
+        cgs.gametype = game;
+        for(i = 0; i < 5; ++i) for(j = 0; j < 5; ++j) {
+            int ab = CG_SortPlayersByXP(&ids[i], &ids[j]);
+            int ba = CG_SortPlayersByXP(&ids[j], &ids[i]);
+            if(ab != -ba || (i == j && ab)) ++errors;
+        }
+        order[0] = 2; order[1] = 1; order[2] = 0;
+        qsort(order, 3, sizeof(order[0]), CG_SortPlayersByXP);
+        if(order[0] != (mode && game == 8 ? 1 : 0) || order[2] != 2) ++errors;
+    }
+    cgs.clientinfo[1].kills = 1;
+    if(CG_SortPlayersByXP(&ids[0], &ids[1])) ++errors;
+    cgs = saved;
+    if(errors) fprintf(stderr, "debrief sorting failures: %d\n", errors);
+    return errors;
+}
+static int CheckDebriefSelection(void) {
+    static cgs_t saved;
+    int oldClient = cg.clientNum, errors = 0, i;
+    panel_button_t list;
+    memset(&list, 0, sizeof(list));
+    saved = cgs; memset(&cgs, 0, sizeof(cgs));
+    cgs.gameState.stringOffsets[CS_SERVERINFO] = 1;
+    strcpy(cgs.gameState.stringData + 1, "\\gamename\\nitmod");
+    cgs.maxclients = 4; cg.clientNum = -1; cgs.dbSelectedClient = MAX_CLIENTS;
+    if(CG_Debriefing_GetSelectedClientInfo()) ++errors;
+    cg.clientNum = 1;
+    if(CG_Debriefing_GetSelectedClientInfo()) ++errors;
+    cgs.clientinfo[1].infoValid = qtrue;
+    cgs.dbWeaponStatsRecieved = cgs.dbHitRegionsRecieved = qtrue;
+    if(CG_Debriefing_GetSelectedClientInfo() != &cgs.clientinfo[1] || cgs.dbSelectedClient != 1 ||
+       cgs.dbWeaponStatsRecieved || cgs.dbHitRegionsRecieved) ++errors;
+    for(i = 0; i < 4; ++i) { cgs.dbSortedClients[i] = i; cgs.clientinfo[i].infoValid = qtrue; }
+    if(CG_Debriefing_ScrollGetCount(&list) != 4 || CG_Debriefing_ScrollGetCount(NULL)) ++errors;
+    for(i = 0; i < 4; ++i) {
+        cgs.cursorY = 60 + i * 12;
+        if(!CG_DebriefingPlayerList_KeyDown(NULL, K_MOUSE1) || cgs.dbSelectedClient != i) ++errors;
+    }
+    cgs.cursorY = 59;
+    if(CG_DebriefingPlayerList_KeyDown(NULL, K_MOUSE1)) ++errors;
+    cgs.cursorY = 108;
+    if(CG_DebriefingPlayerList_KeyDown(NULL, K_MOUSE1)) ++errors;
+    cgs.cursorY = 60; cgs.dbSortedClients[0] = MAX_CLIENTS;
+    if(CG_Debriefing_ScrollGetCount(&list)) ++errors;
+    if(CG_DebriefingPlayerList_KeyDown(NULL, K_MOUSE1)) ++errors;
+    cgs.dbSortedClients[0] = -1;
+    if(CG_DebriefingPlayerList_KeyDown(NULL, K_MOUSE1)) ++errors;
+    cgs.dbPlayerListOffset = INT_MAX;
+    if(CG_DebriefingPlayerList_KeyDown(NULL, K_MOUSE1)) ++errors;
+    cg.clientNum = oldClient; cgs = saved;
+    if(errors) fprintf(stderr, "debrief selection failures: %d\n", errors);
+    return errors;
+}
+static int CheckClassHealth(void) {
+    static cgs_t saved;
+    snapshot_t snap, *oldSnap = cg.snap;
+    int cls, medics, skill, errors = 0;
+    const char *invalid[] = {"", "0", "-1", "12x", "2147483648"};
+    saved = cgs; memset(&cgs, 0, sizeof(cgs)); memset(&snap, 0, sizeof(snap)); cg.snap = &snap;
+    cgs.gameState.stringOffsets[CS_SERVERINFO] = 1;
+    strcpy(cgs.gameState.stringData + 1, "\\gamename\\nitmod");
+    cgs.gameState.stringOffsets[39] = 256;
+    cgs.maxclients = MAX_CLIENTS;
+    cgs.clientinfo[0].team = TEAM_AXIS;
+    cgs.clientinfo[1].infoValid = qtrue; cgs.clientinfo[1].team = TEAM_ALLIES;
+    strcpy(cgs.gameState.stringData + 256, "\\S\\101\\M\\202\\E\\303\\F\\404\\C\\505");
+    for(cls = 0; cls < 5; ++cls) {
+        cgs.clientinfo[1].cls = cls;
+        cgs.clientinfo[1].skill[SK_BATTLE_SENSE] = 4;
+        if(CG_NitmodCrosshairMaxHealth(1) != (cls + 1) * 101) ++errors;
+    }
+    for(cls = 0; cls < 5; ++cls) {
+        Com_sprintf(cgs.gameState.stringData + 256, 128, "\\S\\%s", invalid[cls]);
+        cgs.clientinfo[1].cls = PC_SOLDIER; cgs.clientinfo[1].skill[SK_BATTLE_SENSE] = 0;
+        if(CG_NitmodCrosshairMaxHealth(1) != 100) ++errors;
+    }
+    cgs.gameState.stringData[256] = 0;
+    for(cls = 0; cls < 5; ++cls) for(medics = 0; medics <= 4; ++medics) for(skill = 0; skill < 64; ++skill) {
+        int i, expected = 100 + (medics >= 3 ? 25 : medics * 10) + ((skill & 8) ? 15 : 0);
+        for(i = 2; i < 6; ++i) {
+            cgs.clientinfo[i].infoValid = i - 2 < medics;
+            cgs.clientinfo[i].team = TEAM_AXIS; cgs.clientinfo[i].cls = PC_MEDIC;
+        }
+        cgs.clientinfo[1].cls = cls;
+        cgs.clientinfo[1].skill[SK_BATTLE_SENSE] = (skill & 8) ? 0 : 4;
+        cgs.clientinfo[1].nitmodSkillMasks[SK_BATTLE_SENSE] = skill;
+        if(cls == PC_MEDIC) expected = (int)(expected * 1.12f);
+        if(CG_NitmodCrosshairMaxHealth(1) != expected) ++errors;
+    }
+    strcpy(cgs.gameState.stringData + 256, "\\C\\777");
+    if(CG_NitmodCrosshairMaxHealth(1) != 777) ++errors;
+    cgs.clientinfo[1].cls = 5;
+    if(CG_NitmodCrosshairMaxHealth(1) || CG_NitmodCrosshairMaxHealth(-1) || CG_NitmodCrosshairMaxHealth(MAX_CLIENTS)) ++errors;
+    strcpy(cgs.gameState.stringData + 1, "\\gamename\\etmain");
+    if(CG_NitmodCrosshairMaxHealth(1)) ++errors;
+    cgs = saved; cg.snap = oldSnap;
+    return errors;
+}
 static int CheckCrosshairPresentation(void) {
     static cgs_t savedCgs;
     int savedFlags = cg_drawCrosshairNames.integer, savedPowerups = cg_entities[2].currentState.powerups;
@@ -70,6 +486,83 @@ static int CheckCrosshairPresentation(void) {
     cgs.clientinfo[2].infoValid = qtrue;
     strcpy(cgs.clientinfo[2].name, "A"); strcpy(cgs.clientinfo[2].disguiseName, "B");
     crosshairRenderTest = 1;
+    {
+        panel_button_t button;
+        panel_button_text_t font;
+        score_t oldScore = cg.scores[0];
+        int oldCount = cg.numScores;
+        void (*draws[])(panel_button_t *) = {CG_Debriefing_PlayerACC_Draw, CG_Debriefing_PlayerXP_Draw, CG_Debriefing_PlayerTime_Draw,
+            CG_Debriefing_PlayerRank_Draw, CG_Debriefing_PlayerMedals_Draw};
+        const char *labels[] = {"ACC: ", "XP: ", "Time: ", "Rank: ", "Medals: "};
+        memset(&button, 0, sizeof(button)); memset(&font, 0, sizeof(font));
+        button.font = &font; button.rect.x = 100; button.rect.y = 80;
+        font.scalex = font.scaley = .2f; font.font = &cgs.media.limboFont2; Vector4Copy(colorWhite, font.colour);
+        cgs.dbSelectedClient = 2; cg.numScores = 1; cg.scores[0].client = 2; cg.scores[0].time = 42;
+        for(mode = 0; mode < 2; ++mode) for(i = 0; i < 5; ++i) {
+            float width = CG_Text_Width_Ext(labels[i], .2f, 0, font.font);
+            strcpy(cgs.gameState.stringData + 1, mode ? "\\gamename\\nitmod" : "\\gamename\\etmain");
+            crosshairDraws = 0; draws[i](&button);
+            if(!crosshairDraws || fabs(crosshairRects[1][0] - (mode ? 100 : 100 - width)) > .01f) ++errors;
+        }
+        cg.numScores = 0; crosshairDraws = 0; CG_Debriefing_PlayerTime_Draw(&button);
+        if(crosshairDraws) ++errors;
+        cgs.dbPlayerListOffset = 0; cgs.maxclients = 4;
+        cgs.dbSortedClients[0] = 2;
+        CG_DebriefingPlayerList_Draw(&button);
+        if(crosshairDraws) ++errors;
+        cg.numScores = 1; cgs.dbSortedClients[0] = MAX_CLIENTS;
+        CG_DebriefingPlayerList_Draw(&button);
+        cgs.dbPlayerListOffset = INT_MAX; CG_DebriefingPlayerList_Draw(&button);
+        CG_DebriefingPlayerList_Draw(NULL);
+        if(crosshairDraws) ++errors;
+        for(i = 0; i < 5; ++i) draws[i](NULL);
+        if(crosshairDraws) ++errors;
+        for(mode = 0; mode < 2; ++mode) for(flags = 0; flags < (1 << SK_NUM_SKILLS); ++flags) {
+            int count = 0, row;
+            float start;
+            strcpy(cgs.gameState.stringData + 1, mode ? "\\gamename\\nitmod" : "\\gamename\\etmain");
+            start = 100 + (mode ? CG_Text_Width_Ext("Medals: ", .2f, 0, font.font) : 0);
+            for(row = 0; row < SK_NUM_SKILLS; ++row) {
+                cgs.clientinfo[2].medals[row] = (flags >> row) & 1;
+                cgs.media.medals[row] = 4000 + row;
+                if(cgs.clientinfo[2].medals[row]) ++count;
+            }
+            crosshairDraws = 0; CG_Debriefing_PlayerMedals_Draw(&button);
+            if(crosshairDraws != 14 + count) { ++errors; continue; }
+            count = 0;
+            for(row = 0; row < SK_NUM_SKILLS; ++row) if((flags >> row) & 1) {
+                int at = 14 + count++;
+                if(crosshairShaders[at] != 4000 + row ||
+                   fabs(crosshairRects[at][0] - (start + (count - 1) * 18)) > .01f ||
+                   crosshairRects[at][1] != 70 || crosshairRects[at][2] != 16) ++errors;
+            }
+        }
+        cg.numScores = oldCount; cg.scores[0] = oldScore;
+    }
+    {
+        snapshot_t snap, *oldSnap = cg.snap;
+        memset(&snap, 0, sizeof(snap)); cg.snap = &snap;
+        strcpy(cgs.gameState.stringData + 1, "\\gamename\\nitmod");
+        snap.ps.clientNum = 2; snap.ps.pm_flags = PMF_FOLLOW;
+        cgs.clientinfo[2].rank = 0; cgs.clientinfo[2].team = TEAM_AXIS;
+        for(cls = 0; cls < 5; ++cls) {
+            cgs.clientinfo[2].cls = cls; crosshairDraws = 0;
+            if(!CG_NitmodDrawFollow() || crosshairDraws < 3 || crosshairRects[0][0] != 8 ||
+               crosshairRects[0][1] != 124 || crosshairRects[1][0] != 23 ||
+               crosshairShaders[1] != 2000 + BG_ClassSkillForClass(cls)) ++errors;
+        }
+        snap.ps.pm_flags |= PMF_LIMBO;
+        snap.ps.persistant[PERS_RESPAWNS_PENALTY] = INT_MAX;
+        crosshairDraws = 0;
+        if(!CG_NitmodDrawFollow() || !crosshairDraws) ++errors;
+        snap.ps.clientNum = MAX_CLIENTS; crosshairDraws = 0;
+        if(!CG_NitmodDrawFollow() || crosshairDraws) ++errors;
+        snap.ps.clientNum = 2; cgs.clientinfo[2].rank = NUM_EXPERIENCE_LEVELS;
+        if(!CG_NitmodDrawFollow() || crosshairDraws) ++errors;
+        snap.ps.pm_flags = 0;
+        if(CG_NitmodDrawFollow()) ++errors;
+        cg.snap = oldSnap;
+    }
     for(mode = 0; mode < 2; ++mode) for(flags = 0; flags < 4; ++flags)
     for(cls = PC_SOLDIER; cls <= PC_COVERTOPS; ++cls)
     for(rank = -1; rank <= NUM_EXPERIENCE_LEVELS; ++rank) for(disguise = 0; disguise < 2; ++disguise) {
@@ -103,6 +596,32 @@ static int CheckCrosshairPresentation(void) {
     if(crosshairDraws != 2 || crosshairRects[1][2] != 0) ++errors;
     crosshairDraws = 0; CG_NitmodDrawCrosshairHealth(1, 0, color);
     if(crosshairDraws) ++errors;
+    cgs.glconfig.vidWidth = 1920; cgs.glconfig.vidHeight = 1080;
+    cgs.screenXScale = 3; cgs.screenYScale = 2.25f;
+    {
+        nitmodHudAnchor_t oldAnchor = CG_NitmodHudAnchor(NITMOD_HUD_RIGHT);
+        for(i = 0; i < 2; ++i) {
+            crosshairDraws = 0; CG_NitmodDrawSpectatorInstruction(i, "A");
+            if(crosshairDraws != 2 || fabs(crosshairRects[1][0] - 18) > .01f ||
+               fabs(crosshairRects[1][1] - (150 + i * 8) * 2.25f) > .01f ||
+               CG_NitmodHudAnchor(NITMOD_HUD_RIGHT) != NITMOD_HUD_RIGHT) ++errors;
+        }
+        crosshairDraws = 0; CG_NitmodDrawSpectatorInstruction(-1, "A");
+        CG_NitmodDrawSpectatorInstruction(2, "A"); CG_NitmodDrawSpectatorInstruction(0, NULL);
+        if(crosshairDraws) ++errors;
+        for(i = 0; i < 3; ++i) {
+            crosshairDraws = 0; CG_NitmodDrawWoundedInstruction(i, "A");
+            if(crosshairDraws != 2 || fabs(crosshairRects[1][0] - 18) > .01f ||
+               fabs(crosshairRects[1][1] - (118 + i * 12) * 2.25f) > .01f ||
+               CG_NitmodHudAnchor(NITMOD_HUD_RIGHT) != NITMOD_HUD_RIGHT) ++errors;
+        }
+        crosshairDraws = 0; CG_NitmodDrawWoundedInstruction(-1, "A");
+        CG_NitmodDrawWoundedInstruction(3, "A"); CG_NitmodDrawWoundedInstruction(0, NULL);
+        if(crosshairDraws) ++errors;
+        CG_NitmodHudAnchor(oldAnchor);
+    }
+    cgs.glconfig.vidWidth = 640; cgs.glconfig.vidHeight = 480;
+    cgs.screenXScale = cgs.screenYScale = 1;
     cgs.gameState.stringOffsets[26] = 2000; strcpy(cgs.gameState.stringData + 2000, "\\64\\original mover");
     cgs.gameState.stringOffsets[27] = 2100; strcpy(cgs.gameState.stringData + 2100, "\\64\\original construction");
     cgs.gameState.stringOffsets[CS_SCRIPT_MOVER_NAMES] = 2200; strcpy(cgs.gameState.stringData + 2200, "\\64\\native mover");
@@ -114,6 +633,7 @@ static int CheckCrosshairPresentation(void) {
            *CG_NitmodCrosshairEntityName(63, qfalse) || *CG_NitmodCrosshairEntityName(ENTITYNUM_WORLD, qtrue) ||
            *CG_NitmodCrosshairEntityName(65, qfalse)) ++errors;
     }
+    if(errors) fprintf(stderr, "crosshair presentation failures: %d\n", errors);
     crosshairRenderTest = 0; cgs = savedCgs;
     cg_drawCrosshairNames.integer = savedFlags; cg_entities[2].currentState.powerups = savedPowerups;
     for(i = 0; i < NUM_EXPERIENCE_LEVELS; ++i) rankicons[i][0].shader = savedRank[i];
@@ -579,6 +1099,24 @@ static int CheckOriginalSkillPresentation(void) {
     cgs.gameState.stringOffsets[CS_SERVERINFO] = 1;
     strcpy(cgs.gameState.stringData + 1, "\\gamename\\nitmod");
     memset(&state, 0, sizeof(state));
+    /* Live CS_PLAYERS values alias Info_ValueForKey's two rotating buffers.
+     * Protocol detection performs more lookups and must not destroy s. */
+    {
+        const char *servers[] = {"\\gamename\\nitmod", "\\gamename\\nitmod\\nitmod_csLayout\\et260", "\\gamename\\etmain"};
+        int mode, parity;
+        for(mode = 0; mode < 3; ++mode) for(parity = 0; parity < 2; ++parity) {
+            const char *wire;
+            strcpy(cgs.gameState.stringData + 1, servers[mode]);
+            for(i = 0; i < 7; ++i) native[i] = shown[i] = 99;
+            if(parity) Info_ValueForKey("\\dummy\\value", "dummy");
+            wire = Info_ValueForKey(mode ? "\\s\\4444444\\xp\\62 62 62 62 62 62 62 " :
+                "\\s\\5555555\\xp\\62 62 62 62 62 62 62 ", "s");
+            if(!NITMOD_DecodeClientSkills(wire, native, shown)) ++errors;
+            for(i = 0; i < 7; ++i)
+                if(native[i] != 4 || shown[i] != (mode ? 4 : 5)) ++errors;
+        }
+        strcpy(cgs.gameState.stringData + 1, "\\gamename\\nitmod");
+    }
     state.stats[3] = 2; state.stats[STAT_XP] = 17;
     if(CG_NitmodDisplayXP(&state) != 65553 || CG_NitmodDisplayXP(NULL) != 0) ++errors;
     state.stats[3] = 0x7fffffff;
@@ -802,7 +1340,7 @@ static int CheckClientExtras(void) {
         Com_sprintf(info, sizeof(info), "\\sc\\%d\\tv\\%d\\xp\\1 2 3 4 5 6 7", sc, tv);
         NITMOD_ParseClientExtras(info, &client);
         if(client.nitmodTV != tv || client.nitmodShoutcaster != sc) ++errors;
-        for(i = 0; i < SK_NUM_SKILLS; ++i) if(client.skillpoints[i] != i + 1) ++errors;
+        for(i = 0; i < SK_NUM_SKILLS; ++i) if(client.nitmodSkillMasks[i] != i + 1 || client.skillpoints[i]) ++errors;
         for(connecting = 0; connecting < 2; ++connecting) {
             const char *expected = connecting ? "^3CONNECTING" :
                 tv ? (sc ? "^5TV^7|^3SHOUTCASTER" : "^5TV^7|^3SPECTATOR") :
@@ -811,15 +1349,15 @@ static int CheckClientExtras(void) {
         }
     }
     NITMOD_ParseClientExtras("\\sc\\-1\\tv\\1bad\\xp\\  -5  20 ", &client);
-    if(!client.nitmodShoutcaster || client.nitmodTV || client.skillpoints[0] != -5 || client.skillpoints[1] != 20) ++errors;
-    for(i = 2; i < SK_NUM_SKILLS; ++i) if(client.skillpoints[i]) ++errors;
+    if(!client.nitmodShoutcaster || client.nitmodTV || client.nitmodSkillMasks[0] != -5 || client.nitmodSkillMasks[1] != 20) ++errors;
+    for(i = 2; i < SK_NUM_SKILLS; ++i) if(client.nitmodSkillMasks[i]) ++errors;
     {
         const char *invalid[] = {"1 2 bad", "2147483648", "1 2 3 4 5 6 7 8", "1\t2"};
         int k;
         for(k = 0; k < 4; ++k) {
             Com_sprintf(info, sizeof(info), "\\xp\\%s", invalid[k]);
             NITMOD_ParseClientExtras(info, &client);
-            for(i = 0; i < SK_NUM_SKILLS; ++i) if(client.skillpoints[i]) ++errors;
+            for(i = 0; i < SK_NUM_SKILLS; ++i) if(client.nitmodSkillMasks[i]) ++errors;
             if(client.nitmodTV || client.nitmodShoutcaster) ++errors;
         }
     }
@@ -830,6 +1368,39 @@ static int CheckClientExtras(void) {
     if(strcmp(CG_NitmodSpectatorLabel(&client, 20), "^3SPECTATOR")) ++errors;
     NITMOD_ParseClientExtras(NULL, NULL);
     strcpy(cgs.gameState.stringData + 1, "\\gamename\\nitmod");
+    return errors;
+}
+static int CheckTripminePresentation(void) {
+    static cgs_t saved;
+    snapshot_t snap, *oldSnap = cg.snap;
+    entityState_t state;
+    byte rgba[4];
+    int local, viewer, team, caster, phase, mask, expected, errors = 0, oldClient = cg.clientNum;
+    saved = cgs; memset(&snap, 0, sizeof(snap)); memset(&state, 0, sizeof(state));
+    cg.snap = &snap; cg.clientNum = 0; snap.ps.clientNum = 1;
+    cgs.gameState.stringOffsets[CS_SERVERINFO] = 1;
+    strcpy(cgs.gameState.stringData + 1, "\\gamename\\nitmod");
+    for(local = 1; local <= 3; ++local) for(viewer = 1; viewer <= 3; ++viewer)
+    for(team = 1; team <= 2; ++team) for(caster = 0; caster < 2; ++caster)
+    for(phase = 0; phase < 3; ++phase) for(mask = 0; mask < 64; ++mask) {
+        int authorized = local == TEAM_SPECTATOR && caster;
+        cgs.clientinfo[0].team = local; cgs.clientinfo[0].nitmodShoutcaster = caster;
+        cgs.clientinfo[1].team = viewer; cgs.clientinfo[1].nitmodSkillMasks[SK_BATTLE_SENSE] = mask;
+        state.teamNum = team; state.effect1Time = phase;
+        expected = local == TEAM_SPECTATOR && !caster ? 0 : !phase ? 1 :
+            viewer != team && !authorized && !(mask & 16) ? 1 : 2;
+        memset(rgba, 17, sizeof(rgba));
+        if(CG_NitmodTripminePresentation(&state, rgba) != expected) ++errors;
+        if(expected == 2) {
+            int intensity = phase == 1 || (viewer != team && !authorized) ? 50 : 255;
+            if(rgba[0] != (team == TEAM_AXIS ? intensity : 0) || rgba[1] ||
+               rgba[2] != (team == TEAM_ALLIES ? intensity : 0) || rgba[3] != 255) ++errors;
+        } else if(rgba[0] != 17 || rgba[3] != 17) ++errors;
+    }
+    snap.ps.clientNum = MAX_CLIENTS;
+    if(CG_NitmodTripminePresentation(&state, rgba)) ++errors;
+    cgs = saved; cg.snap = oldSnap; cg.clientNum = oldClient;
+    if(errors) fprintf(stderr, "tripmine presentation failures: %d\n", errors);
     return errors;
 }
 static int CheckCountryFlagAtlas(void) {
@@ -1207,6 +1778,7 @@ static int CheckOriginalAnimationConditions(const char *path) {
     static animScriptData_t scripts;
     static animation_t animationStubs[MAX_MODEL_ANIMATIONS];
     const char *extra[] = {"Poison Syringe", "Bomb", "Poison Bomb", "Poison Landmine"};
+    const int extraBits[] = {WP_POISON_SYRINGE, WP_BOMB, WP_POISON_BOMB, WP_POISON_MINE};
     char *text, *end, *line;
     long size;
     FILE *file = fopen(path, "rb");
@@ -1254,7 +1826,7 @@ static int CheckOriginalAnimationConditions(const char *path) {
         BG_ParseConditions(&cursor, &item);
         if(item.numConditions != 1) ++errors;
         for(bit = 0; bit < 64; ++bit)
-            if(!!COM_BitCheck(item.conditions[0].value, bit) != (bit == WP_NUM_WEAPONS + i)) ++errors;
+            if(!!COM_BitCheck(item.conditions[0].value, bit) != (bit == extraBits[i])) ++errors;
     }
     if(BG_IndexForString("not-a-weapon", weaponStrings, qtrue) != -1) ++errors;
     end = strstr(text, "\nANIMATIONS");
@@ -1274,10 +1846,10 @@ static int CheckOriginalAnimationConditions(const char *path) {
             Com_sprintf(expression, sizeof(expression), "weapons %s\n", extra[extraIndex]);
             BG_ParseConditions(&cursor, &item);
             for(client = 0; client < MAX_CLIENTS; ++client) {
-                for(candidate = 0; candidate < WP_NUM_WEAPONS + 4; ++candidate) {
+                for(candidate = 0; candidate < WP_NUM_WEAPONS; ++candidate) {
                     BG_UpdateConditionValue(client, ANIM_COND_WEAPON, candidate, qtrue);
                     if(!!BG_EvaluateConditions(client, &item) !=
-                       (candidate == WP_NUM_WEAPONS + extraIndex)) ++errors;
+                       (candidate == extraBits[extraIndex])) ++errors;
                     ++evaluated;
                 }
             }
@@ -1340,6 +1912,212 @@ static int CheckOriginalAnimationConditions(const char *path) {
 }
 static const char *fields[21] = {"ct", "11", "22", "33", "44", "55", "66", "77", "88", "99", "110", "121"};
 static int argcValue = 11, prints;
+static char lastPopupPrint[1024];
+static const char **weaponStatArgs;
+
+static int CheckGlobalStatsRefresh(void) {
+    static cgs_t saved;
+    static snapshot_t snap;
+    snapshot_t *oldSnap = cg.snap;
+    const char *oldFields[21];
+    int oldArgc = argcValue, oldTime = cg.time, errors = 0, i;
+    qboolean oldDemo = cg.demoPlayback;
+    saved = cgs; memcpy(oldFields, fields, sizeof(fields));
+    memset(&snap, 0, sizeof(snap)); cg.snap = &snap;
+    cgs.gameState.stringOffsets[CS_SERVERINFO] = 1;
+    strcpy(cgs.gameState.stringData + 1, "\\gamename\\nitmod");
+    cgs.glconfig.vidWidth = 640; cgs.glconfig.vidHeight = 480;
+    cgs.screenXScale = cgs.screenYScale = 1;
+    cgs.media.limboFont2.glyphScale = 1;
+    for(i = 0; i < 256; ++i) {
+        glyphInfo_t *glyph = &cgs.media.limboFont2.glyphs[i];
+        glyph->xSkip = 10; glyph->height = glyph->imageHeight = 20;
+        glyph->imageWidth = 10; glyph->top = 20; glyph->glyph = 4000 + i;
+    }
+    CG_NitmodGlobalStatsReset(); cg.time = 100; cg.demoPlayback = qfalse;
+    CG_NitmodGlobalStats_f();
+    globalStatsRenderTest = crosshairRenderTest = 1; globalStatsRequests = 0;
+    crosshairDraws = 0;
+    if(!CG_NitmodDrawGlobalStats() || globalStatsRequests != 1 || strcmp(globalStatsRequest, "ggs 0")) ++errors;
+    crosshairRenderTest = 0;
+    fields[0] = "glstats"; fields[1] = "0";
+    for(i = 2; i < 17; ++i) fields[i] = "7";
+    argcValue = 17; cg.time = 1000; CG_NitmodGlobalStatsCommand();
+    crosshairRenderTest = 1; crosshairDraws = 0; cg.time = 15100;
+    if(!CG_NitmodDrawGlobalStats() || globalStatsRequests != 1) ++errors;
+    {
+        int values = 0;
+        for(i = 0; i < crosshairDraws; ++i) {
+            if(crosshairShaders[i] == 4000 + '7') ++values;
+        }
+        /* All thirteen values use limboFont2, shadow plus foreground. */
+        if(values != 26) ++errors;
+    }
+    crosshairDraws = 0; cg.time = 15101;
+    if(!CG_NitmodDrawGlobalStats() || globalStatsRequests != 2) ++errors;
+    crosshairRenderTest = 0; fields[2] = "-"; argcValue = 3; cg.time = 16000;
+    CG_NitmodGlobalStatsCommand();
+    crosshairRenderTest = 1; crosshairDraws = 0; cg.time = 21000;
+    if(!CG_NitmodDrawGlobalStats() || globalStatsRequests != 2) ++errors;
+    crosshairDraws = 0; cg.time = 21001;
+    if(!CG_NitmodDrawGlobalStats() || globalStatsRequests != 3) ++errors;
+    snap.ps.clientNum = MAX_CLIENTS;
+    if(CG_NitmodDrawGlobalStats() || globalStatsRequests != 3) ++errors;
+    snap.ps.clientNum = 1; crosshairDraws = 0;
+    if(!CG_NitmodDrawGlobalStats() || globalStatsRequests != 4 || strcmp(globalStatsRequest, "ggs 1")) ++errors;
+    crosshairDraws = 0; cg.time = 5;
+    if(!CG_NitmodDrawGlobalStats() || globalStatsRequests != 5) ++errors;
+    crosshairDraws = 0; cg.time = INT_MAX;
+    if(!CG_NitmodDrawGlobalStats() || globalStatsRequests != 6) ++errors;
+    crosshairDraws = 0;
+    if(!CG_NitmodDrawGlobalStats() || globalStatsRequests != 6) ++errors;
+    crosshairRenderTest = globalStatsRenderTest = 0;
+    {
+        int delay;
+        for(delay = 100; delay <= 600; delay += 100) {
+            int closeAt = delay > 450 ? 1000 + delay : 1000;
+            CG_NitmodGlobalStatsReset(); cg.time = 1000;
+            fields[1] = "0"; fields[2] = "0"; argcValue = 3;
+            CG_NitmodGlobalAwardCommand();
+            CG_NitmodGlobalStats_f();
+            if(!CG_NitmodGlobalAwardActive()) ++errors;
+            cg.time = 1000 + delay; CG_NitmodGlobalStats_f();
+            cg.time = closeAt + 200;
+            crosshairRenderTest = globalStatsRenderTest = 1; crosshairDraws = 0;
+            if(CG_NitmodDrawGlobalStats() || !CG_NitmodGlobalAwardActive()) ++errors;
+            crosshairRenderTest = globalStatsRenderTest = 0;
+            CG_NitmodGlobalStats_f();
+            if(!CG_NitmodGlobalAwardActive()) ++errors;
+        }
+    }
+    CG_NitmodGlobalStatsReset(); cg.time = 1000;
+    cg.demoPlayback = qtrue; CG_NitmodGlobalStats_f();
+    crosshairRenderTest = globalStatsRenderTest = 1; globalStatsRequests = crosshairDraws = 0;
+    if(CG_NitmodDrawGlobalStats() || globalStatsRequests || crosshairDraws) ++errors;
+    cg.demoPlayback = qfalse; CG_NitmodGlobalStats_f();
+    cg.demoPlayback = qtrue;
+    if(CG_NitmodDrawGlobalStats() || globalStatsRequests || crosshairDraws) ++errors;
+    cg.demoPlayback = qfalse;
+    if(CG_NitmodDrawGlobalStats() || globalStatsRequests || crosshairDraws) ++errors;
+    crosshairRenderTest = globalStatsRenderTest = 0;
+    CG_NitmodGlobalStatsReset(); cgs = saved; cg.snap = oldSnap; cg.time = oldTime;
+    cg.demoPlayback = oldDemo;
+    argcValue = oldArgc; memcpy(fields, oldFields, sizeof(fields));
+    if(errors) fprintf(stderr, "global stats refresh failures: %d\n", errors);
+    return errors;
+}
+
+static int CheckGlobalAwardLifecycle(void) {
+    static cgs_t saved;
+    const char *oldFields[21];
+    int oldArgc = argcValue, oldTime = cg.time, errors = 0, i, before;
+    float oldHold = cg_notificationTime.value, oldFade = cg_notificationFadeTime.value;
+    char award[16];
+    saved = cgs; memcpy(oldFields, fields, sizeof(fields));
+    cgs.clientinfo[0].infoValid = qtrue;
+    strcpy(cgs.clientinfo[0].name, "Winner");
+    for(i = 0; i < 11; ++i) {
+        CG_NitmodGlobalAwardClear();
+        fields[0] = "popaw"; fields[1] = "0";
+        Com_sprintf(award, sizeof(award), "%d", i); fields[2] = award;
+        argcValue = 3; cg.time = 100;
+        CG_NitmodGlobalAwardCommand();
+        if(!CG_NitmodGlobalAwardActive() || !CG_NitmodNotificationActive()) ++errors;
+        if(CG_NitmodGlobalAwardAlpha(100, 1500, 250) != 0 ||
+           CG_NitmodGlobalAwardAlpha(225, 1500, 250) != .5f) ++errors;
+        fields[1] = "ordinary notice"; argcValue = 2;
+        before = prints; NITMOD_DisplayCommand("pop");
+        if(prints != before + 1 || !CG_NitmodGlobalAwardActive() ||
+           strcmp(CG_NitmodNotificationText(), CG_NitmodGlobalAwardTitle(i))) ++errors;
+        /* A delayed first full-opacity sample starts the hold at that sample. */
+        if(CG_NitmodGlobalAwardAlpha(1000, 1500, 250) != 1 ||
+           CG_NitmodGlobalAwardAlpha(2500, 1500, 250) != 1 ||
+           CG_NitmodGlobalAwardAlpha(2625, 1500, 250) != .5f ||
+           CG_NitmodGlobalAwardAlpha(2750, 1500, 250) != 0 ||
+           CG_NitmodGlobalAwardActive()) ++errors;
+        cg.time = 3000; NITMOD_DisplayCommand("pop");
+        if(strcmp(CG_NitmodNotificationText(), "ordinary notice")) ++errors;
+    }
+    fields[1] = "0"; fields[2] = "0"; argcValue = 3; cg.time = INT_MIN;
+    CG_NitmodGlobalAwardCommand();
+    if(CG_NitmodGlobalAwardAlpha(INT_MAX, 1500, 0) != 0 || !CG_NitmodGlobalAwardActive()) ++errors;
+    if(CG_NitmodGlobalAwardAlpha(INT_MAX, 1500, 250) != 1) ++errors;
+    fields[1] = "64"; CG_NitmodGlobalAwardCommand();
+    if(!CG_NitmodGlobalAwardActive()) ++errors;
+    CG_NitmodGlobalStatsReset();
+    if(CG_NitmodGlobalAwardActive() || CG_NitmodNotificationActive()) ++errors;
+    cgs.glconfig.vidWidth = 640; cgs.glconfig.vidHeight = 480;
+    cgs.screenXScale = cgs.screenYScale = 1;
+    cgs.media.limboFont2.glyphScale = 1;
+    for(i = 0; i < 256; ++i) {
+        glyphInfo_t *g = &cgs.media.limboFont2.glyphs[i];
+        g->xSkip = 10; g->height = g->imageHeight = 20; g->imageWidth = 10; g->glyph = 1000 + i;
+    }
+    fields[1] = "0"; fields[2] = "0"; cg.time = 100;
+    CG_NitmodGlobalAwardCommand();
+    cg_notificationTime.value = 1500; cg_notificationFadeTime.value = 250;
+    cg.time = 350; crosshairRenderTest = awardRenderTest = 1; crosshairDraws = 0;
+    before = prints;
+    CG_NitmodDrawNotification();
+    if(crosshairDraws) ++errors;
+    CG_NitmodDrawGlobalAward();
+    if(!crosshairDraws || crosshairRects[0][3] != 50 || prints != before + 1 ||
+       crosshairRects[0][2] != strlen(CG_NitmodGlobalAwardDescription(0)) * 2 + 20 ||
+       crosshairRects[0][0] + crosshairRects[0][2] != 639) ++errors;
+    crosshairDraws = 0; CG_NitmodDrawGlobalAward();
+    if(!crosshairDraws || prints != before + 1) ++errors;
+    crosshairRenderTest = awardRenderTest = 0;
+    CG_NitmodGlobalStatsReset();
+    cg_notificationTime.value = oldHold; cg_notificationFadeTime.value = oldFade;
+    cgs = saved; cg.time = oldTime; argcValue = oldArgc; memcpy(fields, oldFields, sizeof(fields));
+    if(errors) fprintf(stderr, "global award lifecycle failures: %d\n", errors);
+    return errors;
+}
+
+static int CheckWeaponStatProtocol(void) {
+    static cgs_t saved;
+    const char *args[79];
+    char numbers[78][16];
+    int oldArgc = argcValue, mode, count, i, cut, errors = 0;
+    panel_button_t scroll;
+    saved = cgs;
+    memset(&scroll, 0, sizeof(scroll)); scroll.data[0] = 1;
+    weaponStatArgs = args; args[0] = "imws";
+    for(i = 0; i < 78; ++i) {
+        Com_sprintf(numbers[i], sizeof(numbers[i]), "%d", i + 1);
+        args[i + 1] = numbers[i];
+    }
+    for(mode = 0; mode < 2; ++mode) {
+        cgs.gameState.stringOffsets[CS_SERVERINFO] = 1;
+        strcpy(cgs.gameState.stringData + 1, mode ? "\\gamename\\etmain" : "\\gamename\\nitmod");
+        count = mode ? WS_MAX : 26;
+        memset(cgs.dbWeaponStats, 0x55, sizeof(cgs.dbWeaponStats));
+        cgs.dbWeaponStatsRecieved = qfalse;
+        argcValue = count * 3 + 1;
+        if(!CG_Debriefing_ServerCommand("imws") || !cgs.dbWeaponStatsRecieved) ++errors;
+        for(i = 0; i < count; ++i) {
+            if(cgs.dbWeaponStats[i].numShots != i * 3 + 1 ||
+               cgs.dbWeaponStats[i].numHits != i * 3 + 2 ||
+               cgs.dbWeaponStats[i].numKills != i * 3 + 3) ++errors;
+        }
+        for(i = count; i < 26; ++i)
+            if(cgs.dbWeaponStats[i].numShots || cgs.dbWeaponStats[i].numHits || cgs.dbWeaponStats[i].numKills) ++errors;
+        if(CG_Debriefing_ScrollGetCount(&scroll) != count) ++errors;
+        for(cut = 1; cut < count * 3 + 1; ++cut) {
+            argcValue = cut; cgs.dbWeaponStatsRecieved = qfalse;
+            CG_Debriefing_ServerCommand("imws");
+            if(cgs.dbWeaponStatsRecieved || cgs.dbWeaponStats[count - 1].numKills != count * 3) ++errors;
+        }
+        argcValue = count * 3 + 1;
+        args[argcValue - 1] = "-1";
+        CG_Debriefing_ServerCommand("imws");
+        if(cgs.dbWeaponStatsRecieved || cgs.dbWeaponStats[count - 1].numKills != count * 3) ++errors;
+        args[argcValue - 1] = numbers[argcValue - 2];
+    }
+    weaponStatArgs = NULL; argcValue = oldArgc; cgs = saved;
+    if(errors) fprintf(stderr, "weapon statistic protocol failures: %d\n", errors);
+    return errors;
+}
 static int fogCalls;
 static int spreeSoundTest, spreeRegistrations, spreePlays, spreeLastSound, spreeSoundFailure;
 static int announcerTest, announcerLoads, announcerPlays, announcerHandle, announcerMissing;
@@ -1771,7 +2549,7 @@ static int CheckWeaponWireAndPrediction(void) {
     for(i = 0; i < 52; ++i) {
         memset(&snap, 0, sizeof(snap));
         native = NITMOD_WeaponFromWire(i);
-        if(!native && i) continue; /* Explicitly unimplemented new weapons. */
+        if(!native && i) { ++errors; continue; } /* All 52 original identities now map. */
         snap.ps.weapon = snap.ps.nextWeapon = i;
         snap.ps.weapons[i / 32] = (int)(1u << (i % 32));
         snap.ps.ammo[i] = 123; snap.ps.ammoclip[i] = 17; snap.ps.weapHeat[i] = 99;
@@ -1913,7 +2691,8 @@ static int CheckObituaryAudio(void) {
         }
         if(tk && (obituaryAudioHandles[i] != 903 || obituaryAudioEntities[i] != listener)) ++errors;
     }
-    if(CG_NitmodDeathCause(5) != MOD_KNIFE || CG_NitmodDeathCause(57) != MOD_SWITCHTEAM ||
+    if(CG_NitmodDeathCause(65) != MOD_BOMB || CG_NitmodDeathCause(67) != MOD_POISON_GAS ||
+       CG_NitmodDeathCause(5) != MOD_KNIFE || CG_NitmodDeathCause(57) != MOD_SWITCHTEAM ||
        CG_NitmodDeathCause(66) != MOD_TRIPMINE || CG_NitmodDeathCause(-1) != MOD_UNKNOWN ||
        CG_NitmodDeathCause(69) != MOD_UNKNOWN) ++errors;
     obituaryAudioTest = 0; CG_NitmodObituaryReset(); cg = savedCg; cgs.gameState = savedGame;
@@ -2275,9 +3054,10 @@ static int CheckFloatingNames(void) {
     cgs.media.limboFont1.glyphs['A'].imageHeight = 10;
     cgs.media.limboFont1.glyphs['A'].glyph = 777;
     cgs.gameState.stringOffsets[CS_SERVERINFO] = 1;
-    for(mode = 0; mode < 2; ++mode) for(team = TEAM_AXIS; team <= TEAM_SPECTATOR; ++team)
+    for(mode = 0; mode < 3; ++mode) for(team = TEAM_AXIS; team <= TEAM_SPECTATOR; ++team)
     for(role = 0; role < 2; ++role) for(draw = 0; draw < 2; ++draw) {
         strcpy(cgs.gameState.stringData + 1, mode ? "\\gamename\\nitmod" : "\\gamename\\etmain");
+        if(mode == 2) strcpy(cgs.gameState.stringData + 1, "\\gamename\\nitmod\\nitmod_csLayout\\et260");
         snapshot.ps.persistant[PERS_TEAM] = team; cgs.clientinfo[1].nitmodShoutcaster = role;
         cg_draw2D.integer = draw; CG_NitmodNamesReset();
         if(CG_NitmodQueueSpectatorName(&cent) !=
@@ -2369,21 +3149,41 @@ static int CheckHints(void) {
 }
 static int anchorRender, anchorDraws;
 static float anchorRect[4];
+static float widescreenRects[256][4];
 static int CheckHudAnchors(void) {
     static gameState_t saved;
     const int sizes[][2] = {{640,480},{1280,720},{1920,1080},{3440,1440},{1280,1024},{480,640},{0,0}};
     int mode, size, anchor, errors = 0;
     int width = cgs.glconfig.vidWidth, height = cgs.glconfig.vidHeight;
     float oldX = cgs.screenXScale, oldY = cgs.screenYScale;
+    float cursorX = cgs.cursorX, cursorY = cgs.cursorY, dcX = cgDC.cursorx, dcY = cgDC.cursory;
     nitmodHudAnchor_t oldAnchor = CG_NitmodHudAnchor(NITMOD_HUD_STRETCH);
     saved = cgs.gameState;
-    for(mode = 0; mode < 2; ++mode) for(size = 0; size < 7; ++size) {
+    for(mode = 0; mode < 3; ++mode) for(size = 0; size < 7; ++size) {
         float sx, sy, bias;
         memset(&cgs.gameState, 0, sizeof(cgs.gameState));
         cgs.gameState.stringOffsets[CS_SERVERINFO] = 1;
-        strcpy(cgs.gameState.stringData + 1, mode ? "\\gamename\\nitmod" : "\\gamename\\etmain");
+        strcpy(cgs.gameState.stringData + 1, mode == 2 ? "\\gamename\\nitmod\\nitmod_csLayout\\et260" :
+            mode ? "\\gamename\\nitmod" : "\\gamename\\etmain");
+        if(NITMOD_UsesNitmodHud() != (mode != 0) || NITMOD_UsesOriginalProtocol() != (mode == 1)) ++errors;
         cgs.glconfig.vidWidth = sizes[size][0]; cgs.glconfig.vidHeight = sizes[size][1];
         cgs.screenXScale = sizes[size][0] / 640.f; cgs.screenYScale = sizes[size][1] / 480.f;
+        {
+            int point;
+            for(point = 0; point <= 640; point += 80) {
+                float x, y, w = 1, h = 1;
+                cgs.cursorX = point; cgs.cursorY = 240;
+                CG_LimboPanel_UpdateCursor();
+                x = cgDC.cursorx; y = cgDC.cursory;
+                CG_NitmodHudAnchor(NITMOD_HUD_CENTER);
+                CG_AdjustFrom640(&x, &y, &w, &h);
+                /* displayContext cursor coordinates are integral: allow one
+                 * logical pixel of truncation after inverse scaling. */
+                if(fabs(x - point * cgs.screenXScale) > cgs.screenYScale + .002f ||
+                   fabs(y - 240 * cgs.screenYScale) > .002f) { ++errors; fprintf(stderr, "limbo cursor mode=%d size=%d point=%d actual=%f,%f\n", mode,size,point,x,y); }
+            }
+            CG_NitmodHudAnchor(NITMOD_HUD_STRETCH);
+        }
         for(anchor = -1; anchor <= 2; ++anchor) {
             float x = 320, y = 240, w = 100, h = 20, offset = 0;
             sx = cgs.screenXScale; sy = cgs.screenYScale;
@@ -2422,6 +3222,7 @@ static int CheckHudAnchors(void) {
     if(CG_NitmodHudAnchor(oldAnchor) != NITMOD_HUD_STRETCH) ++errors;
     cgs.gameState = saved; cgs.glconfig.vidWidth = width; cgs.glconfig.vidHeight = height;
     cgs.screenXScale = oldX; cgs.screenYScale = oldY;
+    cgs.cursorX = cursorX; cgs.cursorY = cursorY; cgDC.cursorx = dcX; cgDC.cursory = dcY;
     return errors;
 }
 static int CheckExtendedEvents(void) {
@@ -2642,6 +3443,8 @@ static int CheckWaterEvents(void) {
     const int nativeEvents[] = {EV_WATER_TOUCH, EV_WATER_LEAVE, EV_WATER_UNDER, EV_WATER_CLEAR};
     int mode, kind, parm, bits, i, errors = 0;
     int savedClient = cg.clientNum;
+    int oldTime = cg.time, oldMask = cgs.clientinfo[5].nitmodSkillMasks[SK_BATTLE_SENSE];
+    snapshot_t snapshot, *oldSnap = cg.snap;
     saved = cgs.gameState;
     memset(&cent, 0, sizeof(cent));
     cent.currentState.number = cent.currentState.clientNum = 5;
@@ -2670,6 +3473,22 @@ static int CheckWaterEvents(void) {
                cg.waterundertime != (kind == 2 ? cg.time + HOLDBREATHTIME : 0)) ++errors;
         }
     }
+    memset(&snapshot, 0, sizeof(snapshot)); snapshot.ps.clientNum = 5; cg.snap = &snapshot;
+    strcpy(cgs.gameState.stringData + 1, "\\gamename\\nitmod");
+    cg.time = 1000; cent.currentState.event = 20; cent.currentState.eventParm = 0;
+    for(bits = 0; bits < 64; ++bits) {
+        cgs.clientinfo[5].nitmodSkillMasks[SK_BATTLE_SENSE] = bits;
+        CG_EntityEvent(&cent, cent.lerpOrigin);
+        if(cg.waterundertime != 1000 + ((bits & 32) ? 15000 : 12000)) ++errors;
+        for(i = 0; i < 6; ++i)
+            if(NITMOD_ClientSkillUnlocked(5, SK_BATTLE_SENSE, i) != !!(bits & (1 << i))) ++errors;
+    }
+    cg.time = INT_MAX - 1; CG_EntityEvent(&cent, cent.lerpOrigin);
+    if(cg.waterundertime != INT_MAX) ++errors;
+    if(NITMOD_ClientSkillUnlocked(-1, 0, 5) || NITMOD_ClientSkillUnlocked(MAX_CLIENTS, 0, 5) ||
+       NITMOD_ClientSkillUnlocked(5, SK_NUM_SKILLS, 5) || NITMOD_ClientSkillUnlocked(5, 0, 6)) ++errors;
+    cgs.clientinfo[5].nitmodSkillMasks[SK_BATTLE_SENSE] = oldMask;
+    cg.snap = oldSnap; cg.time = oldTime;
     waterTest = 0; cg.clientNum = savedClient; cgs.gameState = saved;
     return errors;
 }
@@ -2868,6 +3687,8 @@ static int CheckNitmodHudText(void) {
                     int heavy, light, row;
                     int oldHeavy = cgs.clientinfo[0].skill[SK_HEAVY_WEAPONS];
                     int oldLight = cgs.clientinfo[0].skill[SK_LIGHT_WEAPONS];
+                    int oldHeavyMask = cgs.clientinfo[0].nitmodSkillMasks[SK_HEAVY_WEAPONS];
+                    int oldLightMask = cgs.clientinfo[0].nitmodSkillMasks[SK_LIGHT_WEAPONS];
                     int oldSecondary = cgs.ccSelectedWeapon2, oldSlot = cgs.ccSelectedWeaponNumber;
                     int oldPreference = cg_limbo_secondary.integer, oldSelectedFlag = cgs.limboLoadoutSelected;
                     bg_playerclass_t savedBase = *info;
@@ -2890,8 +3711,10 @@ static int CheckNitmodHudText(void) {
                             (team == TEAM_AXIS ? WP_AKIMBO_SILENCEDLUGER : WP_AKIMBO_SILENCEDCOLT) :
                             (team == TEAM_AXIS ? WP_AKIMBO_LUGER : WP_AKIMBO_COLT);
                         if(heavy == 4 && cls == PC_SOLDIER) choices[n++] = team == TEAM_AXIS ? WP_MP40 : WP_THOMPSON;
-                        cgs.clientinfo[0].skill[SK_HEAVY_WEAPONS] = heavy;
-                        cgs.clientinfo[0].skill[SK_LIGHT_WEAPONS] = light;
+                        cgs.clientinfo[0].skill[SK_HEAVY_WEAPONS] = original ? (heavy == 4 ? 0 : 4) : heavy;
+                        cgs.clientinfo[0].skill[SK_LIGHT_WEAPONS] = original ? (light == 4 ? 0 : 4) : light;
+                        cgs.clientinfo[0].nitmodSkillMasks[SK_HEAVY_WEAPONS] = 1 << heavy;
+                        cgs.clientinfo[0].nitmodSkillMasks[SK_LIGHT_WEAPONS] = 1 << light;
                         cgs.ccSelectedWeaponNumber = 0;
                         if(CG_LimboPanel_WeaponCount_ForSlot(0) != n) ++errors;
                         for(row = -1; row <= 3; ++row) {
@@ -2915,6 +3738,8 @@ static int CheckNitmodHudText(void) {
                     }
                     cgs.clientinfo[0].skill[SK_HEAVY_WEAPONS] = oldHeavy;
                     cgs.clientinfo[0].skill[SK_LIGHT_WEAPONS] = oldLight;
+                    cgs.clientinfo[0].nitmodSkillMasks[SK_HEAVY_WEAPONS] = oldHeavyMask;
+                    cgs.clientinfo[0].nitmodSkillMasks[SK_LIGHT_WEAPONS] = oldLightMask;
                     cgs.ccSelectedWeapon2 = oldSecondary; cgs.ccSelectedWeaponNumber = oldSlot;
                     cg_limbo_secondary.integer = oldPreference; cgs.limboLoadoutSelected = oldSelectedFlag;
                 }
@@ -3257,6 +4082,8 @@ static int CheckPartAnimationFrames(void) {
     centity_t cent;
     refEntity_t part, parent, expected;
     int slot, sequence, toggle, mode, i, errors = 0;
+    int oldSpeed = cg_animSpeed.integer, oldDisabled = cg_noPlayerAnims.integer;
+    cg_animSpeed.integer = 1; cg_noPlayerAnims.integer = 0;
     memset(&cent, 0, sizeof(cent)); memset(&parent, 0, sizeof(parent));
     parent.frame = 102; parent.oldframe = 101; parent.backlerp = .25f;
     for(slot = 0; slot <= 16; ++slot) for(sequence = 0; sequence < MAX_WP_ANIMATIONS; ++sequence)
@@ -3291,6 +4118,14 @@ static int CheckPartAnimationFrames(void) {
     parent.frame = 2147483647; expected = part;
     if(CG_GetPartFramesFromWeap(&cent, &part, &parent, 0, &weapon) ||
        memcmp(&part, &expected, sizeof(part))) ++errors;
+    cent.pe.weap.animation = NULL;
+    for(mode = 0; mode < 2; ++mode) {
+        cg_animSpeed.integer = mode; cg_noPlayerAnims.integer = mode;
+        memset(&part, 0, sizeof(part)); part.frame = part.oldframe = 99; part.backlerp = .5f;
+        if(!CG_GetPartFramesFromWeap(&cent, &part, &parent, W_MAX_PARTS, &weapon) ||
+            part.frame || part.oldframe || part.backlerp) ++errors;
+    }
+    cg_animSpeed.integer = oldSpeed; cg_noPlayerAnims.integer = oldDisabled;
     return errors;
 }
 static int CheckRecoilDefinitionFields(void) {
@@ -3385,7 +4220,7 @@ static int CheckWeaponRegistrationAndSelection(void) {
             if(CG_WeaponSelectable(weapon) != expected) ++errors;
         }
     }
-    if(count != 44) ++errors;
+    if(count != 48) ++errors;
     expectedWeaponPath = NULL;
     sourceLoads = 0;
     CG_RegisterWeapon(-1, qtrue); CG_RegisterWeapon(WP_NUM_WEAPONS, qtrue);
@@ -3420,6 +4255,19 @@ static int CheckWeaponCommandGuards(void) {
         if(memcmp(&cg, &expected, sizeof(cg))) ++errors;
     }
     snapshot.ps.pm_type = PM_NORMAL;
+    {
+        const int times[][3] = {{100, 0, 100}, {99, 0, 100},
+            {INT_MAX, INT_MIN, 100}, {INT_MIN, INT_MAX, 100}};
+        int row;
+        for(row = 0; row < 4; ++row) {
+            cg.time = times[row][0]; cg.weaponSelectTime = times[row][1];
+            cg_weaponCycleDelay.integer = times[row][2]; cg.switchbackWeapon = 0;
+            CG_LastWeaponUsed_f();
+            if(cg.switchbackWeapon != ((row == 0 || row == 2) ? WP_KNIFE : 0)) ++errors;
+        }
+        cg.time = 500; cg.weaponSelectTime = 100; cg.switchbackWeapon = 0;
+        cg_weaponCycleDelay.integer = 0;
+    }
     for(i = 0; i < sizeof(badBanks)/sizeof(badBanks[0]); ++i) {
         fields[1] = badBanks[i]; cg.weaponSelectTime = 100;
         expected = cg; expected.weaponSelectTime = cg.time;
@@ -3432,24 +4280,64 @@ static int CheckWeaponCommandGuards(void) {
     CG_WeaponBank_f();
     if(cg.weaponSelect != WP_KNIFE || cg.lastWeapSelInBank[1] != WP_KNIFE) ++errors;
     {
-        const int bank7[] = {WP_LANDMINE, WP_TRIPMINE, WP_MEDIC_ADRENALINE};
+        const int bank7[] = {WP_LANDMINE, WP_POISON_MINE, WP_TRIPMINE, WP_MEDIC_ADRENALINE};
         int step;
-        for(step = 0; step < 3; ++step) {
+        for(step = 0; step < 4; ++step) {
             COM_BitSet(cg.predictedPlayerState.weapons, bank7[step]);
             cg.predictedPlayerState.ammoclip[BG_FindClipForWeapon(bank7[step])] = 1;
         }
         fields[1] = "7";
-        for(step = 0; step < 9; ++step) {
+        for(step = 0; step < 12; ++step) {
             ++cg.time;
             CG_WeaponBank_f();
-            if(cg.weaponSelect != bank7[step % 3] || cg.lastWeapSelInBank[7] != bank7[step % 3]) ++errors;
+            if(cg.weaponSelect != bank7[step % 4] || cg.lastWeapSelInBank[7] != bank7[step % 4]) ++errors;
         }
         // With no Tripmine ammunition the same bank must skip it, not become stuck.
         cg.predictedPlayerState.ammoclip[BG_FindClipForWeapon(WP_TRIPMINE)] = 0;
         ++cg.time; CG_WeaponBank_f();
         if(cg.weaponSelect != WP_LANDMINE) ++errors;
         ++cg.time; CG_WeaponBank_f();
+        if(cg.weaponSelect != WP_POISON_MINE) ++errors;
+        ++cg.time; CG_WeaponBank_f();
         if(cg.weaponSelect != WP_MEDIC_ADRENALINE) ++errors;
+    }
+    {
+        const int bank4[] = {WP_GRENADE_LAUNCHER, WP_GRENADE_PINEAPPLE, WP_BOMB};
+        int step;
+        for(step = 0; step < 3; ++step) {
+            COM_BitSet(cg.predictedPlayerState.weapons, bank4[step]);
+            cg.predictedPlayerState.ammoclip[BG_FindClipForWeapon(bank4[step])] = 1;
+        }
+        fields[1] = "4";
+        for(step = 0; step < 9; ++step) {
+            ++cg.time; CG_WeaponBank_f();
+            if(cg.weaponSelect != bank4[step % 3] || cg.lastWeapSelInBank[4] != bank4[step % 3]) ++errors;
+        }
+        cg.predictedPlayerState.ammoclip[WP_BOMB] = 0;
+        for(step = 0; step < 4; ++step) {
+            ++cg.time; CG_WeaponBank_f();
+            if(cg.weaponSelect != bank4[step % 2]) ++errors;
+        }
+    }
+    {
+        const int weapons[] = {WP_POISON_SYRINGE, WP_POISON_BOMB, WP_POISON_MINE};
+        const char *banks[] = {"1", "5", "7"};
+        const int bankIds[] = {1, 5, 7};
+        int i;
+        for(i = 0; i < 3; ++i) {
+            memset(cg.predictedPlayerState.weapons, 0, sizeof(cg.predictedPlayerState.weapons));
+            memset(cg.predictedPlayerState.ammo, 0, sizeof(cg.predictedPlayerState.ammo));
+            memset(cg.predictedPlayerState.ammoclip, 0, sizeof(cg.predictedPlayerState.ammoclip));
+            memset(cg.lastWeapSelInBank, 0, sizeof(cg.lastWeapSelInBank));
+            cg.weaponSelect = WP_KNIFE;
+            COM_BitSet(cg.predictedPlayerState.weapons, weapons[i]);
+            cg.predictedPlayerState.ammoclip[weapons[i]] = 1;
+            fields[1] = banks[i]; ++cg.time; CG_WeaponBank_f();
+            if(cg.weaponSelect != weapons[i] || cg.lastWeapSelInBank[bankIds[i]] != weapons[i]) ++errors;
+            cg.predictedPlayerState.ammoclip[weapons[i]] = 0;
+            cg.weaponSelect = WP_KNIFE; ++cg.time; CG_WeaponBank_f();
+            if(cg.weaponSelect != WP_KNIFE) ++errors;
+        }
     }
     fields[1] = savedArg; cg = saved; cg_weaponCycleDelay.integer = savedDelay;
     return errors;
@@ -3640,6 +4528,51 @@ static int CheckTagConnectLayouts(void) {
 }
 static int mapRenderTest, mapRenderPics, mapRenderArrows;
 static float mapRenderRect[4], mapRenderAlpha;
+static int mapGridTest, mapGridLines, mapGridErrors;
+
+static int CheckAutomapLayout(void) {
+    static cg_t savedCg;
+    static cgs_t savedCgs;
+    const char *savedFields[3];
+    int savedArgc = argcValue, errors = 0, phase;
+    snapshot_t snap;
+    nitmodHudAnchor_t previous = CG_NitmodHudAnchor(NITMOD_HUD_STRETCH);
+    savedCg = cg; savedCgs = cgs; memcpy(savedFields, fields, sizeof(savedFields));
+    memset(&cg, 0, sizeof(cg)); memset(&cgs, 0, sizeof(cgs)); memset(&snap, 0, sizeof(snap));
+    cg.snap = &snap; snap.ps.persistant[PERS_TEAM] = TEAM_SPECTATOR;
+    cgs.gameState.dataCount = 1; SetTestConfig(CS_SERVERINFO, "\\gamename\\nitmod");
+    cgs.glconfig.vidWidth = 1920; cgs.glconfig.vidHeight = 1080;
+    cgs.screenXScale = 3; cgs.screenYScale = 2.25f;
+    cg.mapcoordsMins[1] = 8192; cg.mapcoordsMaxs[0] = 8192;
+    cg.mapcoordsScale[0] = 1.f / 8192; cg.mapcoordsScale[1] = -1.f / 8192;
+    cg.predictedPlayerEntity.lerpOrigin[0] = cg.predictedPlayerEntity.lerpOrigin[1] = 4096;
+    fields[0] = "entnfo"; fields[1] = fields[2] = "0"; argcValue = 3;
+    if(!CG_ParseOriginalMapEntityInfo()) ++errors;
+    cgs.media.whiteShader = 876;
+    CG_NitmodHudAnchor(NITMOD_HUD_LEFT);
+    mapRenderTest = 1; mapGridTest = 1; mapGridLines = mapGridErrors = 0;
+    cg.time = 1000; CG_DrawAutoMap();
+    if(!mapGridLines || mapGridErrors) ++errors;
+    mapGridTest = 0;
+    for(phase = 0; phase < 3; ++phase) {
+        float expectedX = (phase == 0 ? 650.f : phase == 1 ? 459.f : 268.f) * 2.25f + 480;
+        cgs.autoMapExpanded = qtrue; cgs.autoMapExpandTime = 1000;
+        cg.time = 1000 + phase * 125; mapRenderPics = 0;
+        CG_DrawExpandedAutoMap();
+        if(!mapRenderPics || fabs(mapRenderRect[0] - expectedX) > .01f ||
+           mapRenderRect[1] != 45 || mapRenderRect[2] != 792 || mapRenderRect[3] != 792) ++errors;
+        if(CG_NitmodHudAnchor(NITMOD_HUD_LEFT) != NITMOD_HUD_LEFT) ++errors;
+    }
+    cgs.autoMapExpanded = qfalse; cg.time = 1125; mapRenderPics = 0;
+    CG_DrawExpandedAutoMap();
+    if(!mapRenderPics || fabs(mapRenderRect[0] - (459 * 2.25f + 480)) > .01f) ++errors;
+    cg.time = 1250; mapRenderPics = 0; CG_DrawExpandedAutoMap();
+    if(mapRenderPics || CG_NitmodHudAnchor(NITMOD_HUD_LEFT) != NITMOD_HUD_LEFT) ++errors;
+    mapRenderTest = 0;
+    cg = savedCg; cgs = savedCgs; argcValue = savedArgc; memcpy(fields, savedFields, sizeof(savedFields));
+    CG_NitmodHudAnchor(previous);
+    return errors;
+}
 
 #include "check_weapon_pose.h"
 #include "check_view.h"
@@ -4254,6 +5187,17 @@ static int CheckPlayerDebug(void) {
         SetTestConfig(CS_SERVERINFO, mode ? "\\gamename\\nitmod" : "\\gamename\\etmain");
         debugRegistrations = 0; CG_NitmodRegisterDebugMedia();
         if(debugRegistrations != (mode ? 2 : 0)) ++errors;
+        {
+            nitmodSimpleConfig_t *simple = (nitmodSimpleConfig_t *)NITMOD_SimpleConfig();
+            int savedMisc = simple->misc, bits;
+            for(bits = 0; bits < 64; ++bits) for(team = TEAM_FREE; team <= TEAM_SPECTATOR; ++team) {
+                simple->misc = bits;
+                if(CG_NitmodMineTeamShader(team) !=
+                   (mode && (bits & 16) && (team == TEAM_AXIS || team == TEAM_ALLIES) ?
+                    (team == TEAM_AXIS ? 801 : 802) : 0)) ++errors;
+            }
+            simple->misc = savedMisc;
+        }
         for(demo = 0; demo < 2; ++demo) for(enabled = -1; enabled <= 1; ++enabled)
         for(team = TEAM_FREE; team <= TEAM_SPECTATOR; ++team) {
             cg.demoPlayback = demo; demo_wallHack.integer = enabled;
@@ -4263,6 +5207,13 @@ static int CheckPlayerDebug(void) {
     }
     debugMissingShader = 1; CG_NitmodRegisterDebugMedia();
     if(CG_NitmodDemoPlayerShader(TEAM_AXIS) || CG_NitmodDemoPlayerShader(TEAM_ALLIES)) ++errors;
+    {
+        nitmodSimpleConfig_t *simple = (nitmodSimpleConfig_t *)NITMOD_SimpleConfig();
+        int savedMisc = simple->misc;
+        simple->misc = 16;
+        if(CG_NitmodMineTeamShader(TEAM_AXIS) || CG_NitmodMineTeamShader(TEAM_ALLIES)) ++errors;
+        simple->misc = savedMisc;
+    }
     debugMissingShader = 0;
     SetTestConfig(CS_SERVERINFO, "\\gamename\\etmain"); CG_NitmodRegisterDebugMedia();
     debugTest = 0; cg_drawHitbox.integer = savedFlags; demo_wallHack.integer = savedDemoFlag;
@@ -4636,7 +5587,7 @@ static int CheckMineDisplay(void) {
     centity_t cent;
     refEntity_t ent;
     qboolean marker;
-    int mode, team, caster, state, spotted, skill, errors = 0, i;
+    int mode, team, caster, state, spotted, skill, errors = 0, i, mine;
     int oldCrosshair = cg_drawCrosshair.integer, oldDraw = cg_draw2D.integer;
     savedCg = cg; savedCgs = cgs;
     memset(&cg, 0, sizeof(cg)); memset(&snapshot, 0, sizeof(snapshot));
@@ -4652,16 +5603,20 @@ static int CheckMineDisplay(void) {
     cent.currentState.number = 64; cent.currentState.otherEntityNum = 2;
     cent.currentState.otherEntityNum2 = 1;
     VectorClear(dynamiteEnd); mineRenderTest = dynamiteTest = 1;
+    for(mine = 0; mine < 2; ++mine)
     for(mode = 0; mode < 2; ++mode) for(team = 1; team <= 3; ++team)
     for(caster = 0; caster < 2; ++caster) for(state = 0; state < 12; ++state)
     for(spotted = 0; spotted < 2; ++spotted) for(skill = 3; skill <= 4; ++skill) {
         int visible = mode && (team != 3 || caster) &&
             (state >= 4 || team == 1 || caster && team == 3 || spotted || skill >= 4);
         int flag = visible && state < 4 && team != 3 && (team == 1 || spotted);
+        cent.currentState.weapon = mine ? WP_POISON_MINE : WP_LANDMINE;
+        memset(&cgs.gameState, 0, sizeof(cgs.gameState)); cgs.gameState.dataCount = 1;
         SetTestConfig(CS_SERVERINFO, mode ? "\\gamename\\nitmod" : "\\gamename\\etmain");
         snapshot.ps.persistant[PERS_TEAM] = cgs.clientinfo[1].team = team;
         cgs.clientinfo[1].nitmodShoutcaster = caster;
         cgs.clientinfo[1].skill[SK_BATTLE_SENSE] = skill;
+        cgs.clientinfo[1].nitmodSkillMasks[SK_BATTLE_SENSE] = 1 << skill;
         cent.currentState.teamNum = state; cent.currentState.modelindex2 = spotted;
         memset(&ent, 0, sizeof(ent)); ent.origin[2] = ent.oldorigin[2] = 100;
         CG_NitmodHintsReset(); mineShaderLoads = 0;
@@ -4677,13 +5632,27 @@ static int CheckMineDisplay(void) {
     SetTestConfig(CS_SERVERINFO, "\\gamename\\nitmod");
     cgs.clientinfo[1].team = snapshot.ps.persistant[PERS_TEAM] = TEAM_AXIS;
     cent.currentState.teamNum = 1;
-    /* Enemy, unspotted: existing native skill fallback has an inclusive
+    /* Enemy, unspotted: original unlock mask has an inclusive
      * 256-unit radius; spotting by this client takes precedence over it. */
     cent.currentState.otherEntityNum2 = 0; cent.currentState.modelindex2 = 0;
     cgs.clientinfo[1].skill[SK_BATTLE_SENSE] = 4;
+    cgs.clientinfo[1].nitmodSkillMasks[SK_BATTLE_SENSE] = 16;
     cent.lerpOrigin[0] = 256;
     memset(&ent, 0, sizeof(ent));
     if(!CG_NitmodPrepareMine(&cent, &ent, &marker) || marker || ent.customShader != 501) ++errors;
+    for(skill = 0; skill < 64; ++skill) {
+        cgs.clientinfo[1].nitmodSkillMasks[SK_BATTLE_SENSE] = skill;
+        cgs.clientinfo[1].skill[SK_BATTLE_SENSE] = (skill & 16) ? 0 : 4;
+        if(CG_NitmodPrepareMine(&cent, &ent, &marker) != !!(skill & 16)) ++errors;
+    }
+    /* A followed client's unlocks do not grant the local mine ability. */
+    snapshot.ps.clientNum = 2;
+    cgs.clientinfo[2].team = TEAM_AXIS;
+    cgs.clientinfo[1].nitmodSkillMasks[SK_BATTLE_SENSE] = 0;
+    cgs.clientinfo[2].nitmodSkillMasks[SK_BATTLE_SENSE] = 16;
+    if(CG_NitmodPrepareMine(&cent, &ent, &marker)) ++errors;
+    snapshot.ps.clientNum = 1;
+    cgs.clientinfo[1].nitmodSkillMasks[SK_BATTLE_SENSE] = 16;
     cent.lerpOrigin[0] = 257;
     if(CG_NitmodPrepareMine(&cent, &ent, &marker)) ++errors;
     cent.currentState.density = 2; cgs.clientinfo[1].skill[SK_BATTLE_SENSE] = 0;
@@ -4810,6 +5779,18 @@ static int QDECL Engine(int command, ...) {
             int bits[4], i;
             for(i = 0; i < 4; ++i) bits[i] = va_arg(args, int);
             if(!mapRenderPics++) memcpy(mapRenderRect, bits, sizeof(mapRenderRect));
+            if(mapGridTest) {
+                float rect[4]; int shader;
+                memcpy(rect, bits, sizeof(rect));
+                for(i = 0; i < 4; ++i) (void)va_arg(args, int);
+                shader = va_arg(args, int);
+                if(shader == 876 && rect[2] > 0 && rect[3] > 0) {
+                    ++mapGridLines;
+                    if(rect[0] < 121.4f || rect[1] < 877.4f ||
+                       rect[0] + rect[2] > 280.1f || rect[1] + rect[3] > 1036.1f ||
+                       (rect[2] != 1 && rect[3] != 1)) ++mapGridErrors;
+                }
+            }
         }
         va_end(args); return 0;
     }
@@ -5077,11 +6058,15 @@ static int QDECL Engine(int command, ...) {
     if(crosshairRenderTest) {
         if(command == CG_R_DRAWSTRETCHPIC) {
             int bits[4], i;
-            if(crosshairDraws >= 32) exit(2);
+            if(crosshairDraws >= 1024) exit(2);
             for(i = 0; i < 4; ++i) bits[i] = va_arg(args, int);
             memcpy(crosshairRects[crosshairDraws], bits, sizeof(bits));
             for(i = 0; i < 4; ++i) (void)va_arg(args, int);
             crosshairShaders[crosshairDraws++] = va_arg(args, int);
+        } else if(command == CG_SENDCLIENTCOMMAND && globalStatsRenderTest) {
+            Q_strncpyz(globalStatsRequest, va_arg(args, const char *), sizeof(globalStatsRequest));
+            ++globalStatsRequests;
+        } else if(command == CG_PRINT && awardRenderTest) { ++prints;
         } else if(command != CG_R_SETCOLOR) { fprintf(stderr, "Unexpected crosshair syscall %d\n", command); exit(2); }
         va_end(args); return 0;
     }
@@ -5133,10 +6118,13 @@ static int QDECL Engine(int command, ...) {
         else if(command != CG_R_SETCOLOR) { fprintf(stderr, "Unexpected hint syscall %d\n", command); exit(2); }
         va_end(args); return result;
     }
+    if(anchorRender && command == CG_R_SETCOLOR) { va_end(args); return 0; }
     if(anchorRender && command == CG_R_DRAWSTRETCHPIC) {
         int bits[4], i;
         for(i = 0; i < 4; ++i) bits[i] = va_arg(args, int);
         memcpy(anchorRect, bits, sizeof(anchorRect));
+        if(anchorRender == 2 && anchorDraws < 256)
+            memcpy(widescreenRects[anchorDraws], anchorRect, sizeof(anchorRect));
         ++anchorDraws; va_end(args); return 0;
     }
     if(extendedTest && command == CG_S_STARTSOUND) {
@@ -5514,6 +6502,10 @@ static int QDECL Engine(int command, ...) {
         if(strcmp(va_arg(args, const char *), "test.wav")) exit(2);
         ++mediaSounds; va_end(args); return 42;
     }
+    if(command == CG_ARGS && skillCommandArgs) {
+        char *out = va_arg(args, char *); int size = va_arg(args, int);
+        Q_strncpyz(out, skillCommandArgs, size); va_end(args); return 0;
+    }
     if(command == CG_ARGC) { va_end(args); return argcValue; }
     if(command == CG_CVAR_REGISTER && hitTest) {
         hitCvar = va_arg(args, vmCvar_t *);
@@ -5557,11 +6549,11 @@ static int QDECL Engine(int command, ...) {
         int index = va_arg(args, int);
         char *buffer = va_arg(args, char *);
         int size = va_arg(args, int);
-        if(index < 0 || index >= 21) exit(2);
-        Q_strncpyz(buffer, fields[index], size);
+        if(index < 0 || index >= (weaponStatArgs ? 79 : 21)) exit(2);
+        Q_strncpyz(buffer, weaponStatArgs ? weaponStatArgs[index] : fields[index], size);
         va_end(args); return 0;
     }
-    if(command == CG_PRINT) { ++prints; va_end(args); return 0; }
+    if(command == CG_PRINT) { Q_strncpyz(lastPopupPrint, va_arg(args, const char *), sizeof(lastPopupPrint)); ++prints; va_end(args); return 0; }
     if(command == CG_ERROR) {
         fprintf(stderr, "Client parser error: %s\n", va_arg(args, const char *));
         va_end(args); exit(2);
@@ -5588,10 +6580,24 @@ static int QDECL Engine(int command, ...) {
 #include "check_map_coronas.h"
 #include "check_debug_events.h"
 #include "check_keyed_rails.h"
+#include "check_widescreen_text.h"
+#include "check_lagometer_layout.h"
+#include "check_bomb_view.h"
+#include "check_gib_options.h"
+#include "check_round_announcements.h"
+#include "check_camera_shake.h"
+#include "check_goomba_obituary.h"
 int main(int argc, char **argv) {
     int index, errors = 0;
     static cg_t before;
     dllEntry(Engine);
+    errors += CheckWidescreenText();
+    errors += CheckLagometerLayout();
+    errors += CheckBombView();
+    errors += CheckGibOptions();
+    errors += CheckRoundAnnouncements();
+    errors += CheckCameraShake();
+    errors += CheckGoombaObituary();
     errors += CheckEarlyTransition();
     errors += CheckMineDisplay();
     errors += CheckWeaponHud();
@@ -5605,6 +6611,7 @@ int main(int argc, char **argv) {
     errors += CheckCorpseAnimation();
     errors += CheckCommandMapProtocol();
     errors += CheckCommandMapPresentation();
+    errors += CheckAutomapLayout();
     errors += CheckAmmoSelection();
     errors += CheckPlayerLean();
     errors += CheckWeaponPose();
@@ -5683,13 +6690,15 @@ int main(int argc, char **argv) {
         {
             static gameState_t savedState;
             const int weapons[] = {WP_PANZERFAUST, WP_MOBILE_MG42, WP_FLAMETHROWER, WP_MORTAR, WP_GPG40, WP_M7};
-            int w, n, oldMenuTeam = cgs.ccSelectedTeam, oldMenuClass = cgs.ccSelectedClass;
+            int w, n, layout, oldMenuTeam = cgs.ccSelectedTeam, oldMenuClass = cgs.ccSelectedClass;
             float oldRestriction = cgs.weaponRestrictions;
             savedState = cgs.gameState;
             memset(&cgs.gameState, 0, sizeof(cgs.gameState));
             cgs.gameState.stringOffsets[CS_SERVERINFO] = 1;
             strcpy(cgs.gameState.stringData + 1, "\\gamename\\nitmod");
             cgs.ccSelectedTeam = 1; cgs.ccSelectedClass = PC_SOLDIER; cgs.weaponRestrictions = 1;
+            for(layout = 0; layout < 2; ++layout) {
+            strcpy(cgs.gameState.stringData + 1, layout ? "\\gamename\\nitmod\\nitmod_csLayout\\et260" : "\\gamename\\nitmod");
             for(w = 0; w < 6; ++w) for(maximum = -2; maximum <= 3; ++maximum) {
                 fields[0] = "#"; for(i = 1; i < 21; ++i) fields[i] = "0";
                 for(i = 2; i <= 6; ++i) fields[i] = "-1";
@@ -5703,6 +6712,8 @@ int main(int argc, char **argv) {
                     if(CG_LimboPanel_RealWeaponIsDisabled(weapons[w]) != (maximum != -1 && n >= maximum)) ++errors;
                 }
             }
+            }
+            strcpy(cgs.gameState.stringData + 1, "\\gamename\\nitmod");
             fields[1] = "0"; for(i = 2; i <= 6; ++i) fields[i] = "-1";
             fields[14] = "0"; NITMOD_GameStateCommand();
             for(cls = 0; cls < 5; ++cls) {
@@ -5857,6 +6868,7 @@ int main(int argc, char **argv) {
     errors += CheckProjectileOptions();
     errors += CheckMissilePresentation();
     errors += CheckEntitySound();
+    errors += CheckNitmodEventSound();
     errors += CheckOriginalObituary();
     errors += CheckObituaryPlan();
     errors += CheckMapVotePresentation();
@@ -5888,15 +6900,286 @@ int main(int argc, char **argv) {
     errors += CheckScoreboardOrder();
     errors += CheckCountryFlagAtlas();
     errors += CheckClientExtras();
+    errors += CheckObjectiveBounds();
+    errors += CheckLimboRollTimes();
+    errors += CheckLimboPopulationCounters();
+    errors += CheckLimboCounterTransitions();
+    errors += CheckLimboWeaponStatProtocol();
+    {
+        static cgs_t saved;
+        const char *savedFields[21];
+        int oldArgc = argcValue, rank, team;
+        saved = cgs; memcpy(savedFields, fields, sizeof(savedFields));
+        fields[1] = "0"; fields[2] = "1"; fields[3] = "0"; fields[4] = "0"; argcValue = 5;
+        for(team = TEAM_AXIS; team <= TEAM_SPECTATOR; ++team) for(rank = -1; rank <= NUM_EXPERIENCE_LEVELS; ++rank) {
+            const char *expected = rank < 0 || rank >= NUM_EXPERIENCE_LEVELS ? "UNKNOWN" :
+                (team == TEAM_AXIS ? rankNames_Axis : rankNames_Allies)[rank];
+            cgs.clientinfo[0].team = team; cgs.clientinfo[0].rank = rank;
+            CG_parseWeaponStatsGS_cmd();
+            accuracyOutput[0] = 0; CG_parseWeaponStats_cmd(CaptureAccuracyOutput);
+            if(!strstr(cgs.gamestats.strRank, expected) || !strstr(accuracyOutput, expected)) ++errors;
+        }
+        if(strcmp(NITMOD_ClientRankName(TEAM_AXIS, INT_MIN), "UNKNOWN") ||
+           strcmp(NITMOD_ClientRankName(TEAM_ALLIES, INT_MAX), "UNKNOWN")) ++errors;
+        cgs = saved; memcpy(fields, savedFields, sizeof(savedFields)); argcValue = oldArgc;
+    }
+    {
+        static cgs_t saved;
+        nitmodGameState_t *state = (nitmodGameState_t *)NITMOD_GameState();
+        int oldFlags = state->keepAwards, mode, cls, mask, flags;
+        saved = cgs; cgs.gameState.stringOffsets[CS_SERVERINFO] = 1;
+        for(mode = 0; mode < 2; ++mode) for(cls = 0; cls < NUM_PLAYER_CLASSES; ++cls)
+        for(mask = 0; mask < 64; ++mask) for(flags = 0; flags < 4; ++flags) {
+            int ability = !!(mask & 16);
+            strcpy(cgs.gameState.stringData + 1, mode ? "\\gamename\\nitmod" : "\\gamename\\etmain");
+            cgs.clientinfo[2].cls = cls; state->keepAwards = flags;
+            cgs.clientinfo[2].nitmodSkillMasks[SK_SIGNALS] = mask;
+            cgs.clientinfo[2].skill[SK_SIGNALS] = ability ? 0 : 4;
+            if(CG_NitmodCanIdentifyDisguise(2) !=
+               (mode ? ability && (cls == PC_FIELDOPS || (flags & 2)) : !ability && cls == PC_FIELDOPS)) ++errors;
+        }
+        if(CG_NitmodCanIdentifyDisguise(-1) || CG_NitmodCanIdentifyDisguise(MAX_CLIENTS)) ++errors;
+        state->keepAwards = oldFlags; cgs = saved;
+    }
+    {
+        static cgs_t saved;
+        int mode, client, mask, kind;
+        saved = cgs; cgs.gameState.stringOffsets[CS_SERVERINFO] = 1;
+        for(mode = 0; mode < 2; ++mode) for(client = 0; client < MAX_CLIENTS; ++client)
+        for(mask = 0; mask < 64; ++mask) for(kind = 0; kind < 2; ++kind) {
+            int skill = kind ? SK_FIRST_AID : SK_SIGNALS, level = kind ? 3 : 1;
+            int enabled = !!(mask & (1 << level));
+            strcpy(cgs.gameState.stringData + 1, mode ? "\\gamename\\nitmod" : "\\gamename\\etmain");
+            cgs.clientinfo[client].nitmodSkillMasks[skill] = mask;
+            cgs.clientinfo[client].skill[skill] = enabled ? 0 : 4;
+            if(NITMOD_ClientSkillUnlocked(client, skill, level) != (mode ? enabled : !enabled)) ++errors;
+        }
+        if(NITMOD_ClientSkillUnlocked(-1, SK_SIGNALS, 1) ||
+           NITMOD_ClientSkillUnlocked(MAX_CLIENTS, SK_FIRST_AID, 3)) ++errors;
+        cgs = saved;
+    }
+    {
+        static cgs_t saved;
+        const char *savedFields[21];
+        int oldArgc = argcValue, skill, level;
+        char mask[24], expected[64];
+        saved = cgs; memcpy(savedFields, fields, sizeof(savedFields));
+        cgs.gameState.stringOffsets[CS_SERVERINFO] = 1;
+        strcpy(cgs.gameState.stringData + 1, "\\gamename\\nitmod");
+        fields[0] = "sl"; argcValue = 2;
+        skillCommandArgs = "\\B\\10 20 30 40 50\\E\\11 21 31 41 51\\M\\12 22 32 42 52\\F\\13 23 33 43 53\\L\\14 24 34 44 54\\S\\15 25 35 45 55\\C\\16 26 36 46 56";
+        CG_ExecuteNewServerCommands(cgs.serverCommandSequence + 1);
+        skillCommandArgs = "\\B\\broken";
+        CG_ExecuteNewServerCommands(cgs.serverCommandSequence + 1);
+        skillCommandArgs = NULL;
+        cgs.clientinfo[0].rank = 0; cgs.clientinfo[0].team = TEAM_AXIS;
+        fields[1] = "0"; fields[2] = "1"; fields[3] = "0";
+        fields[4] = mask; fields[5] = "123"; argcValue = 6;
+        for(skill = 0; skill < 7; ++skill) for(level = 0; level <= 5; ++level) {
+            cgs.clientinfo[0].nitmodSkillLevels[skill] = level;
+            cgs.clientinfo[0].skill[skill] = 0; /* Detect accidental native-level use. */
+            Com_sprintf(mask, sizeof(mask), "%u", 1u << skill);
+            CG_parseWeaponStatsGS_cmd();
+            if(level < 5) Com_sprintf(expected, sizeof(expected), "%4d/%-4d", 123, (level + 1) * 10 + skill);
+            else strcpy(expected, "123");
+            if(cgs.gamestats.cSkills != 1 || !strstr(cgs.gamestats.strSkillz[0], expected) ||
+               (level == 5 && strchr(cgs.gamestats.strSkillz[0], '/'))) ++errors;
+            accuracyOutput[0] = 0; CG_parseWeaponStats_cmd(CaptureAccuracyOutput);
+            if(level < 5) Com_sprintf(expected, sizeof(expected), "%d (123/%d)", level, (level + 1) * 10 + skill);
+            else strcpy(expected, "5 (123)");
+            if(!strstr(accuracyOutput, expected)) ++errors;
+        }
+        NITMOD_ClearConfigStrings();
+        if(NITMOD_ClientSkillNextThreshold(0, 4) != 200) ++errors;
+        cgs = saved; memcpy(fields, savedFields, sizeof(savedFields)); argcValue = oldArgc;
+    }
+    {
+        static gameState_t saved;
+        int skill, level;
+        saved = cgs.gameState; cgs.gameState.stringOffsets[CS_SERVERINFO] = 1;
+        strcpy(cgs.gameState.stringData + 1, "\\gamename\\nitmod");
+        if(!NITMOD_UpdateClientSkillThresholds("\\B\\10 20 30 40 50\\E\\11 21 31 41 51\\M\\12 22 32 42 52\\F\\13 23 33 43 53\\L\\14 24 34 44 54\\S\\15 25 35 45 55\\C\\16 26 36 46 56")) ++errors;
+        for(skill = 0; skill < 7; ++skill) for(level = 0; level < 6; ++level)
+            if(NITMOD_ClientSkillNextThreshold(skill, level) != (level == 5 ? -1 : (level + 1) * 10 + skill)) ++errors;
+        if(NITMOD_UpdateClientSkillThresholds("\\B\\1 2")) ++errors;
+        if(NITMOD_ClientSkillNextThreshold(6, 4) != 56) ++errors;
+        strcpy(cgs.gameState.stringData + 1, "\\gamename\\etmain");
+        for(level = 0; level < 5; ++level)
+            if(NITMOD_ClientSkillNextThreshold(0, level) != (level == 4 ? -1 : skillLevels[level + 1])) ++errors;
+        NITMOD_ClearConfigStrings();
+        strcpy(cgs.gameState.stringData + 1, "\\gamename\\nitmod");
+        if(NITMOD_ClientSkillNextThreshold(0, 4) != 200 || NITMOD_ClientSkillNextThreshold(-1, 0) != -1) ++errors;
+        cgs.gameState = saved;
+    }
+    {
+        static cgs_t saved;
+        const char *savedFields[21];
+        int oldArgc = argcValue, mode, stat;
+        char mask[32];
+        saved = cgs; memcpy(savedFields, fields, sizeof(savedFields));
+        cgs.gameState.stringOffsets[CS_SERVERINFO] = 1;
+        cgs.clientinfo[0].rank = 0; cgs.clientinfo[0].team = TEAM_AXIS;
+        strcpy(cgs.clientinfo[0].name, "Tester");
+        fields[1] = "0"; fields[2] = "1"; fields[3] = mask;
+        fields[4] = "2"; fields[5] = "3"; fields[6] = "4";
+        fields[7] = "5"; fields[8] = "8765"; fields[9] = "10";
+        fields[10] = "20"; fields[11] = "30"; fields[12] = "0"; argcValue = 13;
+        for(mode = 0; mode < 2; ++mode) {
+            strcpy(cgs.gameState.stringData + 1, mode ? "\\gamename\\nitmod" : "\\gamename\\etmain");
+            for(stat = 0; stat < (mode ? 26 : WS_MAX); ++stat) {
+                int headshots = mode ? (stat <= 8 || (stat >= 18 && stat <= 20)) : aWeaponInfo[stat].fHasHeadShots;
+                Com_sprintf(mask, sizeof(mask), "%u", 1u << stat);
+                CG_parseWeaponStatsGS_cmd();
+                if(cgs.gamestats.cWeapons != 1 || !cgs.gamestats.fHasStats ||
+                   !strstr(cgs.gamestats.strWS[0], NITMOD_WeaponStatName(stat)) ||
+                   (!!strstr(cgs.gamestats.strWS[0], "8765") != !!headshots)) ++errors;
+                accuracyOutput[0] = 0;
+                CG_parseWeaponStats_cmd(CaptureAccuracyOutput);
+                if(!strstr(accuracyOutput, NITMOD_WeaponStatName(stat)) ||
+                   (!!strstr(accuracyOutput, "8765") != !!headshots)) ++errors;
+            }
+            Com_sprintf(mask, sizeof(mask), "%u", 1u << (mode ? 26 : WS_MAX));
+            cgs.gamestats.cWeapons = 7; CG_parseWeaponStatsGS_cmd();
+            if(cgs.gamestats.cWeapons != 7) ++errors;
+            accuracyOutput[0] = 0; CG_parseWeaponStats_cmd(CaptureAccuracyOutput);
+            if(accuracyOutput[0]) ++errors;
+        }
+        cgs = saved; memcpy(fields, savedFields, sizeof(savedFields)); argcValue = oldArgc;
+    }
+    {
+        static cgs_t saved;
+        const char *savedFields[21];
+        int oldArgc = argcValue, mode, stat, best;
+        char number[16];
+        saved = cgs; memcpy(savedFields, fields, sizeof(savedFields));
+        cgs.gameState.stringOffsets[CS_SERVERINFO] = 1;
+        strcpy(cgs.clientinfo[0].name, "Tester");
+        for(mode = 0; mode < 2; ++mode) for(best = 0; best < 2; ++best) {
+            strcpy(cgs.gameState.stringData + 1, mode ? "\\gamename\\nitmod" : "\\gamename\\etmain");
+            for(stat = 0; stat < (mode ? 26 : WS_MAX); ++stat) {
+                fields[1] = number; fields[2] = "0"; fields[3] = "2";
+                fields[4] = "3"; fields[5] = "1"; fields[6] = "0"; fields[7] = "0";
+                argcValue = 8; Com_sprintf(number, sizeof(number), "%d", stat + 1);
+                accuracyOutput[0] = 0;
+                CG_parseBestShotsStats_cmd(best, CaptureAccuracyOutput);
+                if(!strstr(accuracyOutput, NITMOD_WeaponStatCode(stat)) ||
+                   !strstr(accuracyOutput, "66.7") || !strstr(accuracyOutput, "Tester")) ++errors;
+                fields[1] = "1"; fields[2] = number; fields[3] = "66";
+                fields[4] = "0"; fields[5] = "2"; fields[6] = "3";
+                fields[7] = "1"; fields[8] = "0"; argcValue = 9;
+                Com_sprintf(number, sizeof(number), "%d", stat); accuracyOutput[0] = 0;
+                CG_parseTopShotsStats_cmd(best, CaptureAccuracyOutput);
+                if(!strstr(accuracyOutput, NITMOD_WeaponStatName(stat)) ||
+                   !strstr(accuracyOutput, "66.7") || !strstr(accuracyOutput, "Tester")) ++errors;
+            }
+        }
+        cgs = saved; memcpy(fields, savedFields, sizeof(savedFields)); argcValue = oldArgc;
+    }
+    {
+        static cgs_t saved;
+        const char *savedFields[21];
+        int oldArgc = argcValue, mode, stat;
+        char number[16];
+        saved = cgs; memcpy(savedFields, fields, sizeof(savedFields));
+        cgs.gameState.stringOffsets[CS_SERVERINFO] = 1;
+        strcpy(cgs.clientinfo[0].name, "Tester");
+        fields[0] = "bstats"; fields[1] = number; fields[2] = "0";
+        fields[3] = "2"; fields[4] = "3"; fields[5] = "1";
+        fields[6] = "0"; fields[7] = "0"; argcValue = 8;
+        for(mode = 0; mode < 2; ++mode) {
+            strcpy(cgs.gameState.stringData + 1, mode ? "\\gamename\\nitmod" : "\\gamename\\etmain");
+            for(stat = 0; stat < (mode ? 26 : WS_MAX); ++stat) {
+                Com_sprintf(number, sizeof(number), "%d", stat + 1);
+                CG_topshotsParse_cmd(qtrue);
+                if(cgs.topshots.cWeapons != 1 ||
+                   !strstr(cgs.topshots.strWS[0], NITMOD_WeaponStatName(stat)) ||
+                   !strstr(cgs.topshots.strWS[0], "66.7") ||
+                   !strstr(cgs.topshots.strWS[0], "Tester")) ++errors;
+            }
+            {
+                topshotStats_t before = cgs.topshots;
+                int prefix, field;
+                strcpy(number, mode ? "27" : "23"); CG_topshotsParse_cmd(qtrue);
+                if(memcmp(&cgs.topshots, &before, sizeof(before))) ++errors;
+                strcpy(number, "1");
+                for(prefix = 0; prefix < 8; ++prefix) {
+                    argcValue = prefix; CG_topshotsParse_cmd(qtrue);
+                    if(memcmp(&cgs.topshots, &before, sizeof(before))) ++errors;
+                }
+                argcValue = 8;
+                for(field = 2; field <= 6; ++field) {
+                    const char *valid = fields[field]; fields[field] = "-1";
+                    CG_topshotsParse_cmd(qtrue);
+                    if(memcmp(&cgs.topshots, &before, sizeof(before))) ++errors;
+                    fields[field] = valid;
+                }
+                /* A valid first row must not leak out if a later row is partial. */
+                fields[7] = "2"; fields[8] = "0"; argcValue = 9;
+                CG_topshotsParse_cmd(qtrue);
+                if(memcmp(&cgs.topshots, &before, sizeof(before))) ++errors;
+                fields[7] = "0"; CG_topshotsParse_cmd(qtrue);
+                if(memcmp(&cgs.topshots, &before, sizeof(before))) ++errors;
+                fields[1] = "0"; argcValue = 2; CG_topshotsParse_cmd(qtrue);
+                if(cgs.topshots.cWeapons) ++errors;
+                fields[1] = number; argcValue = 8;
+            }
+        }
+        cgs = saved; memcpy(fields, savedFields, sizeof(savedFields)); argcValue = oldArgc;
+    }
+    errors += CheckClassSkillWedges();
+    errors += CheckUnarmedSelection();
+    errors += CheckLimboSkillCounters();
+    errors += CheckTripminePresentation();
     errors += CheckWaterEvents();
     errors += CheckEventPayloadBounds();
     errors += CheckExtendedEvents();
     errors += CheckHudAnchors();
+    {
+        static gameState_t saved;
+        clientInfo_t client = cgs.clientinfo[2];
+        centity_t cent;
+        int mode, team, density, a, b;
+        saved = cgs.gameState;
+        memset(&cgs.gameState, 0, sizeof(cgs.gameState));
+        cgs.gameState.stringOffsets[CS_SERVERINFO] = 1;
+        Q_strncpyz(cgs.clientinfo[2].name, "TeamTester", sizeof(cgs.clientinfo[2].name));
+        for(mode = 0; mode < 2; ++mode) for(team = TEAM_AXIS; team <= TEAM_SPECTATOR; ++team)
+        for(density = 0; density <= 1; ++density) {
+            strcpy(cgs.gameState.stringData + 1, mode ? "\\gamename\\nitmod" : "\\gamename\\etmain");
+            memset(&cent, 0, sizeof(cent));
+            cent.currentState.event = mode ? 90 : EV_POPUPMESSAGE;
+            cent.currentState.effect1Time = mode ? 6 : PM_TEAM;
+            cent.currentState.effect2Time = team; cent.currentState.effect3Time = 2;
+            cent.currentState.density = density;
+            CG_InitPM(); lastPopupPrint[0] = 0;
+            CG_EntityEvent(&cent, cent.lerpOrigin);
+            if(!strstr(lastPopupPrint, "TeamTester") ||
+               !strstr(lastPopupPrint, density ? "disconnected" : team == TEAM_AXIS ? "Axis team" :
+                   team == TEAM_ALLIES ? "Allied team" : "Spectators") ||
+               cent.currentState.effect1Time != (mode ? 6 : PM_TEAM)) { ++errors; fprintf(stderr, "team popup %d %d %d: %s\n", mode,team,density,lastPopupPrint); }
+            cent.currentState.effect3Time = MAX_CLIENTS; lastPopupPrint[0] = 0;
+            CG_EntityEvent(&cent, cent.lerpOrigin);
+            if(lastPopupPrint[0]) ++errors;
+        }
+        for(a = 0; a < 64; ++a) for(b = 0; b < 64; ++b) {
+            unsigned int expected = 0; int level;
+            for(level = 1; level <= 5; ++level)
+                if(!(a & (1 << level)) && (b & (1 << level))) expected |= 1u << level;
+            if(NITMOD_NewSkillUnlocks(a, b) != expected) ++errors;
+        }
+        CG_InitPM(); cgs.gameState = saved; cgs.clientinfo[2] = client;
+    }
     errors += CheckHints();
     errors += CheckWoundedNames();
     errors += CheckFloatingNames();
     errors += CheckDynamiteDisplay();
     errors += CheckCrosshairPresentation();
+    errors += CheckClassHealth();
+    errors += CheckDebriefSelection();
+    errors += CheckDebriefSorting();
+    errors += CheckWeaponStatProtocol();
+    errors += CheckGlobalAwardLifecycle();
+    errors += CheckGlobalStatsRefresh();
     errors += CheckLiveStats();
     errors += CheckSnapshotPersistant();
     errors += CheckSnapshotHitSounds();

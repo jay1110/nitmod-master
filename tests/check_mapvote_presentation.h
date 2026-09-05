@@ -127,8 +127,10 @@ static int CheckMapVotePresentation(void) {
         const int visible[4] = {24, 7, 7, 19};
         int type, step, actual;
         memset(&scroll, 0, sizeof(scroll)); scroll.rect.h = 240;
+        cgs.maxclients = MAX_CLIENTS;
         for(i = 0; i < MAX_CLIENTS; ++i) { cgs.dbSortedClients[i] = i; cgs.clientinfo[i].infoValid = qtrue; }
-        for(i = 0; i < WS_MAX; ++i) cgs.dbWeaponStats[i].numShots = 1;
+          memset(cgs.dbWeaponStats, 0, sizeof(cgs.dbWeaponStats));
+          for(i = 0; i < WS_MAX; ++i) cgs.dbWeaponStats[i].numShots = 1;
         cgs.dbWeaponStatsRecieved = qtrue; cgs.campaignInfoLoaded = qtrue;
         cgs.campaignData.mapCount = 10; cgs.nitmodMapVoteCount = NITMOD_MAX_MAPVOTE_MAPS;
         cgs.dbPlayerListOffset = cgs.dbWeaponListOffset = cgs.tdbMapListOffset = cgs.nitmodMapVoteOffset = 0;

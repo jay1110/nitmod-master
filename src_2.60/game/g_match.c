@@ -35,6 +35,7 @@ void G_loadMatchGame(void)
 	trap_SetConfigstring(CS_CUSTMOTD + 3, server_motd3.string);
 	trap_SetConfigstring(CS_CUSTMOTD + 4, server_motd4.string);
 	trap_SetConfigstring(CS_CUSTMOTD + 5, server_motd5.string);
+	trap_SetConfigstring(CS_CUSTMOTD + 6, server_motd6.string);
 
 	// Voting flags
 	G_voteFlags();

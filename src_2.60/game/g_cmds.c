@@ -1,4 +1,6 @@
 #include "g_local.h"
+#include "g_nitmod_mapvote.h"
+#include "g_nitmod_legacy_cvars.h"
 #include "g_nitmod_teamcount.h"
 #include "g_nitmod_config.h"
 
@@ -629,9 +631,44 @@ Cmd_Kill_f
 */
 void Cmd_Kill_f( gentity_t *ent )
 {
-	if(ent->client->sess.sessionTeam == TEAM_SPECTATOR ||
-	  (ent->client->ps.pm_flags & PMF_LIMBO) ||
-	  ent->health <= 0 || level.match_pause != PAUSE_NONE) {
+	int slashKill;
+	gentity_t *fearAttacker = NULL;
+	if(!ent || !ent->client || ent->client->sess.sessionTeam == TEAM_SPECTATOR ||
+	  (ent->client->ps.pm_flags & PMF_LIMBO) || level.match_pause != PAUSE_NONE) {
+		return;
+	}
+	/* Original Nitmod lets /kill finish the wounded state immediately. */
+	if(ent->health <= 0) {
+		limbo(ent, qtrue);
+		return;
+	}
+	/* Original Nitmod extends ET's gametype numbers with TDM=7 and DM=8. */
+	if(g_gametype.integer == 8 && (g_DMOptions.integer & 4)) {
+		trap_SendServerCommand(ent - g_entities,
+			"print \"^1Sorry, Selfkill is disabled on this server during DeathMatch!\n\"");
+		return;
+	}
+	if(g_gametype.integer == 7 &&
+	   (G_NITMOD_LegacyCvarInteger("g_TDMOptions", 0) & 2)) {
+		trap_SendServerCommand(ent - g_entities,
+			"print \"^1Sorry, Selfkill is disabled on this server during TeamDeathMatch!\n\"");
+		return;
+	}
+	slashKill = G_NITMOD_LegacyCvarInteger("g_slashKill", 0);
+	if(slashKill & 8) {
+		trap_SendServerCommand(ent - g_entities,
+			"print \"Selfkill disabled on this server.\n\"");
+		return;
+	}
+	if((slashKill & 16) && (ent->client->ps.eFlags & NITMOD_EF_POISONED)) {
+		trap_SendServerCommand(ent - g_entities,
+			"print \"Selfkill disabled while you are poisoned.\n\"");
+		return;
+	}
+	if((slashKill & 64) && ent->client->nitmodLastHurtTime > 0 &&
+	   level.time - ent->client->nitmodLastHurtTime < 3000) {
+		trap_SendServerCommand(ent - g_entities,
+			"print \"Selfkill disabled while being in a fight.\n\"");
 		return;
 	}
 
@@ -641,9 +678,71 @@ void Cmd_Kill_f( gentity_t *ent )
 #endif // SAVEGAME_SUPPORT
 
 	ent->flags &= ~FL_GODMODE;
+	/* SetWolfSpawnWeapons consumes this snapshot once.  Original Nitmod uses
+	 * g_slashKill bits 1/2/4 to restore half, empty or frozen class charge. */
+	ent->client->nitmodSlashKillPending = qtrue;
+	ent->client->nitmodSlashKillChargeTime = ent->client->ps.classWeaponTime;
+	ent->client->nitmodSlashKillDeathTime = level.time;
 	ent->client->ps.stats[STAT_HEALTH] = ent->health = 0;
 	ent->client->ps.persistant[PERS_HWEAPON_USE] = 0; // TTimo - if using /kill while at MG42
-	player_die(ent, ent, ent, (g_gamestate.integer == GS_PLAYING) ? 100000 : 135, MOD_SUICIDE);
+	{
+		int fearTime = G_NITMOD_LegacyCvarInteger("g_fear", 2000);
+		int attackerNum = ent->client->lasthurt_client;
+		if(fearTime > 0 && ent->client->nitmodLastHurtTime > 0 &&
+		   level.time - ent->client->nitmodLastHurtTime < fearTime &&
+		   attackerNum >= 0 && attackerNum < level.maxclients) {
+			gentity_t *candidate = &g_entities[attackerNum];
+			if(candidate != ent && candidate->inuse && candidate->client &&
+			   candidate->health > 0 &&
+			   candidate->client->sess.sessionTeam != ent->client->sess.sessionTeam) {
+				fearAttacker = candidate;
+			}
+		}
+	}
+	if(fearAttacker) {
+		player_die(ent, fearAttacker, fearAttacker, 150, MOD_SWAP_PLACES);
+	} else {
+		player_die(ent, ent, ent, (g_gamestate.integer == GS_PLAYING) ? 100000 : 135, MOD_SUICIDE);
+	}
+}
+
+/* Original Cmd_DropObj (ELF 0x00071010). The limit is per spawned client;
+ * gclient_t is cleared by ClientSpawn, so the sidecar counter follows that
+ * lifetime without changing the engine-visible playerState ABI. */
+static void G_NITMOD_DropObjective_f(gentity_t *ent) {
+	gitem_t *item = NULL;
+	gentity_t *dropped;
+	vec3_t angles, forward, origin, velocity;
+	int limit;
+
+	if(!ent || !ent->client || ent->health <= 0) return;
+	limit = G_NITMOD_LegacyCvarInteger("g_dropObj", 0);
+	if(limit <= 0 || limit < ent->client->nitmodObjectiveDrops) return;
+
+	if(ent->client->ps.powerups[PW_REDFLAG]) {
+		item = BG_FindItem("Red Flag");
+		if(!item) item = BG_FindItem("Objective");
+		ent->client->ps.powerups[PW_REDFLAG] = 0;
+	}
+	if(ent->client->ps.powerups[PW_BLUEFLAG]) {
+		item = BG_FindItem("Blue Flag");
+		if(!item) item = BG_FindItem("Objective");
+		ent->client->ps.powerups[PW_BLUEFLAG] = 0;
+	}
+	if(!item) return;
+
+	VectorCopy(ent->client->ps.viewangles, angles);
+	if(angles[PITCH] > 0.0f) angles[PITCH] = 0.0f;
+	AngleVectors(angles, forward, NULL, NULL);
+	VectorMA(ent->client->ps.origin, 36.0f, forward, origin);
+	origin[2] += ent->client->ps.viewheight;
+	VectorScale(forward, 96.0f, velocity);
+	dropped = LaunchItem(item, origin, velocity, ent->s.number);
+	dropped->s.modelindex2 = ent->s.otherEntityNum2;
+	dropped->message = ent->message;
+	ent->s.otherEntityNum2 = 0;
+	ent->message = NULL;
+	ent->client->nitmodObjectiveDrops++;
 }
 
 void BotRecordTeamChange( int client );
@@ -702,6 +801,18 @@ qboolean SetTeam( gentity_t *ent, char *s, qboolean force, weapon_t w1, weapon_t
 	respawnsLeft = client->ps.persistant[ PERS_RESPAWNS_LEFT ];
 	
 	G_TeamDataForString( s, client - level.clients, &team, &specState, &specClient );
+
+	if(!force && team != client->sess.sessionTeam && client->switchTeamTime > 0) {
+		int teamChangeDelay = G_NITMOD_LegacyCvarInteger("g_teamChangeDelay", 0);
+		int elapsed = level.time - client->switchTeamTime;
+		if(teamChangeDelay > 0 && elapsed >= 0 && elapsed < teamChangeDelay) {
+			int remaining = (teamChangeDelay - elapsed + 999) / 1000;
+			trap_SendServerCommand(clientNum,
+				va("cp \"^3You must wait %i second%s before changing teams.\n\"",
+					remaining, remaining == 1 ? "" : "s"));
+			return qfalse;
+		}
+	}
 
 	if( team != TEAM_SPECTATOR ) {
 		// Ensure the player can join
@@ -793,7 +904,8 @@ qboolean SetTeam( gentity_t *ent, char *s, qboolean force, weapon_t w1, weapon_t
 		client->pers.teamState.state = TEAM_BEGIN;
 	}
 	
-	if ( oldTeam != TEAM_SPECTATOR ) {
+	if ( oldTeam != TEAM_SPECTATOR &&
+		G_NITMOD_LegacyCvarInteger("g_teamChangeKills", 1) ) {
 		if ( !(ent->client->ps.pm_flags & PMF_LIMBO) ) {
 			// Kill him (makes sure he loses flags, etc)
 			ent->flags &= ~FL_GODMODE;
@@ -812,6 +924,9 @@ qboolean SetTeam( gentity_t *ent, char *s, qboolean force, weapon_t w1, weapon_t
 	G_RemoveClientFromFireteams( clientNum, qtrue, qfalse );
 	if( g_landminetimeout.integer ) {
 		G_ExplodeMines( ent );
+	}
+	if(oldTeam != team && G_NITMOD_LegacyCvarInteger("n_tripmineTimeout", 1)) {
+		G_NITMOD_RemoveTripmines(ent);
 	}
 	G_FadeItems(ent, MOD_SATCHEL);
 
@@ -847,6 +962,7 @@ qboolean SetTeam( gentity_t *ent, char *s, qboolean force, weapon_t w1, weapon_t
 
 	// (l)users will spam spec messages... honest!
 	if(team != oldTeam) {
+		client->switchTeamTime = level.time;
 		gentity_t* tent = G_PopupMessage( PM_TEAM );
 		tent->s.effect2Time = team;
 		tent->s.effect3Time = clientNum;
@@ -1130,29 +1246,6 @@ void Cmd_Team_f( gentity_t *ent, unsigned int dwCommand, qboolean fValue ) {
 	}
 }
 
-void Cmd_ResetSetup_f( gentity_t* ent ) {
-	qboolean changed = qfalse;
-
-	if( !ent || !ent->client ) {
-		return;
-	}
-
-	ent->client->sess.latchPlayerType =		ent->client->sess.playerType;
-	
-	if( ent->client->sess.latchPlayerWeapon != ent->client->sess.playerWeapon ) {
-		ent->client->sess.latchPlayerWeapon = ent->client->sess.playerWeapon;
-		changed = qtrue;
-	}
-
-	if( ent->client->sess.latchPlayerWeapon2 != ent->client->sess.playerWeapon2 ) {
-		ent->client->sess.latchPlayerWeapon2 =	ent->client->sess.playerWeapon2;
-		changed = qtrue;
-	}
-
-	if( changed ) {
-		ClientUserinfoChanged( ent-g_entities );
-	}
-}
 
 void Cmd_SetWeapons_f( gentity_t* ent, unsigned int dwCommand, qboolean fValue ) {
 }
@@ -1425,6 +1518,119 @@ void G_SayTo( gentity_t *ent, gentity_t *other, int mode, int color, const char 
 	}
 }
 
+static const char *G_NITMOD_ShortcutValue( gentity_t *ent, char code )
+{
+	gitem_t *item;
+	int weapon;
+	int ammo;
+	int clientNum = -1;
+
+	switch( code ) {
+	case 'a': clientNum = ent->client->pers.nitmodLastAmmoClient; break;
+	case 'd': clientNum = ent->client->pers.nitmodLastKillerClient; break;
+	case 'h': clientNum = ent->client->pers.nitmodLastHealthClient; break;
+	case 'k': clientNum = ent->client->pers.nitmodLastKilledClient; break;
+	case 'r': clientNum = ent->client->pers.nitmodLastReviverClient; break;
+	case 'p':
+		clientNum = ent->client->ps.identifyClient;
+		if( clientNum >= 0 && clientNum < level.maxclients &&
+			g_entities[clientNum].client && !OnSameTeam(ent, &g_entities[clientNum]) ) {
+			clientNum = -1;
+		}
+		break;
+	case 'l': return BG_GetLocationString(ent->r.currentOrigin);
+	case 'n': return ent->client->pers.netname;
+	case 's': return va("%i", ent->health < 0 ? 0 : ent->health);
+	case 'w':
+		weapon = ent->client->ps.weapon;
+		item = BG_FindItemForWeapon(weapon);
+		return item && item->pickup_name ? item->pickup_name : "Nothing";
+	case 't':
+		weapon = ent->client->ps.weapon;
+		if( weapon == WP_KNIFE || weapon <= WP_NONE || weapon >= WP_NUM_WEAPONS ) {
+			return "0";
+		}
+		ammo = ent->client->ps.ammo[BG_FindAmmoForWeapon(weapon)] +
+			ent->client->ps.ammoclip[BG_FindClipForWeapon(weapon)];
+		return va("%i", ammo);
+	default: return NULL;
+	}
+
+	if( clientNum >= 0 && clientNum < level.maxclients &&
+		g_entities[clientNum].inuse && g_entities[clientNum].client &&
+		g_entities[clientNum].client->pers.connected == CON_CONNECTED ) {
+		return g_entities[clientNum].client->pers.netname;
+	}
+	return "*unknown*";
+}
+
+static void G_NITMOD_ExpandChatShortcuts( gentity_t *ent, const char *input,
+	char *output, int outputSize )
+{
+	const char *value;
+	int used = 0;
+
+	if( !G_NITMOD_LegacyCvarInteger("g_shortcuts", 1) ) {
+		Q_strncpyz(output, input, outputSize);
+		return;
+	}
+
+	while( *input && used < outputSize - 1 ) {
+		if( input[0] == '[' && input[1] && input[2] == ']' &&
+			(value = G_NITMOD_ShortcutValue(ent, input[1])) != NULL ) {
+			while( *value && used < outputSize - 1 ) output[used++] = *value++;
+			input += 3;
+			continue;
+		}
+		output[used++] = *input++;
+	}
+	output[used] = '\0';
+}
+
+static void G_NITMOD_ApplyCensorPenalty( gentity_t *ent )
+{
+	int penalty = G_NITMOD_LegacyCvarInteger("g_censorPenalty", 1);
+	qboolean playable = ent->health > 0 &&
+		ent->client->sess.sessionTeam != TEAM_SPECTATOR;
+
+	if( playable && (penalty & 64) ) {
+		ent->client->ps.eFlags |= NITMOD_EF_POISONED;
+		ent->client->nitmodPoisonAttacker = ent->s.number;
+		ent->client->nitmodPoisonStacks = 1;
+		ent->client->nitmodPoisonNextTick = level.time;
+		trap_SendServerCommand(-1, va(
+			"pop \"^8CENSOR WARNING: ^7%s ^7poisoned his dirty mouth.\"",
+			ent->client->pers.netname));
+	}
+	if( playable && (penalty & 32) ) {
+		G_BurnMeGood(ent, ent);
+		trap_SendServerCommand(-1, va(
+			"pop \"^8CENSOR WARNING: ^7%s ^7burned his tongue.\"",
+			ent->client->pers.netname));
+	}
+
+	if( penalty & 8 ) {
+		int duration = G_NITMOD_LegacyCvarInteger("g_censorMuteTime", 0);
+		G_NITMOD_SetClientMute(ent, qtrue, duration);
+		trap_SendServerCommand(ent - g_entities, va(
+			"print \"^9You've been auto-muted for %d seconds for language.\\n\"", duration));
+	}
+	if( (penalty & 16) && ent->client->sess.sessionTeam != TEAM_SPECTATOR ) {
+		int skill = BG_ClassSkillForClass(ent->client->sess.playerType);
+		G_LoseSkillPoints(ent, skill, 10.f);
+		trap_SendServerCommand(ent - g_entities,
+			"pop \"^8CENSOR WARNING: ^7Watch your mouth! You have lost 10 XP.\"");
+	}
+	/* Gib takes precedence over the non-gib kill, matching the original. */
+	if( playable && (penalty & 1) ) {
+		G_Damage(ent, ent, ent, NULL, NULL, 100000,
+			DAMAGE_NO_PROTECTION, MOD_UNKNOWN);
+	} else if( playable && (penalty & 4) ) {
+		G_Damage(ent, ent, ent, NULL, NULL, ent->health + 1,
+			DAMAGE_NO_PROTECTION, MOD_UNKNOWN);
+	}
+}
+
 void G_Say( gentity_t *ent, gentity_t *target, int mode, const char *chatText ) {
 	int			j;
 	gentity_t	*other;
@@ -1463,7 +1669,10 @@ void G_Say( gentity_t *ent, gentity_t *target, int mode, const char *chatText ) 
 		break;
 	}
 
-	Q_strncpyz( text, chatText, sizeof(text) );
+	G_NITMOD_ExpandChatShortcuts(ent, chatText, text, sizeof(text));
+	if( G_NITMOD_CensorText("g_censor", text, sizeof(text)) ) {
+		G_NITMOD_ApplyCensorPenalty(ent);
+	}
 
 	if ( target ) {
 		if( !COM_BitCheck( target->client->sess.ignoreClients, ent - g_entities ) ) {
@@ -1487,6 +1696,40 @@ void G_Say( gentity_t *ent, gentity_t *target, int mode, const char *chatText ) 
 }
 
 
+/* Recovered ClientIsFlooding contract: a 30-second accounting window plus
+ * the configured inter-message wait and a short continuing penalty. */
+static qboolean G_NITMOD_ClientIsFlooding( gentity_t *ent )
+{
+	int threshold;
+	int wait;
+
+	if( !ent || !ent->client ||
+		!G_NITMOD_LegacyCvarInteger("g_floodprotect", 1) ||
+		ent->client->sess.referee ) {
+		return qfalse;
+	}
+
+	if( level.time - ent->client->pers.nitmodFloodWindowTime > 30000 ) {
+		ent->client->pers.nitmodFloodWindowTime = level.time;
+		ent->client->pers.nitmodFloodCount = 0;
+		ent->client->pers.nitmodFloodNextTime = 0;
+	}
+	if( ent->client->pers.nitmodFloodNextTime > level.time ) return qtrue;
+
+	threshold = G_NITMOD_LegacyCvarInteger("g_floodthreshold", 6);
+	if( threshold < 0 ) threshold = 0;
+	if( ent->client->pers.nitmodFloodCount > threshold ) {
+		ent->client->pers.nitmodFloodNextTime = level.time + 500;
+		return qtrue;
+	}
+
+	wait = G_NITMOD_LegacyCvarInteger("g_floodWait", 1000);
+	if( wait < 0 ) wait = 0;
+	ent->client->pers.nitmodFloodCount++;
+	ent->client->pers.nitmodFloodNextTime = level.time + wait;
+	return qfalse;
+}
+
 /*
 ==================
 Cmd_Say_f
@@ -1495,6 +1738,11 @@ Cmd_Say_f
 void Cmd_Say_f( gentity_t *ent, int mode, qboolean arg0 )
 {
 	if(trap_Argc() < 2 && !arg0) return;
+	if( G_NITMOD_ClientIsFlooding(ent) ) {
+		trap_SendServerCommand(ent - g_entities,
+			"print \"Flood protection: wait before sending another message.\\n\"");
+		return;
+	}
 	G_Say(ent, NULL, mode, ConcatArgs(((arg0) ? 0 : 1)));
 }
 
@@ -1665,6 +1913,11 @@ Cmd_Voice_f
 ==================
 */
 static void Cmd_Voice_f( gentity_t *ent, int mode, qboolean arg0, qboolean voiceonly ) {
+	if( G_NITMOD_ClientIsFlooding(ent) ) {
+		trap_SendServerCommand(ent - g_entities,
+			"print \"Flood protection: wait before sending another message.\\n\"");
+		return;
+	}
 	if( mode != SAY_BUDDY ) {
 		if(trap_Argc() < 2 && !arg0) {
 			return;
@@ -1869,7 +2122,17 @@ qboolean Cmd_CallVote_f( gentity_t *ent, unsigned int dwCommand, qboolean fRefCo
 		return(qfalse);
 	}
 
+	/* Original Cmd_CallVote_f (0x69679): cap a requested timelimit after
+	 * validating the vote type. Other numeric vote arguments are untouched. */
+	if( !Q_stricmp(arg1, "timelimit") ) {
+		int maximum = G_NITMOD_LegacyCvarInteger("n_voteMaxTimelimit", 0);
+		if( maximum > 0 && strtol(arg2, NULL, 10) > maximum ) {
+			Q_strncpyz(arg2, va("%i", maximum), sizeof(arg2));
+		}
+	}
+
 	Com_sprintf(level.voteInfo.voteString, sizeof(level.voteInfo.voteString), "%s %s", arg1, arg2);
+	level.voteInfo.callerClientNum = fRefCommand ? -1 : (int)(ent - g_entities);
 
 	// start the voting, the caller automatically votes yes
 	// If a referee, vote automatically passes.	// OSP
@@ -1907,7 +2170,12 @@ qboolean Cmd_CallVote_f( gentity_t *ent, unsigned int dwCommand, qboolean fRefCo
 
 		trap_SetConfigstring(CS_VOTE_YES,	 va("%i", level.voteInfo.voteYes));
 		trap_SetConfigstring(CS_VOTE_NO,	 va("%i", level.voteInfo.voteNo));
-		trap_SetConfigstring(CS_VOTE_STRING, level.voteInfo.voteString);	
+		if( G_NITMOD_LegacyCvarInteger("g_voting", 1) & 4 ) {
+			trap_SetConfigstring(CS_VOTE_STRING, va("%s (called by %s)",
+				level.voteInfo.voteString, ent->client->pers.netname));
+		} else {
+			trap_SetConfigstring(CS_VOTE_STRING, level.voteInfo.voteString);
+		}
 		trap_SetConfigstring(CS_VOTE_TIME,	 va("%i", level.voteInfo.voteTime));
 	}
 
@@ -2169,6 +2437,10 @@ void Cmd_Vote_f( gentity_t *ent ) {
 		return;
 	}
 
+	if(level.voteInfo.vote_fn == G_NITMOD_SurrenderVote && !G_NITMOD_CanVoteSurrender(ent)) {
+		trap_SendServerCommand(ent - g_entities, "print \"Cannot vote on the opposing team's surrender.\n\"");
+		return;
+	}
 	if( level.voteInfo.vote_fn == G_Kick_v ) {
 		int pid = atoi( level.voteInfo.vote_value );
 		if( !g_entities[ pid ].client ) {
@@ -2373,7 +2645,8 @@ qboolean G_TankIsOccupied( gentity_t* ent ) {
 	return qtrue;
 }
 
-qboolean G_TankIsMountable( gentity_t* ent, gentity_t* other ) {
+qboolean G_TankIsMountable( gentity_t* ent, gentity_t* other, qboolean notify ) {
+	int mountDelay;
 	if( !(ent->spawnflags & 128) ) {
 		return qfalse;
 	}
@@ -2394,6 +2667,110 @@ qboolean G_TankIsMountable( gentity_t* ent, gentity_t* other ) {
 		return qfalse;
 	}
 
+	/* Original G_TankIsMountable (0x69b00) stores the deadline on the player
+	 * entity. Cursor-hint probes are silent; an actual use attempt reports
+	 * the configured delay. */
+	mountDelay = G_NITMOD_LegacyCvarInteger("n_tankMountDelay", 0);
+	if( mountDelay > 0 && other->nitmodTankMountTime > level.time ) {
+		if( notify ) {
+			trap_SendServerCommand( other->s.number,
+				va("cp \"You must wait %d seconds before you can mount a tank again.^7\" 1",
+				mountDelay) );
+		}
+		return qfalse;
+	}
+
+	return qtrue;
+}
+
+/* Original G_ClassSteal/G_ClassSteal_RemoveTools (0x5b3d0/0x5b250).
+ * A class steal changes only class-owned tools; the player's primary weapon,
+ * ammunition and health deliberately survive the transition. */
+static void G_NITMOD_RemoveClassTools(gclient_t *client) {
+	static const weapon_t tools[] = {
+		WP_DYNAMITE, WP_PLIERS, WP_LANDMINE, WP_SMOKE_BOMB,
+		WP_BOMB, WP_SATCHEL, WP_SATCHEL_DET, WP_SMOKE_MARKER,
+		WP_AMMO, WP_MEDKIT, WP_MEDIC_SYRINGE, WP_POISON_SYRINGE,
+		WP_MEDIC_ADRENALINE, WP_POISON_BOMB, WP_TRIPMINE, WP_POISON_MINE
+	};
+	unsigned int i;
+	for(i = 0; i < sizeof(tools) / sizeof(tools[0]); ++i)
+		COM_BitClear(client->ps.weapons, tools[i]);
+	if(client->sess.playerType == PC_COVERTOPS) {
+		COM_BitSet(client->ps.weapons, WP_SILENCER);
+		COM_BitSet(client->ps.weapons, WP_SILENCED_COLT);
+		if(COM_BitCheck(client->ps.weapons, WP_AKIMBO_LUGER)) {
+			COM_BitClear(client->ps.weapons, WP_AKIMBO_LUGER);
+			COM_BitSet(client->ps.weapons, WP_AKIMBO_SILENCEDLUGER);
+		}
+		if(COM_BitCheck(client->ps.weapons, WP_AKIMBO_COLT)) {
+			COM_BitClear(client->ps.weapons, WP_AKIMBO_COLT);
+			COM_BitSet(client->ps.weapons, WP_AKIMBO_SILENCEDCOLT);
+		}
+	} else {
+		COM_BitClear(client->ps.weapons, WP_SILENCER);
+		COM_BitClear(client->ps.weapons, WP_SILENCED_COLT);
+		if(COM_BitCheck(client->ps.weapons, WP_AKIMBO_SILENCEDLUGER)) {
+			COM_BitClear(client->ps.weapons, WP_AKIMBO_SILENCEDLUGER);
+			COM_BitSet(client->ps.weapons, WP_AKIMBO_LUGER);
+		}
+		if(COM_BitCheck(client->ps.weapons, WP_AKIMBO_SILENCEDCOLT)) {
+			COM_BitClear(client->ps.weapons, WP_AKIMBO_SILENCEDCOLT);
+			COM_BitSet(client->ps.weapons, WP_AKIMBO_COLT);
+		}
+	}
+}
+
+static void G_NITMOD_AddClassTools(gentity_t *ent) {
+	gclient_t *client = ent->client;
+	#define ADD_CLASS_TOOL(w) AddWeaponToPlayer(client, (w), \
+		GetAmmoTableData(w)->defaultStartingAmmo, GetAmmoTableData(w)->defaultStartingClip, qfalse)
+	switch(client->sess.playerType) {
+	case PC_ENGINEER:
+		ADD_CLASS_TOOL(WP_DYNAMITE); ADD_CLASS_TOOL(WP_PLIERS); ADD_CLASS_TOOL(WP_LANDMINE);
+		break;
+	case PC_MEDIC:
+		ADD_CLASS_TOOL(WP_MEDIC_SYRINGE); ADD_CLASS_TOOL(WP_MEDKIT);
+		if(client->sess.skill[SK_FIRST_AID] >= 4) ADD_CLASS_TOOL(WP_MEDIC_ADRENALINE);
+		break;
+	case PC_FIELDOPS:
+		ADD_CLASS_TOOL(WP_AMMO); ADD_CLASS_TOOL(WP_SMOKE_MARKER);
+		break;
+	case PC_COVERTOPS:
+		ADD_CLASS_TOOL(WP_SMOKE_BOMB); ADD_CLASS_TOOL(WP_SATCHEL); ADD_CLASS_TOOL(WP_SATCHEL_DET);
+		break;
+	default:
+		break;
+	}
+	#undef ADD_CLASS_TOOL
+}
+
+static qboolean G_NITMOD_ClassSteal(gentity_t *ent, gentity_t *body) {
+	int step;
+	if(!ent || !ent->client || !body || body->s.eType != ET_CORPSE ||
+	   G_NITMOD_ConfiguredWarMode() <= 4 || g_gametype.integer == 8 ||
+	   !G_NITMOD_LegacyCvarInteger("g_classChange", 0) ||
+	   BODY_CLASS(body) == ent->client->sess.playerType || body->activator)
+		return qfalse;
+	if(BODY_VALUE(body) < 250) {
+		if(BODY_VALUE(body) == 0)
+			trap_SendServerCommand(ent->s.number, "cp \"^3Stealing class...\"");
+		step = 100 / Q_max(1, trap_Cvar_VariableIntegerValue("sv_fps"));
+		BODY_VALUE(body) += Q_max(1, step);
+		return qtrue;
+	}
+	body->nextthink = body->timestamp + 20000;
+	body->s.time2 = 1;
+	body->activator = ent;
+	BODY_TEAM(body) += 4;
+	ent->client->sess.playerType = BODY_CLASS(body);
+	ent->client->sess.latchPlayerType = BODY_CLASS(body);
+	ent->client->ps.stats[STAT_PLAYER_CLASS] = BODY_CLASS(body);
+	ent->client->ps.teamNum = BODY_CLASS(body);
+	G_NITMOD_RemoveClassTools(ent->client);
+	G_NITMOD_AddClassTools(ent);
+	G_AddEvent(ent, EV_DISGUISE_SOUND, 0);
+	ClientUserinfoChanged(ent->s.number);
 	return qtrue;
 }
 
@@ -2470,6 +2847,8 @@ qboolean Do_Activate_f(gentity_t *ent, gentity_t *traceEnt) {
 
 	if (traceEnt->classname)
 	{
+		if(G_NITMOD_ClassSteal(ent, traceEnt))
+			return qtrue;
 		traceEnt->flags &= ~FL_SOFTACTIVATE;	// FL_SOFTACTIVATE will be set if the user is holding 'walk' key
 
 		if (traceEnt->s.eType == ET_ALARMBOX)
@@ -2502,7 +2881,7 @@ qboolean Do_Activate_f(gentity_t *ent, gentity_t *traceEnt) {
 			}
 
 			found = qtrue;
-		} else if ( traceEnt->s.eType == ET_MOVER && G_TankIsMountable( traceEnt, ent ) ) {
+		} else if ( traceEnt->s.eType == ET_MOVER && G_TankIsMountable( traceEnt, ent, qtrue ) ) {
 			G_Script_ScriptEvent( traceEnt, "mg42", "mount" );
 			ent->tagParent = traceEnt->nextTrain;
 			Q_strncpyz( ent->tagName, "tag_player", MAX_QPATH );
@@ -2640,6 +3019,10 @@ void G_LeaveTank( gentity_t* ent, qboolean position ) {
 
 	tank->tankLink = NULL;
 	ent->tankLink = NULL;
+	if( position && G_NITMOD_LegacyCvarInteger("n_tankMountDelay", 0) > 0 ) {
+		ent->nitmodTankMountTime = level.time +
+			G_NITMOD_LegacyCvarInteger("n_tankMountDelay", 0) * 1000;
+	}
 }
 
 void Cmd_Activate_f( gentity_t *ent ) {
@@ -3309,6 +3692,125 @@ void Cmd_UnIgnore_f (gentity_t* ent ) {
 	}
 }
 
+static void G_NITMOD_CleanPrivateMessage(const char *input, char *output, int outputSize) {
+	int used = 0;
+	if(!output || outputSize < 1) return;
+	while(input && *input && used < outputSize - 1) {
+		unsigned char c = (unsigned char)*input++;
+		if(c < 32 || c == '"' || c == '\\') continue;
+		output[used++] = (char)c;
+	}
+	output[used] = '\0';
+}
+
+qboolean G_NITMOD_ClientMuted(gentity_t *ent) {
+	if(!ent || !ent->client || !ent->client->sess.muted) return qfalse;
+	if(ent->client->nitmodMuteUntil > 0 && level.time >= ent->client->nitmodMuteUntil) {
+		ent->client->sess.muted = qfalse;
+		ent->client->nitmodMuteUntil = 0;
+		trap_SendServerCommand(ent - g_entities, "cpm \"^3You have been un-muted\"");
+		ClientUserinfoChanged(ent - g_entities);
+		return qfalse;
+	}
+	return qtrue;
+}
+
+void G_NITMOD_SetClientMute(gentity_t *ent, qboolean muted, int durationSeconds) {
+	if(!ent || !ent->client) return;
+	if(durationSeconds > 2147483) durationSeconds = 2147483;
+	ent->client->sess.muted = muted;
+	ent->client->nitmodMuteUntil = muted && durationSeconds > 0 ?
+		level.time + durationSeconds * 1000 : 0;
+	ClientUserinfoChanged(ent - g_entities);
+}
+
+/* Typed subset of original G_PrivateMessage. The original wire contract sends
+ * the heading through chat and the body through lc, which reconstructed cgame
+ * already understands. */
+static void G_NITMOD_PrivateMessage(gentity_t *ent, const char *targetName, const char *message) {
+	char cleanMessage[MAX_STRING_CHARS];
+	int targetNum;
+	gentity_t *target;
+
+	if(!ent || !ent->client) return;
+	if(G_NITMOD_ClientMuted(ent)) {
+		trap_SendServerCommand(ent - g_entities, "chat \"^1PM Error^9: You are muted\" -2");
+		return;
+	}
+	if(!G_NITMOD_LegacyCvarInteger("g_privateMessages", 1)) {
+		trap_SendServerCommand(ent - g_entities,
+			"chat \"^1PM Error^9: Private messages disabled on this server\" -2");
+		return;
+	}
+	if(!targetName || !*targetName || !message || !*message) {
+		trap_SendServerCommand(ent - g_entities,
+			"chat \"^9usage: ^g/m [name|slot#] [message]\" -2");
+		return;
+	}
+	targetNum = ClientNumberFromString(ent, (char *)targetName);
+	if(targetNum < 0) return;
+	target = &g_entities[targetNum];
+	if(COM_BitCheck(target->client->sess.ignoreClients, ent - g_entities)) {
+		trap_SendServerCommand(ent - g_entities,
+			va("chat \"^1PM Error^9: ^7%s ^9is ignoring you\" -2", target->client->pers.netname));
+		return;
+	}
+	G_NITMOD_CleanPrivateMessage(message, cleanMessage, sizeof(cleanMessage));
+	if(!cleanMessage[0]) return;
+
+	trap_SendServerCommand(targetNum,
+		va("chat \"^xPrivate message from ^7%s\" -2", ent->client->pers.netname));
+	trap_SendServerCommand(targetNum, va("lc \"%s\"", cleanMessage));
+	if(targetNum != ent - g_entities) {
+		trap_SendServerCommand(ent - g_entities,
+			va("chat \"^7%s ^9-> ^7%s^9:^7\" -2", ent->client->pers.netname,
+				target->client->pers.netname));
+		trap_SendServerCommand(ent - g_entities, va("lc \"%s\"", cleanMessage));
+	}
+	G_LogPrintf("privmsg: %s: %s: %s\n", ent->client->pers.netname,
+		target->client->pers.netname, cleanMessage);
+}
+
+static void G_NITMOD_PrivateMessage_f(gentity_t *ent) {
+	char targetName[MAX_TOKEN_CHARS];
+	char message[MAX_STRING_CHARS];
+	if(trap_Argc() < 3) {
+		G_NITMOD_PrivateMessage(ent, NULL, NULL);
+		return;
+	}
+	trap_Argv(1, targetName, sizeof(targetName));
+	Q_strncpyz(message, ConcatArgs(2), sizeof(message));
+	G_NITMOD_PrivateMessage(ent, targetName, message);
+}
+
+static qboolean G_NITMOD_TryChatPrivateMessage(gentity_t *ent) {
+	char text[MAX_STRING_CHARS];
+	char targetName[MAX_TOKEN_CHARS];
+	char *cursor, *targetEnd;
+	int targetLength;
+
+	if(!G_NITMOD_LegacyCvarInteger("g_privateMessages", 1)) return qfalse;
+	Q_strncpyz(text, ConcatArgs(1), sizeof(text));
+	cursor = text;
+	while(*cursor == ' ') ++cursor;
+	if(!Q_stricmpn(cursor, "/pm ", 4)) cursor += 4;
+	else if(!Q_stricmpn(cursor, "/m ", 3)) cursor += 3;
+	else return qfalse;
+	while(*cursor == ' ') ++cursor;
+	targetEnd = cursor;
+	while(*targetEnd && *targetEnd != ' ') ++targetEnd;
+	targetLength = (int)(targetEnd - cursor);
+	if(targetLength <= 0 || targetLength >= (int)sizeof(targetName)) {
+		G_NITMOD_PrivateMessage(ent, NULL, NULL);
+		return qtrue;
+	}
+	memcpy(targetName, cursor, targetLength);
+	targetName[targetLength] = '\0';
+	while(*targetEnd == ' ') ++targetEnd;
+	G_NITMOD_PrivateMessage(ent, targetName, targetEnd);
+	return qtrue;
+}
+
 /*
 =================
 Cmd_SwapPlacesWithBot_f
@@ -3375,6 +3877,34 @@ void Cmd_SwapPlacesWithBot_f( gentity_t *ent, int botNum ) {
 	client->pers.lastReinforceTime = 0;
 }
 
+/* Original Nitmod G_PlayDead, reconstructed against typed ET 2.60 state. */
+static void G_NITMOD_PlayDead_f( gentity_t *ent ) {
+	playerState_t *ps;
+
+	if( !ent || !ent->client || ent->health < 0 ) {
+		return;
+	}
+	ps = &ent->client->ps;
+	/* The original rejects every movement/timer flag, not only limbo.  This
+	 * excludes prone, crouch-transition, knockback and respawn edge cases. */
+	if( (ps->eFlags & EF_VIEWING_CAMERA) || ps->pm_flags != 0 ) {
+		return;
+	}
+
+	if( ps->eFlags & EF_SPARE0 ) {
+		if( ps->pm_type != PM_DEAD ) {
+			return;
+		}
+	} else {
+		if( !G_NITMOD_LegacyCvarInteger("g_playDead", 1) ||
+			ps->pm_type != PM_NORMAL ) {
+			return;
+		}
+	}
+
+	ps->pm_type = PM_PLAYDEAD;
+}
+
 
 /*
 =================
@@ -3414,7 +3944,8 @@ void ClientCommand( int clientNum ) {
 	}
 
 	if (Q_stricmp (cmd, "say") == 0) {
-		if( !ent->client->sess.muted) {
+		if( !G_NITMOD_ClientMuted(ent)) {
+			if(G_NITMOD_TryChatPrivateMessage(ent)) return;
 			Cmd_Say_f (ent, SAY_ALL, qfalse);
 		}
 		return;
@@ -3426,12 +3957,13 @@ void ClientCommand( int clientNum ) {
 			return;
 		}
 
-		if( !ent->client->sess.muted ) {
+		if( !G_NITMOD_ClientMuted(ent) ) {
+			if(G_NITMOD_TryChatPrivateMessage(ent)) return;
 			Cmd_Say_f (ent, SAY_TEAM, qfalse);
 		}
 		return;
 	} else if (Q_stricmp (cmd, "vsay") == 0) {
-		if( !ent->client->sess.muted) {
+		if( !G_NITMOD_ClientMuted(ent)) {
 			Cmd_Voice_f (ent, SAY_ALL, qfalse, qfalse);
 		}
 		return;
@@ -3441,17 +3973,18 @@ void ClientCommand( int clientNum ) {
 			return;
 		}
 
-		if( !ent->client->sess.muted) {
+		if( !G_NITMOD_ClientMuted(ent)) {
 			Cmd_Voice_f (ent, SAY_TEAM, qfalse, qfalse);
 		}
 		return;
 	} else if (Q_stricmp (cmd, "say_buddy") == 0) {
-		if( !ent->client->sess.muted) {
+		if( !G_NITMOD_ClientMuted(ent)) {
+			if(G_NITMOD_TryChatPrivateMessage(ent)) return;
 			Cmd_Say_f( ent, SAY_BUDDY, qfalse );
 		}
 		return;
 	} else if (Q_stricmp (cmd, "vsay_buddy") == 0) {
-		if( !ent->client->sess.muted) {
+		if( !G_NITMOD_ClientMuted(ent)) {
 			Cmd_Voice_f( ent, SAY_BUDDY, qfalse, qfalse );
 		}
 		return;
@@ -3476,6 +4009,15 @@ void ClientCommand( int clientNum ) {
 	} else if (Q_stricmp (cmd, "unignore") == 0) {
 		Cmd_UnIgnore_f( ent );
 		return;
+	} else if (!Q_stricmp(cmd, "m") || !Q_stricmp(cmd, "pm")) {
+		G_NITMOD_PrivateMessage_f(ent);
+		return;
+	} else if (!Q_stricmp(cmd, "dropobj")) {
+		G_NITMOD_DropObjective_f(ent);
+		return;
+	} else if (!Q_stricmp(cmd, "playdead")) {
+		G_NITMOD_PlayDead_f(ent);
+		return;
 	} else if (Q_stricmp (cmd, "obj") == 0) {
 		Cmd_SelectedObjective_f( ent );
 		return;
@@ -3491,8 +4033,17 @@ void ClientCommand( int clientNum ) {
 	} else if( !Q_stricmp( cmd, "imhr" ) ) {
 		Cmd_IntermissionHitRegions_f( ent );
 		return;
-	} else if( !Q_stricmp( cmd, "imready" ) ) {		
+	} else if( !Q_stricmp( cmd, "imready" ) ) {
 		Cmd_IntermissionReady_f( ent );
+		return;
+	} else if( !Q_stricmp( cmd, "immaplist" ) ) {
+		G_NITMOD_MapVoteSendList( ent );
+		return;
+	} else if( !Q_stricmp( cmd, "imvotetally" ) ) {
+		G_NITMOD_MapVoteSendTally( ent );
+		return;
+	} else if( !Q_stricmp( cmd, "mapvote" ) ) {
+		G_NITMOD_MapVoteCast( ent );
 		return;
 	} else if (Q_stricmp (cmd, "ws") == 0) {
 		Cmd_WeaponStat_f( ent );

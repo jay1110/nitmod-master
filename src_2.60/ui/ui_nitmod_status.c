@@ -87,6 +87,15 @@ static void UI_SortServerStatusInfo(serverStatusInfo_t *info) {
             key = info->lines[index][0]; value = info->lines[index][3];
             info->lines[index][0] = *names[i][1] ? (char *)names[i][1] : info->lines[j][0];
             info->lines[index][3] = info->lines[j][3];
+			if(!Q_stricmp(names[i][0], "g_gametype")) {
+				int gametype;
+				if(NITMOD_ParseProtocolInteger(info->lines[index][3], &gametype) &&
+				   gametype >= 0 && gametype < GT_MAX_GAME_TYPE) {
+					Com_sprintf(info->gameTypeName, sizeof(info->gameTypeName), "%s (%d)",
+						BG_NitmodGametypeName(gametype, qfalse), gametype);
+					info->lines[index][3] = info->gameTypeName;
+				}
+			}
             if(j != index) { info->lines[j][0] = key; info->lines[j][3] = value; }
             ++index;
         }
@@ -105,4 +114,30 @@ int UI_GetServerStatusInfo(const char *address, serverStatusInfo_t *info) {
     int ready = UI_QueryServerStatus(address, info);
     if(ready) UI_StatusLinks(info);
     return ready;
+}
+
+/* Browser localhost has no independent UDP LAN-status round trip. Once the
+ * client is connected the authoritative server info is already available as
+ * CS_SERVERINFO, so use it only for the local in-game dialog fallback. */
+int UI_GetConnectedLocalServerStatus(const char *address, serverStatusInfo_t *info) {
+    char serverInfo[MAX_INFO_STRING];
+    uiClientState_t state;
+    const char *shownAddress;
+    if(!info) return qfalse;
+    trap_GetClientState(&state);
+    if(state.connState < CA_CONNECTED) return qfalse;
+    if(address && *address && Q_stricmp(address, "localhost") &&
+       Q_stricmp(address, "loopback") && Q_stricmp(address, "127.0.0.1") &&
+       Q_stricmpn(address, "localhost:", 10) &&
+       Q_stricmpn(address, "127.0.0.1:", 10) && Q_stricmpn(address, "[::1]", 5)) return qfalse;
+    memset(serverInfo, 0, sizeof(serverInfo));
+    if(!trap_GetConfigString(CS_SERVERINFO, serverInfo, sizeof(serverInfo)) || !serverInfo[0])
+        return qfalse;
+    memset(info, 0, sizeof(*info));
+    Q_strncpyz(info->text, serverInfo, sizeof(info->text));
+    shownAddress = address && *address ? address : "localhost";
+    UI_ParseServerStatus(info, shownAddress);
+    UI_SortServerStatusInfo(info);
+    UI_StatusLinks(info);
+    return qtrue;
 }

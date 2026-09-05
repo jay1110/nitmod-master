@@ -8,9 +8,17 @@ void G_NITMOD_ConfigureCanisterKick(gentity_t *missile) {
     switch(missile->s.weapon) {
     case WP_GRENADE_LAUNCHER: case WP_GRENADE_PINEAPPLE:
     case WP_SMOKE_MARKER: case WP_SMOKE_BOMB:
+    case WP_POISON_BOMB:
         missile->r.contents = CONTENTS_CORPSE;
         VectorSet(missile->r.mins, -4, -4, 0);
         VectorSet(missile->r.maxs, 4, 4, 6);
+        VectorCopy(missile->r.mins, missile->r.absmin);
+        VectorCopy(missile->r.maxs, missile->r.absmax);
+        break;
+    case WP_BOMB:
+        missile->r.contents = CONTENTS_CORPSE;
+        VectorSet(missile->r.mins, -11, -11, 0);
+        VectorSet(missile->r.maxs, 11, 11, 10);
         VectorCopy(missile->r.mins, missile->r.absmin);
         VectorCopy(missile->r.maxs, missile->r.absmax);
         break;
@@ -27,8 +35,9 @@ static float KickRound(float value) {
     return (float)rounded;
 }
 
-/* Original G_CanisterKick 0xfd070. Only mapped native projectile IDs;
- * poison weapons remain unreconstructed. */
+/* Original G_CanisterKick 0xfd070: original IDs 4,9,21,28,48,50.
+ * Use typed local identities; poison mines and tripmines are not kickable.
+ * This does not implement the poison projectile's damage/think behavior. */
 void G_CanisterKick(gentity_t *actor) {
     vec3_t angles, forward, center, mins, maxs;
     int entities[MAX_GENTITIES], count, i;
@@ -52,6 +61,7 @@ void G_CanisterKick(gentity_t *actor) {
         switch(missile->s.weapon) {
         case WP_GRENADE_LAUNCHER: case WP_GRENADE_PINEAPPLE:
         case WP_SMOKE_MARKER: case WP_SMOKE_BOMB:
+        case WP_BOMB: case WP_POISON_BOMB:
             break;
         default: return;
         }

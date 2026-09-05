@@ -169,6 +169,7 @@ int main( void ) {
             case WP_KNIFE: case WP_AMMO: case WP_DYNAMITE: case WP_SMOKETRAIL:
             case WP_MEDKIT: case WP_BINOCULARS: case WP_PLIERS: case WP_SMOKE_MARKER:
             case WP_LANDMINE: case WP_SATCHEL_DET: case WP_SMOKE_BOMB: case WP_TRIPMINE:
+            case WP_POISON_BOMB: case WP_POISON_MINE:
                 CHECK( ammo.uses == 0 ); break;
             default: CHECK( ammo.uses == 1 ); break;
             }

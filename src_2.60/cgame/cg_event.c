@@ -5,6 +5,7 @@
 #include "cg_nitmod_hud.h"
 #include "cg_nitmod_events.h"
 #include "cg_nitmod_debug.h"
+#include <limits.h>
 
 extern void CG_StartShakeCamera( float param );
 extern void CG_Tracer( vec3_t source, vec3_t dest, int sparks );
@@ -29,6 +30,11 @@ static void CG_Obituary( entityState_t *ent ) {
 	target = ent->otherEntityNum;
 	attacker = ent->otherEntityNum2;
 	mod = ent->eventParm;
+	if(mod == MOD_CRUSH && ent->effect3Time == NITMOD_OBITUARY_GOOMBA) mod = MOD_GOOMBA;
+	if(mod == MOD_GRENADE_LAUNCHER && ent->effect3Time == NITMOD_OBITUARY_BOMB) mod = MOD_BOMB;
+	if(mod == MOD_SMOKEBOMB && ent->effect3Time == NITMOD_OBITUARY_POISON_GAS) mod = MOD_POISON_GAS;
+	if(mod == MOD_LANDMINE && ent->effect3Time == NITMOD_OBITUARY_POISON_GAS_MINE) mod = MOD_POISON_GAS_MINE;
+	if(mod == MOD_SYRINGE && ent->effect3Time == NITMOD_OBITUARY_POISON) mod = MOD_POISON;
 	if(NITMOD_UsesOriginalProtocol()) mod = CG_NitmodDeathCause(mod);
 
 	if ( target < 0 || target >= MAX_CLIENTS ) {
@@ -218,6 +224,26 @@ static void CG_Obituary( entityState_t *ent ) {
 			message2 = "'s .45ACP 1911";
 			break;
 
+		case MOD_GOOMBA:
+			message = "was stomped by";
+			message2 = "";
+			break;
+		case MOD_BOMB:
+			message = "was detonated by";
+			message2 = "'s Bomb";
+			break;
+		case MOD_POISON_GAS:
+			message = "choked on";
+			message2 = "'s Poison Gas";
+			break;
+		case MOD_POISON_GAS_MINE:
+			message = "choked on";
+			message2 = "'s own poison gas landmine";
+			break;
+		case MOD_POISON:
+			message = "was poisoned by";
+			message2 = "";
+			break;
 		case MOD_MP40:
 			message = "was killed by";
 			message2 = "'s MP40";
@@ -2012,7 +2038,9 @@ static void CG_EntityEventForProtocol( centity_t *cent, vec3_t position, qboolea
 		if(!original || es->eventParm)
 			trap_S_StartSound (NULL, es->number, CHAN_AUTO, cgs.media.watrUnSound );
 		if( cg.clientNum == es->number ) {
-			cg.waterundertime = cg.time + HOLDBREATHTIME;
+			int duration = original && cg.snap &&
+				NITMOD_ClientSkillUnlocked(cg.snap->ps.clientNum, SK_BATTLE_SENSE, 5) ? 15000 : HOLDBREATHTIME;
+			cg.waterundertime = cg.time > INT_MAX - duration ? INT_MAX : cg.time + duration;
 		}
 
 //----(SA)	this fog stuff for underwater is really just a test for feasibility of creating the under-water effect that way.
@@ -2792,12 +2820,26 @@ static void CG_EntityEventForProtocol( centity_t *cent, vec3_t position, qboolea
 
 	case EV_POPUPMESSAGE:
 		{
-			const char* str = CG_GetPMItemText( cent );
-			qhandle_t shader = CG_GetPMItemIcon( cent );
-			if( str ) {
-				CG_AddPMItem( cent->currentState.effect1Time, str, shader );
+			centity_t popup;
+			centity_t *source = cent;
+			const char *str;
+			qhandle_t shader;
+			/* Original popup type 6 is PM_TEAM, not ET's PM_DESTRUCTION.
+			 * Normalize a local copy; snapshots must retain their wire payload. */
+			if(original) {
+				if(es->effect1Time < 0 || es->effect1Time > 6) break;
+				popup = *cent;
+				if(popup.currentState.effect1Time == 6) popup.currentState.effect1Time = PM_TEAM;
+				source = &popup;
 			}
-			CG_PlayPMItemSound( cent );
+			if((source->currentState.effect1Time == PM_TEAM || source->currentState.effect1Time == PM_MINES) &&
+			   (source->currentState.effect3Time < 0 || source->currentState.effect3Time >= MAX_CLIENTS)) break;
+			str = CG_GetPMItemText( source );
+			shader = CG_GetPMItemIcon( source );
+			if( str ) {
+				CG_AddPMItem( source->currentState.effect1Time, str, shader );
+			}
+			CG_PlayPMItemSound( source );
 		}
 		break;
 

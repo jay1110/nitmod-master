@@ -24,9 +24,9 @@ int CG_NitmodDeathCause(int wireCause) {
         MOD_CRUSH_CONSTRUCTIONDEATH, MOD_CRUSH_CONSTRUCTIONDEATH_NOATTACKER,
         MOD_K43, MOD_K43_SCOPE, MOD_MORTAR, MOD_AKIMBO_COLT, MOD_AKIMBO_LUGER,
         MOD_AKIMBO_SILENCEDCOLT, MOD_AKIMBO_SILENCEDLUGER, MOD_SMOKEGRENADE,
-        MOD_SWITCHTEAM, MOD_UNKNOWN, MOD_UNKNOWN, MOD_UNKNOWN, MOD_UNKNOWN,
-        MOD_UNKNOWN, MOD_UNKNOWN, MOD_UNKNOWN, MOD_UNKNOWN, MOD_TRIPMINE,
-        MOD_UNKNOWN, MOD_UNKNOWN
+        MOD_SWITCHTEAM, MOD_GOOMBA, MOD_POISON, MOD_UNKNOWN, MOD_UNKNOWN,
+        MOD_UNKNOWN, MOD_UNKNOWN, MOD_UNKNOWN, MOD_BOMB, MOD_TRIPMINE,
+        MOD_POISON_GAS, MOD_POISON_GAS_MINE
     };
     return wireCause >= 0 && wireCause < sizeof(causes)/sizeof(causes[0]) ? causes[wireCause] : MOD_UNKNOWN;
 }
@@ -118,6 +118,7 @@ qboolean CG_NitmodExtendedEvent(centity_t *cent, int wireEvent) {
 				sizeof(cg_entities[es->otherEntityNum].pe));
 		return qtrue;
 	case 95:
+	case EV_NITMOD_THROW_KNIFE:
 		CG_FireWeapon(cent, NITMOD_FIRE_THROWKNIFE);
 		return qtrue;
 	case 97:
@@ -128,6 +129,7 @@ qboolean CG_NitmodExtendedEvent(centity_t *cent, int wireEvent) {
 		CG_FinishWeaponChange(cg.weaponSelect, weapon);
 		return qtrue;
 	case 100:
+	case EV_NITMOD_SOUND:
 	case 103:
 		if(es->eventParm < 0 || es->eventParm >= MAX_SOUNDS) return qtrue;
 		if(wireEvent == 103 && !cg.snap) return qtrue;

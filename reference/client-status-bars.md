@@ -25,7 +25,8 @@ the native powerup enum is deliberately not used for this wire field.
 
 Underwater condition ANIM_COND_UNDERWATER switches to the waterHint icon and
 (waterundertime - now) / 12000. The existing event-driven deadline is reused;
-the separate original skill-mask extension to 15 seconds is still unported.
+the original skill-mask extension to 15 seconds is now handled by the water
+event path (see client-skill-masks.md); the HUD denominator remains 12000.
 This change does not alter movement, oxygen damage or powerup normalization.
 
 Class recharge reads the normalized PERS_TEAM and matching class/team charge

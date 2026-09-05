@@ -58,15 +58,19 @@ identities = {
     'WP_AKIMBO_SILENCEDLUGER': 45,
     'WP_MOBILE_MG42_SET': 46,
     'WP_TRIPMINE': 49,
+    'WP_BOMB': 48,
+    'WP_POISON_SYRINGE': 47,
+    'WP_POISON_BOMB': 50,
+    'WP_POISON_MINE': 51,
 }
 source = (root / 'src_2.60/game/nitmod_weapon_paths.c').read_text()
 rows = re.findall(r'\{ (WP_\w+), \{ "([^"]+)", ([01]) \} \}', source)
-assert len(rows) == len(identities) == 44
+assert len(rows) == len(identities) == 48
 assert len({row[0] for row in rows}) == len(rows)
 assert {row[0] for row in rows} == set(identities)
 for name, filename, alternate in rows:
     reference = original[identities[name]]
     assert (filename, int(alternate)) == (reference['filename'], reference['alternate']), name
-assert set(original) - set(identities.values()) == {47, 48, 50, 51}
+assert set(original) - set(identities.values()) == set()
 assert {key for key, row in original.items() if row['alternate']} == {39, 40, 41, 46}
-print('44 native identities match original filenames and alternate selectors; 4 private weapons excluded')
+print('48 native identities match original filenames and alternate selectors; all original selectable weapon paths covered')

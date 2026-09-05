@@ -3,6 +3,7 @@
 #include "cg_local.h"
 #include "cg_nitmod_config.h"
 #include "cg_nitmod_view.h"
+#include "cg_nitmod_hud.h"
 #include "cg_nitmod_locations.h"
 #include "cg_nitmod_coronas.h"
 
@@ -216,19 +217,24 @@ void CG_Letterbox( float xsize, float ysize, qboolean center ) {
 static void CG_CalcVrect (void) {
 	if ( cg.showGameView ) {
  		float x, y, w, h;
+		nitmodHudAnchor_t previous = CG_NitmodHudAnchor(NITMOD_HUD_CENTER);
  		x = LIMBO_3D_X;
  		y = LIMBO_3D_Y;
  		w = LIMBO_3D_W;
  		h = LIMBO_3D_H;
 
  		CG_AdjustFrom640( &x, &y, &w, &h );
+		CG_NitmodHudAnchor(previous);
 
  		cg.refdef.x = x;
  		cg.refdef.y = y;
  		cg.refdef.width = w;
  		cg.refdef.height = h;
 
-		CG_Letterbox( (LIMBO_3D_W/640.f)*100, (LIMBO_3D_H/480.f)*100, qfalse );
+		if(NITMOD_UsesNitmodHud() && cgs.glconfig.vidWidth > 0)
+			CG_Letterbox(w * 100.f / cgs.glconfig.vidWidth, (LIMBO_3D_H/480.f)*100, qfalse);
+		else
+			CG_Letterbox( (LIMBO_3D_W/640.f)*100, (LIMBO_3D_H/480.f)*100, qfalse );
 		return;
 	}
 
@@ -1687,6 +1693,7 @@ void CG_DrawActiveFrame( int serverTime, stereoFrame_t stereoView, qboolean demo
 	} else {
 		// clear all the render lists
 		trap_R_ClearScene();
+		CG_NitmodMissileCameraBeginFrame();
 
 		DEBUGTIME
 
@@ -1820,6 +1827,7 @@ void CG_DrawActiveFrame( int serverTime, stereoFrame_t stereoView, qboolean demo
 
 		// update audio positions
 		trap_S_Respatialize( cg.snap->ps.clientNum, cg.refdef.vieworg, cg.refdef.viewaxis, inwater );
+		CG_NitmodDrawMissileCamera();
 	}
 
 	if ( cg_stats.integer ) {

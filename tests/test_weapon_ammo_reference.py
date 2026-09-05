@@ -1,4 +1,4 @@
-"""Compare all 440 ported ammo/timing/uses values with original bytes."""
+"""Compare all 480 ported ammo/timing/uses values with original bytes."""
 import importlib.util
 import pathlib
 import re
@@ -53,14 +53,24 @@ identities = {
     'WP_AKIMBO_SILENCEDLUGER': 45,
     'WP_MOBILE_MG42_SET': 46,
     'WP_TRIPMINE': 49,
+    'WP_BOMB': 48,
+    'WP_POISON_SYRINGE': 47,
+    'WP_POISON_BOMB': 50,
+    'WP_POISON_MINE': 51,
 }
 fields = ["maxammo","uses","maxclip","defaultStartingAmmo","defaultStartingClip","reloadTime","fireDelayTime","nextShotTime","maxHeat","coolRate"]
 source = (root / 'src_2.60/game/nitmod_weapon_defaults.c').read_text()
 rows = re.findall(r'\{ (WP_\w+), ([0-9, -]+) \}', source)
-assert len(rows) == len(identities) == 44
+assert len(rows) == len(identities) == 48
 assert {row[0] for row in rows} == set(identities)
 for name, numbers in rows:
     values = [int(value.strip()) for value in numbers.split(',')]
     assert values == [original[identities[name]][field] for field in fields], name
 assert 'ammo->uses = entry->uses;' in source and 'ammo->mod =' not in source
-print('440 original ammo/timing/uses defaults match for 44 native identities')
+print('480 original ammo/timing/uses defaults match for 48 native identities')
+blast_rows = re.findall(r'\{(WP_\w+), (\d+), (\d+), (\d+)\}', source)
+assert len(blast_rows) == 15
+for name, damage, splash, radius in blast_rows:
+    row = original[identities[name]]
+    assert [int(damage), int(splash), int(radius)] == [row[k] for k in ('damage','splashDamage','splashRadius')], name
+print('45 original blast defaults match for 15 native identities')

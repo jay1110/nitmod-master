@@ -6,7 +6,10 @@
 */
 
 #include "g_local.h"
+#include "g_nitmod_weapon_definition.h"
 #include "g_nitmod_config.h"
+#include "g_nitmod_etbot_lifecycle.h"
+#include "g_nitmod_legacy_cvars.h"
 #include "../game/q_shared.h"
 #include "../game/botlib.h"		//bot lib interface
 #include "../game/be_aas.h"
@@ -26,6 +29,37 @@ extern void BotRecordPain( int client, int enemy, int mod );
 extern void BotRecordDeath( int client, int enemy );
 
 extern vec3_t muzzleTrace;
+
+/* Recovered scoped-rifle branch in G_Damage (qagame 0x00079952).  In sniper
+ * war, option bit 2 keeps calculated damage but marks it unprotected.  With
+ * the option disabled, the original level-five scoped-weapon reward turns a
+ * live target's headshot damage into its current health. */
+static void G_NITMOD_ApplySniperWarHeadshot( gentity_t *targ,
+		gentity_t *attacker, int mod, int *damage, int *dflags ) {
+	unsigned int options;
+	unsigned int scopedRewards;
+
+	if ( !targ || !targ->client || !attacker || !attacker->client ||
+		!damage || !dflags ||
+		G_NITMOD_LegacyCvarInteger( "g_war", 0 ) != 2 ||
+		( mod != MOD_K43_SCOPE && mod != MOD_GARAND_SCOPE ) ) {
+		return;
+	}
+
+	options = (unsigned int)G_NITMOD_LegacyCvarInteger(
+		"n_sniperWarOptions", 7 );
+	if ( options & 2u ) {
+		*dflags |= DAMAGE_NO_PROTECTION;
+	} else {
+		scopedRewards = attacker->client->sess.nitmodSkillMasks[
+			SK_MILITARY_INTELLIGENCE_AND_SCOPED_WEAPONS];
+		if ( ( scopedRewards & ( 1u << 5 ) ) && targ->health > 0 ) {
+			*damage = targ->health;
+		}
+	}
+
+	NITMOD_SendHitSound( attacker->s.number, NITMOD_HIT_SOUND_HEAD );
+}
 
 /*
 ============
@@ -168,16 +202,40 @@ void TossClientItems( gentity_t *self ) {
 	drop->item->quantity = self->client->ps.ammoclip[BG_FindClipForWeapon(weapon)];*/
 
 	weapon_t primaryWeapon;
+	int options;
 
 	if( g_gamestate.integer == GS_INTERMISSION ) {
 		return;
 	}
+	if( !self || !self->client ) {
+		return;
+	}
 
-	primaryWeapon = G_GetPrimaryWeaponForClient( self->client );
+	options = G_NITMOD_LegacyCvarInteger("g_weaponItems", 1);
 
-	if( primaryWeapon ) {
-		// drop our primary weapon
-		G_DropWeapon( self, primaryWeapon );
+	/* Original TossClientItems bit contract:
+	 *  1 primary weapon, 2 binoculars, 32 spare throwing knives.
+	 * g_dualSMG low bits == 3 drops the second primary as well. */
+	if( options & 1 ) {
+		primaryWeapon = G_GetPrimaryWeaponForClient( self->client );
+		if( primaryWeapon > WP_NONE && primaryWeapon < WP_NUM_WEAPONS ) {
+			G_DropWeapon( self, primaryWeapon );
+			if( (g_dualSMG.integer & 3) == 3 ) {
+				primaryWeapon = G_GetPrimaryWeaponForClient( self->client );
+				if( primaryWeapon > WP_NONE && primaryWeapon < WP_NUM_WEAPONS ) {
+					G_DropWeapon( self, primaryWeapon );
+				}
+			}
+		}
+	}
+
+	if( (options & 2) && COM_BitCheck(self->client->ps.weapons, WP_BINOCULARS) ) {
+		G_DropWeapon( self, WP_BINOCULARS );
+	}
+
+	if( (options & 32) &&
+		self->client->ps.ammo[BG_FindAmmoForWeapon(WP_KNIFE)] > 1 ) {
+		G_DropWeapon( self, WP_KNIFE );
 	}
 }
 
@@ -329,7 +387,12 @@ char *modNames[] =
 	"MOD_SWAP_PLACES",
 
 	// OSP -- keep these 2 entries last
-	"MOD_SWITCHTEAM"
+	"MOD_SWITCHTEAM",
+	"MOD_GOOMBA",
+	"MOD_BOMB"
+	,"MOD_POISON_GAS"
+	,"MOD_POISON_GAS_MINE"
+	,"MOD_POISON"
 };
 
 /*
@@ -338,6 +401,89 @@ player_die
 ==================
 */
 void BotRecordTeamDeath( int client );
+
+/* Original player_die 0x76850 consumes the per-attacker damage slots written
+ * by G_Damage 0x79c3a.  Keep the accounting on typed client storage and clear
+ * every slot at death so contributions never leak into the next life. */
+static void G_NITMOD_AwardKillAssists( gentity_t *victim, gentity_t *killer,
+	int meansOfDeath ) {
+	int clientNum;
+	int options = G_NITMOD_LegacyCvarInteger("n_killAssistances", 1);
+	int lowDamagePoints = 1;
+
+	if( !victim || !victim->client ) return;
+	for( clientNum = 0; clientNum < MAX_CLIENTS; ++clientNum ) {
+		gentity_t *helper = &g_entities[clientNum];
+		int damage = victim->client->nitmodDamageReceived[clientNum];
+		int points = damage < 50 ? lowDamagePoints : 2;
+		victim->client->nitmodDamageReceived[clientNum] = 0;
+		if( damage <= 0 || helper == victim || helper == killer || !helper->client ||
+			helper->client->pers.connected != CON_CONNECTED ||
+			helper->client->sess.sessionTeam == TEAM_SPECTATOR ) continue;
+
+		if( killer == victim || meansOfDeath == MOD_SWITCHTEAM ) {
+			if( options & 2 ) {
+				trap_SendServerCommand(clientNum, va("an 2 %i", points));
+				G_LoseSkillPoints(helper, SK_BATTLE_SENSE, (float)points);
+			}
+		} else if( !OnSameTeam(helper, victim) ) {
+			if( options & 1 ) {
+				trap_SendServerCommand(clientNum, va("an 1 %i", points));
+				G_AddSkillPoints(helper, SK_BATTLE_SENSE, (float)points);
+			}
+		} else if( options & 4 ) {
+			trap_SendServerCommand(clientNum, va("an 3 -%i", points));
+			G_LoseSkillPoints(helper, SK_BATTLE_SENSE, (float)points);
+		}
+		lowDamagePoints = points;
+	}
+}
+
+static void G_NITMOD_RecordMultiKill( gentity_t *attacker ) {
+	int window;
+	if( !attacker || !attacker->client ||
+		!(trap_Cvar_VariableIntegerValue("g_announcer") & 4) ) return;
+	window = G_NITMOD_LegacyCvarInteger("g_multikillTime", 2000);
+	if( window < 0 || level.time - attacker->client->lastKillTime > window )
+		attacker->client->nitmodMultiKillCount = 1;
+	else
+		++attacker->client->nitmodMultiKillCount;
+	if( attacker->client->nitmodMultiKillCount >= 2 ) {
+		int detail = attacker->client->nitmodMultiKillCount - 2;
+		if( detail > 4 ) detail = 4;
+		trap_SendServerCommand(attacker->s.number,
+			va("z2 %i %i", attacker->s.number, detail));
+	}
+}
+
+static void G_NITMOD_EndReviveSpree( gentity_t *victim, gentity_t *attacker ) {
+	int count;
+	int options;
+
+	if( !victim || !victim->client ) return;
+	count = victim->client->nitmodReviveSpree;
+	options = G_NITMOD_LegacyCvarInteger("n_reviveSpreeOptions", 1);
+	if( (options & 8) && count > 4 ) {
+		if( attacker && attacker->client && attacker != victim ) {
+			trap_SendServerCommand(-1, va("chat \"%s^g's revive spree ended by %s%s ^gafter ^2%d ^grevives!\" -2",
+				victim->client->pers.netname,
+				OnSameTeam(victim, attacker) ? "^1TEAMMATE ^7" : "^7",
+				attacker->client->pers.netname, count));
+		} else {
+			trap_SendServerCommand(-1, va("chat \"%s ^gended his own revive spree after ^2%d ^grevives!\" -2",
+				victim->client->pers.netname, count));
+		}
+	}
+	victim->client->nitmodReviveSpree = 0;
+	victim->client->nitmodMultiReviveCount = 0;
+	victim->client->nitmodLastReviveTime = 0;
+}
+
+/* Original G_Damage: zero selects -75; a positive magnitude is negated.
+ * Do not use abs(), which is undefined for INT_MIN. */
+int G_NITMOD_ForceLimboThreshold(int configured) {
+	return configured > 0 ? -configured : configured ? configured : FORCE_LIMBO_HEALTH;
+}
 
 void player_die( gentity_t *self, gentity_t *inflictor, gentity_t *attacker, int damage, int meansOfDeath ) {
 	int			contents = 0, i, killer = ENTITYNUM_WORLD;
@@ -349,6 +495,9 @@ void player_die( gentity_t *self, gentity_t *inflictor, gentity_t *attacker, int
 
 	//float			timeLived;
 	weapon_t	weap = BG_WeaponForMOD( meansOfDeath );
+
+	G_NITMOD_AwardKillAssists(self, attacker, meansOfDeath);
+	G_NITMOD_EndReviveSpree(self, attacker);
 
 //	G_Printf( "player_die\n" );
 
@@ -363,6 +512,20 @@ void player_die( gentity_t *self, gentity_t *inflictor, gentity_t *attacker, int
 	} else {
 		G_LogDeath( self,		weap );
 		G_LogKill(	attacker,	weap );
+		if( self->client && attacker && attacker->client ) {
+			int victimNum = (int)(self - g_entities);
+			int attackerNum = (int)(attacker - g_entities);
+			self->client->pers.nitmodLastKillerClient = attacker - g_entities;
+			attacker->client->pers.nitmodLastKilledClient = victimNum;
+			/* Original g_revenge consumer: killing the player who most recently
+			 * killed us grants one Battle Sense point and consumes the target. */
+			if( G_NITMOD_LegacyCvarInteger("g_revenge", 0) &&
+				attacker->client->pers.nitmodLastKillerClient == victimNum ) {
+				trap_SendServerCommand(attackerNum, "an -2 1");
+				G_AddSkillPoints(attacker, SK_BATTLE_SENSE, 1.f);
+				attacker->client->pers.nitmodLastKillerClient = -1;
+			}
+		}
 
 		if( g_gamestate.integer == GS_PLAYING ) {
 			if( attacker->client ) {
@@ -469,6 +632,11 @@ void player_die( gentity_t *self, gentity_t *inflictor, gentity_t *attacker, int
 			obit = modNames[meansOfDeath];
 		}
 
+		Bot_Event_Death(self - g_entities, attacker, obit);
+		if (attacker && attacker->client && attacker != self) {
+			Bot_Event_KilledSomeone(attacker - g_entities, self, obit);
+		}
+
 		G_LogPrintf("Kill: %i %i %i: %s killed %s by %s\n", killer, self->s.number, meansOfDeath, killerName, self->client->pers.netname, obit );
 	}
 
@@ -480,6 +648,26 @@ void player_die( gentity_t *self, gentity_t *inflictor, gentity_t *attacker, int
 	// broadcast the death event to everyone
 	ent = G_TempEntity( self->r.currentOrigin, EV_OBITUARY );
 	ent->s.eventParm = meansOfDeath;
+	if(meansOfDeath == MOD_GOOMBA) {
+		ent->s.eventParm = MOD_CRUSH;
+		ent->s.effect3Time = NITMOD_OBITUARY_GOOMBA;
+	}
+	if(meansOfDeath == MOD_BOMB) {
+		ent->s.eventParm = MOD_GRENADE_LAUNCHER;
+		ent->s.effect3Time = NITMOD_OBITUARY_BOMB;
+	}
+	if(meansOfDeath == MOD_POISON_GAS) {
+		ent->s.eventParm = MOD_SMOKEBOMB;
+		ent->s.effect3Time = NITMOD_OBITUARY_POISON_GAS;
+	}
+	if(meansOfDeath == MOD_POISON_GAS_MINE) {
+		ent->s.eventParm = MOD_LANDMINE;
+		ent->s.effect3Time = NITMOD_OBITUARY_POISON_GAS_MINE;
+	}
+	if(meansOfDeath == MOD_POISON) {
+		ent->s.eventParm = MOD_SYRINGE;
+		ent->s.effect3Time = NITMOD_OBITUARY_POISON;
+	}
 	ent->s.otherEntityNum = self->s.number;
 	ent->s.otherEntityNum2 = killer;
 	ent->r.svFlags = SVF_BROADCAST;	// send to everyone
@@ -536,6 +724,19 @@ void player_die( gentity_t *self, gentity_t *inflictor, gentity_t *attacker, int
 				AddKillScore( attacker, WOLF_FRIENDLY_PENALTY );
 			}
 		} else {
+			/* Original g_DMOptions bit 1 awards up to 20 health for a hostile
+			 * player kill, capped at the attacker's typed maximum health. */
+			if( g_gametype.integer == GT_WOLF_DM &&
+				(G_NITMOD_LegacyCvarInteger("g_DMOptions", 0) & 1) ) {
+				int maximum = attacker->client->ps.stats[STAT_MAX_HEALTH];
+				int bonus = maximum - attacker->health;
+				if( bonus > 20 ) bonus = 20;
+				if( bonus > 0 ) {
+					attacker->health += bonus;
+					attacker->client->ps.stats[STAT_HEALTH] = attacker->health;
+					trap_SendServerCommand(attacker - g_entities, va("hpb %i", bonus));
+				}
+			}
 
 			//G_AddExperience( attacker, 1 );
 
@@ -549,6 +750,7 @@ void player_die( gentity_t *self, gentity_t *inflictor, gentity_t *attacker, int
 				AddKillScore( attacker, WOLF_FRAG_BONUS );
 			}
 
+			G_NITMOD_RecordMultiKill(attacker);
 			attacker->client->lastKillTime = level.time;
 		}
 	} else {
@@ -556,6 +758,18 @@ void player_die( gentity_t *self, gentity_t *inflictor, gentity_t *attacker, int
 
 		if( g_gametype.integer == GT_WOLF_LMS )
 			AddKillScore( self, -1 );
+	}
+
+	/* Original player_die 0x77b9e: report the surviving attacker's health to
+	 * a human victim. Tank deaths suppress the line, as do dead attackers.
+	 * This deliberately uses the ordinary chat protocol consumed by both the
+	 * original cgame and the reconstructed WASM cgame. */
+	if( G_NITMOD_LegacyCvarInteger("g_drawAttackerHP", 1) > 0 &&
+		!(self->r.svFlags & SVF_BOT) && !killedintank &&
+		attacker && attacker->client && attacker->health > 0 ) {
+		trap_SendServerCommand( (int)(self - g_entities),
+			va("chat \"%s ^ghad ^3%i HP\" -2",
+				attacker->client->pers.netname, attacker->health) );
 	}
 
 	// Add team bonuses
@@ -706,6 +920,16 @@ void player_die( gentity_t *self, gentity_t *inflictor, gentity_t *attacker, int
 
 	if( killedintank /*Gordon: automatically go to limbo from tank*/ ) {
 		limbo( self, qfalse ); // but no corpse
+	} else if( attacker && attacker->client &&
+		G_NITMOD_WeaponForcesLimbo(BG_WeaponForMOD(meansOfDeath)) ) {
+		/* Custom weaponDef limboKill: the original bypasses the revive wait
+		 * for kills attributed to a configured player weapon. */
+		limbo( self, qtrue );
+	} else if( meansOfDeath == MOD_DYNAMITE &&
+		(G_NITMOD_LegacyCvarInteger("g_misc", 0) & 64) ) {
+		/* Original player_die g_misc bit 64: dynamite deaths cannot wait
+		 * for revival and enter limbo immediately. */
+		limbo( self, qtrue );
 	} else if ( (meansOfDeath == MOD_SUICIDE && g_gamestate.integer == GS_PLAYING) ) {
 		limbo( self, qtrue );
 	} else if( g_gametype.integer == GT_WOLF_LMS ) {
@@ -716,6 +940,8 @@ void player_die( gentity_t *self, gentity_t *inflictor, gentity_t *attacker, int
 }
 
 qboolean IsHeadShotWeapon (int mod) {
+	int configured = G_NITMOD_WeaponHeadshotAllowed(BG_WeaponForMOD(mod), -1);
+	if(configured >= 0) return configured ? qtrue : qfalse;
 	// players are allowed headshots from these weapons
 	if (	mod == MOD_LUGER ||
 			mod == MOD_COLT ||
@@ -747,8 +973,10 @@ qboolean IsHeadShotWeapon (int mod) {
 gentity_t* G_BuildHead(gentity_t *ent) {
 	gentity_t* head;
 	orientation_t or;			// DHM - Nerve
+	qboolean realHead;
 
 	head = G_Spawn ();
+	realHead = (G_NITMOD_LegacyCvarInteger("g_realHead", 1) & 1) != 0;
 
 	if (trap_GetTag( ent->s.number, 0, "tag_head", &or )) {
 		G_SetOrigin( head, or.origin );
@@ -792,8 +1020,17 @@ gentity_t* G_BuildHead(gentity_t *ent) {
 	VectorCopy (ent->r.currentAngles, head->s.angles); 
 	VectorCopy (head->s.angles, head->s.apos.trBase);
 	VectorCopy (head->s.angles, head->s.apos.trDelta);
-	VectorSet (head->r.mins , -6, -6, -2); // JPW NERVE changed this z from -12 to -6 for crouching, also removed standing offset
-	VectorSet (head->r.maxs , 6, 6, 10); // changed this z from 0 to 6
+	/* Original G_BuildHead 0x68940 uses a symmetric 12-unit cube for
+	 * g_realHead bit 0 and the legacy asymmetric ET box otherwise.  The
+	 * recovered MDX position source is private to the old binary; trap_GetTag
+	 * above is the typed engine equivalent and retains the same fallback. */
+	if(realHead) {
+		VectorSet(head->r.mins, -6, -6, -6);
+		VectorSet(head->r.maxs,  6,  6,  6);
+	} else {
+		VectorSet(head->r.mins, -6, -6, -2);
+		VectorSet(head->r.maxs,  6,  6, 10);
+	}
 	head->clipmask = CONTENTS_SOLID;
 	head->r.contents = CONTENTS_SOLID;
 	head->parent = ent;
@@ -1403,10 +1640,9 @@ void G_Damage( gentity_t *targ, gentity_t *inflictor, gentity_t *attacker,  vec3
 
 	headShot = IsHeadShot(targ, dir, point, mod);
 	if ( headShot ) {
-		if( take * 2 < 50 ) // head shots, all weapons, do minimum 50 points damage
-			take = 50;
-		else
-			take *= 2; // sniper rifles can do full-kill (and knock into limbo)
+		/* Original ratio/minimum use the attacker's selected weapon; the
+		 * headshot eligibility above uses the means-of-death identity. */
+		take = G_NITMOD_HeadshotDamage(attacker ? attacker->s.weapon : WP_NONE, take);
 
 		if( dflags & DAMAGE_DISTANCEFALLOFF ) {
 			vec_t dist;
@@ -1457,6 +1693,8 @@ void G_Damage( gentity_t *targ, gentity_t *inflictor, gentity_t *attacker,  vec3
 		}
 
 		targ->client->ps.eFlags |= EF_HEADSHOT;
+
+		G_NITMOD_ApplySniperWarHeadshot( targ, attacker, mod, &take, &dflags );
 
 		// OSP - Record the headshot
 		if(client && attacker && attacker->client
@@ -1527,11 +1765,24 @@ void G_Damage( gentity_t *targ, gentity_t *inflictor, gentity_t *attacker,  vec3
 		// set the last client who damaged the target
 		targ->client->lasthurt_client = attacker->s.number;
 		targ->client->lasthurt_mod = mod;
+		if (take > 0 && attacker && attacker != targ) {
+			targ->client->nitmodLastHurtTime = level.time;
+		}
 	}
 
 	// do the damage
 	if( take ) {
+		if( wasAlive && targ->client && attacker && attacker->client &&
+			attacker != targ && attacker->s.number >= 0 &&
+			attacker->s.number < MAX_CLIENTS ) {
+			int *received = &targ->client->nitmodDamageReceived[attacker->s.number];
+			if( take <= 0x7fffffff - *received ) *received += take;
+			else *received = 0x7fffffff;
+		}
 		targ->health -= take;
+		if (targ->client && attacker && attacker != targ) {
+			Bot_Event_TakeDamage(targ - g_entities, attacker);
+		}
 
 		// Gordon: don't ever gib POWS
 		if( ( targ->health <= 0 ) && ( targ->r.svFlags & SVF_POW ) ) {
@@ -1542,7 +1793,7 @@ void G_Damage( gentity_t *targ, gentity_t *inflictor, gentity_t *attacker,  vec3
 		// Arnout: attacker == inflictor can happen in other cases as well! (movers trying to gib things)
 		//if ( attacker == inflictor && targ->health <= GIB_HEALTH) {
 		if( targ->health <= GIB_HEALTH ) {
-			if( !G_WeaponIsExplosive( mod ) ) {
+			if( !G_NITMOD_WeaponGibAllowed(BG_WeaponForMOD(mod), G_WeaponIsExplosive(mod)) ) {
 				targ->health = GIB_HEALTH + 1;
 			}
 		}
@@ -1567,7 +1818,7 @@ void G_Damage( gentity_t *targ, gentity_t *inflictor, gentity_t *attacker,  vec3
 					G_addStats(targ, attacker, take, mod);
 				}
 
-				if( (targ->health < FORCE_LIMBO_HEALTH) && (targ->health > GIB_HEALTH) ) {
+				if( (targ->health < G_NITMOD_ForceLimboThreshold(g_forceLimboHealth.integer)) && (targ->health > GIB_HEALTH) ) {
 					limbo(targ, qtrue);
 				}
 

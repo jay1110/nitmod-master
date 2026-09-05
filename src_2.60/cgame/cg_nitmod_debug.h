@@ -18,6 +18,8 @@ localEntity_t *CG_NitmodFindRailEntity(int group, int segment);
 void CG_NitmodRailEvent(const entityState_t *es);
 extern vmCvar_t demo_wallHack;
 void CG_NitmodRegisterDebugMedia(void);
+qhandle_t CG_NitmodViewWeaponShader(int drawGun);
+qhandle_t CG_NitmodMineTeamShader(team_t team);
 qhandle_t CG_NitmodDemoPlayerShader(team_t team);
 void CG_NitmodDebugGeometry(const centity_t *cent, const playerState_t *ps,
     const pmoveExt_t *ext, int flags, nitmodDebugGeometry_t *out);

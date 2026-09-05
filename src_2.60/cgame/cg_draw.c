@@ -7,6 +7,8 @@
 #include "cg_nitmod_hints.h"
 #include "cg_nitmod_names.h"
 #include "cg_nitmod_config.h"
+#include <float.h>
+#include <limits.h>
 
 #define STATUSBARHEIGHT 452
 char* BindingFromName(const char *cvar);
@@ -562,6 +564,7 @@ static void CG_DrawUpperRight( void ) {
 		y = CG_DrawSnapshot( y );
 	}
 	y = CG_NitmodHud(y);
+	if(NITMOD_UsesNitmodHud()) CG_DrawLagometer(y);
 }
 
 /*
@@ -588,6 +591,9 @@ static void CG_DrawTeamInfo( void ) {
 	int		chatHeight;
 	float	alphapercent;
 	float	lineHeight = 9.f;
+	nitmodHudAnchor_t previous = NITMOD_HUD_STRETCH;
+	qboolean anchored = NITMOD_UsesNitmodHud();
+	if(anchored) previous = CG_NitmodHudAnchor(NITMOD_HUD_LEFT);
 
 	int chatWidth = 640 - CHATLOC_X - 100;
  
@@ -598,6 +604,7 @@ static void CG_DrawTeamInfo( void ) {
 	}
 
 	if( chatHeight <= 0 ) {
+		if(anchored) CG_NitmodHudAnchor(previous);
 		return; // disabled
 	}
 
@@ -620,6 +627,8 @@ static void CG_DrawTeamInfo( void ) {
 		w += TINYCHAR_WIDTH * 2;
 
 		for( i = cgs.teamChatPos - 1; i >= cgs.teamLastChatPos; i-- ) {
+			qhandle_t teamFlag = 0;
+			team_t messageTeam = cgs.teamChatMsgTeams[i % chatHeight];
 			alphapercent = 1.0f - (cg.time - cgs.teamChatMsgTimes[i % chatHeight]) / (float)(cg_teamChatTime.integer);
 			if( alphapercent > 1.0f ) {
 				alphapercent = 1.0f;
@@ -650,9 +659,26 @@ static void CG_DrawTeamInfo( void ) {
 			hcolor[3] = alphapercent;
 			trap_R_SetColor( hcolor );
 
+			/* Original Nitmod stores the sender's team with every wrapped chat
+			 * line and draws its flag immediately before both text and voice
+			 * messages. CG_AddToTeamChat already preserves that team metadata. */
+			if ( NITMOD_UsesNitmodHud() ) {
+				if ( messageTeam == TEAM_AXIS ) {
+					teamFlag = cgs.media.axisFlag;
+				} else if ( messageTeam == TEAM_ALLIES ) {
+					teamFlag = cgs.media.alliedFlag;
+				} else if ( messageTeam == TEAM_SPECTATOR ) {
+					teamFlag = cgs.media.limboSpectator;
+				}
+				if ( teamFlag ) {
+					CG_DrawPic( CHATLOC_TEXT_X - 14, CHATLOC_Y - (cgs.teamChatPos - i - 1) * lineHeight - 9,
+						12, 10, teamFlag );
+				}
+			}
 			CG_Text_Paint_Ext( CHATLOC_TEXT_X, CHATLOC_Y - (cgs.teamChatPos - i - 1) * lineHeight - 1, 0.2f, 0.2f, hcolor, cgs.teamChatMsgs[i % chatHeight], 0, 0, 0, &cgs.media.limboFont2 );
 		}
 	}
+	if(anchored) CG_NitmodHudAnchor(previous);
 }
 
 const char* CG_PickupItemText( int item ) {
@@ -814,7 +840,26 @@ CG_DrawDisconnect
 Should we draw something differnet for long lag vs no packets?
 ==============
 */
-static void CG_DrawDisconnect( void ) {
+static int snapshotRate, snapshotRatePending, snapshotRateTime;
+void CG_NitmodSnapshotRateReset(void) {
+	snapshotRate = snapshotRatePending = snapshotRateTime = 0;
+}
+int CG_NitmodSnapshotRate(void) { return snapshotRate; }
+void CG_NitmodSnapshotRateUpdate(int now, int currentTime, int nextTime, int enabled) {
+	double interval = (double)nextTime - currentTime;
+	if(now < snapshotRateTime) {
+		CG_NitmodSnapshotRateReset();
+		snapshotRateTime = now;
+	}
+	if(enabled && interval > 0) snapshotRatePending = (int)(1000.0 / interval);
+	if((double)now - snapshotRateTime > 1000) {
+		snapshotRate = snapshotRatePending;
+		snapshotRatePending = 0;
+		snapshotRateTime = now;
+	}
+}
+
+static void CG_DrawDisconnect( float panelY ) {
 	float		x, y;
 	int			cmdNum;
 	usercmd_t	cmd;
@@ -839,7 +884,11 @@ static void CG_DrawDisconnect( void ) {
 	// also add text in center of screen
 	s = CG_TranslateString( "Connection Interrupted" ); // bk 010215 - FIXME
 	w = CG_DrawStrlen( s ) * BIGCHAR_WIDTH;
-	CG_DrawBigString( 320 - w/2, 100, s, 1.0F);
+	if(NITMOD_UsesNitmodHud()) {
+		nitmodHudAnchor_t previous = CG_NitmodHudAnchor(NITMOD_HUD_CENTER);
+		CG_DrawBigString( 320 - w/2, 100, s, 1.0F);
+		CG_NitmodHudAnchor(previous);
+	} else CG_DrawBigString( 320 - w/2, 100, s, 1.0F);
 
 	// blink the icon
 	if ( ( cg.time >> 9 ) & 1 ) {
@@ -847,7 +896,7 @@ static void CG_DrawDisconnect( void ) {
 	}
 
 	x = 640 - 48;
-	y = 480 - 200;
+	y = NITMOD_UsesNitmodHud() ? panelY : 480 - 200;
 
 	CG_DrawPic( x, y, 48, 48, cgs.media.disconnectIcon );
 }
@@ -861,16 +910,19 @@ static void CG_DrawDisconnect( void ) {
 CG_DrawLagometer
 ==============
 */
-static void CG_DrawLagometer( void ) {
-	int		a, x, y, i;
+void CG_DrawLagometer( float y ) {
+	int		a, x, i;
+	qboolean nitmod = NITMOD_UsesNitmodHud();
+	nitmodHudAnchor_t previous = CG_NitmodHudAnchor(nitmod ? NITMOD_HUD_RIGHT : NITMOD_HUD_STRETCH);
 	float	v;
 	float	ax, ay, aw, ah, mid, range;
 	int		color;
 	float	vscale;
 
-	if ( !cg_lagometer.integer || cgs.localServer ) {
+	if ( !cg_lagometer.integer || (!nitmod && cgs.localServer) ) {
 //	if(0) {
-		CG_DrawDisconnect();
+		CG_DrawDisconnect(y);
+		CG_NitmodHudAnchor(previous);
 		return;
 	}
 
@@ -878,10 +930,15 @@ static void CG_DrawLagometer( void ) {
 	// draw the graph
 	//
 	x = 640 - 48;
-	y = 480 - 200;
+	if(!nitmod) y = 480 - 200;
 
 	trap_R_SetColor( NULL );
-	CG_DrawPic( x, y, 48, 48, cgs.media.lagometerShader );
+	if(nitmod) {
+		vec4_t background, border;
+		CG_NitmodHudColors(background, border);
+		CG_FillRect(x, y, 48, 48, background);
+		CG_DrawRect_FixedBorder(x, y, 48, 48, 1, border);
+	} else CG_DrawPic( x, y, 48, 48, cgs.media.lagometerShader );
 
 	ax = x;
 	ay = y;
@@ -957,15 +1014,22 @@ static void CG_DrawLagometer( void ) {
 
 	trap_R_SetColor( NULL );
 
-	if ( cg_nopredict.integer 
+	if(nitmod && (cg_lagometer.integer & 2) && cg.snap && cg.nextSnap) {
+		char rate[16];
+		Com_sprintf(rate, sizeof(rate), "%d", CG_NitmodSnapshotRate());
+		CG_Text_Paint_Ext(630 - CG_Text_Width_Ext(rate, .15f, 0, &cgs.media.limboFont1),
+			y + 6, .15f, .15f, colorWhite, rate, 0, 0, 0, &cgs.media.limboFont1);
+	}
+	if ( cg_nopredict.integer
 #ifdef ALLOW_GSYNC
 		|| cg_synchronousClients.integer 
 #endif // ALLOW_GSYNC
 		) {
-		CG_DrawBigString( ax, ay, "snc", 1.0 );
+		CG_DrawBigString( x, y, "snc", 1.0 );
 	}
 
-	CG_DrawDisconnect();
+	CG_DrawDisconnect(y);
+	CG_NitmodHudAnchor(previous);
 }
 
 
@@ -1103,7 +1167,14 @@ void CG_PriorityCenterPrint( const char *str, int y, int charWidth, int priority
 CG_DrawCenterString
 ===================
 */
-static void CG_DrawCenterString( void ) {
+static void CG_DrawCenterStringContent(void);
+static void CG_DrawCenterString(void) {
+	nitmodHudAnchor_t previous = CG_NitmodHudAnchor(NITMOD_HUD_CENTER);
+	CG_DrawCenterStringContent();
+	CG_NitmodHudAnchor(previous);
+}
+
+static void CG_DrawCenterStringContent(void) {
 	char	*start;
 	int		l;
 	int		x, y, w;
@@ -2006,7 +2077,7 @@ static void CG_DrawCrosshairNames( void ) {
 	} else if( cgs.clientinfo[cg.crosshairClientNum].team != cgs.clientinfo[cg.snap->ps.clientNum].team ) {
 		if( (cg_entities[cg.crosshairClientNum].currentState.powerups & (original ? 0x80 : (1 << PW_OPS_DISGUISED))) && cgs.clientinfo[cg.snap->ps.clientNum].team != TEAM_SPECTATOR) {
 			if( cgs.clientinfo[cg.snap->ps.clientNum].team != TEAM_SPECTATOR &&
-				cgs.clientinfo[cg.snap->ps.clientNum].skill[SK_SIGNALS] >= 4 && cgs.clientinfo[cg.snap->ps.clientNum].cls == PC_FIELDOPS ) {
+				CG_NitmodCanIdentifyDisguise(cg.snap->ps.clientNum) ) {
 				s = CG_TranslateString( "Disguised Enemy!" );
 				if(original) { CG_NitmodDrawCrosshairLabel(s, color); return; }
 				w = CG_DrawStrlen( s ) * SMALLCHAR_WIDTH;
@@ -2121,6 +2192,7 @@ static void CG_DrawCrosshairNames( void ) {
 	}
 
 	if(original) {
+		if(!isTank) maxHealth = CG_NitmodCrosshairMaxHealth(cg.crosshairClientNum);
 		CG_NitmodDrawCrosshairPlayer(cg.crosshairClientNum, disguised, playerHealth, maxHealth, color);
 		return;
 	}
@@ -2171,7 +2243,14 @@ static void CG_DrawSpectator(void) {
 CG_DrawVote
 =================
 */
+static void CG_DrawVoteContent(void);
 static void CG_DrawVote(void) {
+	nitmodHudAnchor_t previous = CG_NitmodHudAnchor(NITMOD_HUD_LEFT);
+	CG_DrawVoteContent();
+	CG_NitmodHudAnchor(previous);
+}
+
+static void CG_DrawVoteContent(void) {
 	char	*s;
 	char str1[32], str2[32];
 	float color[4] = { 1, 1, 0, 1 };
@@ -2280,7 +2359,12 @@ static void CG_DrawVote(void) {
 			if( strlen( cgs.voteString ) > 5 ) {
 				int nameindex;
 				char buffer[ 128 ];
+				char *callerSuffix;
 				Q_strncpyz( buffer, cgs.voteString + 5, sizeof( buffer ) );
+				/* g_voting bit 4 appends this annotation to CS_VOTE_STRING.
+				 * It is presentation metadata, not part of the kick target. */
+				callerSuffix = strstr(buffer, " (called by ");
+				if(callerSuffix) *callerSuffix = '\0';
 				Q_CleanStr( buffer );
 
 				for( nameindex = 0; nameindex < MAX_CLIENTS; nameindex++ ) {
@@ -2516,7 +2600,14 @@ static void CG_ActivateLimboMenu(void) {
 CG_DrawSpectatorMessage
 =================
 */
-static void CG_DrawSpectatorMessage( void ) {
+static void CG_DrawSpectatorMessageContent(void);
+static void CG_DrawSpectatorMessage(void) {
+	nitmodHudAnchor_t previous = CG_NitmodHudAnchor(NITMOD_HUD_CENTER);
+	CG_DrawSpectatorMessageContent();
+	CG_NitmodHudAnchor(previous);
+}
+
+static void CG_DrawSpectatorMessageContent(void) {
 	const char *str, *str2;
 	float x, y;
 	static int lastconfigGet = 0;
@@ -2524,7 +2615,8 @@ static void CG_DrawSpectatorMessage( void ) {
 	if ( !cg_descriptiveText.integer )
 		return;
 
-	if ( !( cg.snap->ps.pm_flags & PMF_LIMBO || cg.snap->ps.persistant[PERS_TEAM] == TEAM_SPECTATOR ) )
+	if ( !( cg.snap->ps.pm_flags & PMF_LIMBO || cg.snap->ps.persistant[PERS_TEAM] == TEAM_SPECTATOR ||
+		(NITMOD_UsesOriginalProtocol() && (cg.snap->ps.pm_flags & PMF_FOLLOW)) ) )
 		return;
 
 	if(cg.time - lastconfigGet > 1000) {
@@ -2543,11 +2635,13 @@ static void CG_DrawSpectatorMessage( void ) {
 		str2 = "ESCAPE";
 	}
 	str = va( CG_TranslateString( "Press %s to open Limbo Menu" ), str2 );
-	CG_DrawStringExt( 8, 154, str, colorWhite, qtrue, qtrue, TINYCHAR_WIDTH, TINYCHAR_HEIGHT, 0 );
+	if(NITMOD_UsesOriginalProtocol()) CG_NitmodDrawSpectatorInstruction(0, str);
+	else CG_DrawStringExt( 8, 154, str, colorWhite, qtrue, qtrue, TINYCHAR_WIDTH, TINYCHAR_HEIGHT, 0 );
 
 	str2 = BindingFromName( "+attack" );
 	str = va( CG_TranslateString( "Press %s to follow next player" ), str2 );
-	CG_DrawStringExt( 8, 172, str, colorWhite, qtrue, qtrue, TINYCHAR_WIDTH, TINYCHAR_HEIGHT, 0 );
+	if(NITMOD_UsesOriginalProtocol()) CG_NitmodDrawSpectatorInstruction(1, str);
+	else CG_DrawStringExt( 8, 172, str, colorWhite, qtrue, qtrue, TINYCHAR_WIDTH, TINYCHAR_HEIGHT, 0 );
 
 #ifdef MV_SUPPORT
 	str2 = BindingFromName( "mvactivate" );
@@ -2593,11 +2687,19 @@ CG_DrawLimboMessage
 
 #define INFOTEXT_STARTX	8
 
-static void CG_DrawLimboMessage( void ) {
+static void CG_DrawLimboMessageContent(void);
+static void CG_DrawLimboMessage(void) {
+	nitmodHudAnchor_t previous = CG_NitmodHudAnchor(NITMOD_HUD_CENTER);
+	CG_DrawLimboMessageContent();
+	CG_NitmodHudAnchor(previous);
+}
+
+static void CG_DrawLimboMessageContent(void) {
 	float color[4] = { 1, 1, 1, 1 };
 	const char *str; 
 	playerState_t *ps;
 	int y = 118;
+	qboolean original = NITMOD_UsesOriginalProtocol();
 
 
 	ps = &cg.snap->ps;
@@ -2606,13 +2708,15 @@ static void CG_DrawLimboMessage( void ) {
 		return;
 	}
 
-	if( cg.snap->ps.pm_flags & PMF_LIMBO || cgs.clientinfo[cg.clientNum].team == TEAM_SPECTATOR ) {
+	if( cg.clientNum < 0 || cg.clientNum >= MAX_CLIENTS ||
+		cg.snap->ps.pm_flags & PMF_LIMBO || cgs.clientinfo[cg.clientNum].team == TEAM_SPECTATOR ) {
 		return;
 	}
 
 	if( cg_descriptiveText.integer ) {
 		str = CG_TranslateString( "You are wounded and waiting for a medic." );
-		CG_DrawSmallStringColor( INFOTEXT_STARTX, y, str, color );
+		if(original) CG_NitmodDrawWoundedInstruction(0, str);
+		else CG_DrawSmallStringColor( INFOTEXT_STARTX, y, str, color );
 		y += 18;
 
 		if( cgs.gametype == GT_WOLF_LMS ) {
@@ -2621,7 +2725,8 @@ static void CG_DrawLimboMessage( void ) {
 		}
 
 		str = CG_TranslateString( "Press JUMP to go into reinforcement queue." );
-		CG_DrawSmallStringColor( INFOTEXT_STARTX, 134, str, color );
+		if(original) CG_NitmodDrawWoundedInstruction(1, str);
+		else CG_DrawSmallStringColor( INFOTEXT_STARTX, 134, str, color );
 		y += 18;
 	} else if( cgs.gametype == GT_WOLF_LMS ) {
 		trap_R_SetColor( NULL );
@@ -2631,7 +2736,11 @@ static void CG_DrawLimboMessage( void ) {
 	// JPW NERVE
 	str = (ps->persistant[PERS_RESPAWNS_LEFT] == 0) ? CG_TranslateString("No more reinforcements this round.") : va(CG_TranslateString("Reinforcements deploy in %d seconds."), CG_CalculateReinfTime( qfalse ));
 
-	CG_DrawSmallStringColor( INFOTEXT_STARTX, y, str, color );
+	if(original) {
+		if(ps->persistant[PERS_RESPAWNS_LEFT] != 0)
+			str = va("^7Reinforcements deploy in ^3%d ^7seconds.", CG_CalculateReinfTime(qfalse));
+		CG_NitmodDrawWoundedInstruction(cg_descriptiveText.integer ? 2 : 0, str);
+	} else CG_DrawSmallStringColor( INFOTEXT_STARTX, y, str, color );
 	y += 18;
 	// jpw
 
@@ -2644,9 +2753,59 @@ static void CG_DrawLimboMessage( void ) {
 CG_DrawFollow
 =================
 */
+qboolean CG_NitmodDrawFollow(void) {
+	const playerState_t *ps;
+	const clientInfo_t *ci;
+	const char *rank;
+	char text[256];
+	float x = 8;
+	int skill;
+	nitmodHudAnchor_t previous;
+	if(!NITMOD_UsesOriginalProtocol() || !cg.snap || !(cg.snap->ps.pm_flags & PMF_FOLLOW)) return qfalse;
+	ps = &cg.snap->ps;
+	if(ps->clientNum < 0 || ps->clientNum >= MAX_CLIENTS) return qtrue;
+	ci = &cgs.clientinfo[ps->clientNum];
+	if(!ci->infoValid || ci->rank < 0 || ci->rank >= NUM_EXPERIENCE_LEVELS ||
+		ci->cls < PC_SOLDIER || ci->cls > PC_COVERTOPS) return qtrue;
+	rank = ci->team == TEAM_ALLIES ? rankNames_Allies[ci->rank] : rankNames_Axis[ci->rank];
+	previous = CG_NitmodHudAnchor(NITMOD_HUD_LEFT);
+	if(!(ps->pm_flags & PMF_LIMBO)) {
+		if(ci->team == TEAM_AXIS || ci->team == TEAM_ALLIES) {
+			CG_DrawPic(8, 124, 15, 12, ci->team == TEAM_AXIS ? cgs.media.axisFlag : cgs.media.alliedFlag);
+			skill = BG_ClassSkillForClass(ci->cls);
+			CG_DrawPic(23, 124, 13, 13, cgs.media.skillPics[skill]);
+			x = 38;
+		}
+		Com_sprintf(text, sizeof(text), "^7Following ^7%s ^7%s^7", rank, ci->name);
+		CG_Text_Paint_Ext(x, 134, .2f, .2f, colorWhite, text, 0, 0, 7, &cgs.media.limboFont2);
+	} else {
+		if(cgs.gametype != GT_WOLF_LMS) {
+			double seconds = CG_CalculateReinfTime(qfalse);
+			if(ps->persistant[PERS_RESPAWNS_LEFT] == 0 && ps->persistant[PERS_RESPAWNS_PENALTY] >= 0) {
+				int interval = ci->team == TEAM_AXIS ? cg_redlimbotime.integer : cg_bluelimbotime.integer;
+				seconds += (double)ps->persistant[PERS_RESPAWNS_PENALTY] * (interval > 0 ? interval / 1000 : 0);
+			}
+			if(seconds > 2147483647.0) seconds = 2147483647.0;
+			if(seconds < 0) seconds = 0;
+			if(ps->persistant[PERS_RESPAWNS_LEFT] == 0 && ps->persistant[PERS_RESPAWNS_PENALTY] < 0)
+				Q_strncpyz(text, "No more deployments this round", sizeof(text));
+			else Com_sprintf(text, sizeof(text), ps->persistant[PERS_RESPAWNS_LEFT] == 0 ?
+				"^7Bonus Life! Deploying in ^3%d ^7seconds^7" : "^7Deploying in ^3%d ^7seconds^7", (int)seconds);
+			CG_Text_Paint_Ext(8, 130, .2f, .2f, colorWhite, text, 0, 0, 7, &cgs.media.limboFont2);
+		}
+		if(ps->clientNum != cg.clientNum) {
+			Com_sprintf(text, sizeof(text), "^7(Following %s %s ^7[%s])^7", rank, ci->name, BG_ClassnameForNumber(ci->cls));
+			CG_Text_Paint_Ext(8, 140, .2f, .2f, colorWhite, text, 0, 0, 7, &cgs.media.limboFont2);
+		}
+	}
+	CG_NitmodHudAnchor(previous);
+	return qtrue;
+}
+
 static qboolean CG_DrawFollow(void)
 {
 	char deploytime[128];
+	if(NITMOD_UsesOriginalProtocol()) return CG_NitmodDrawFollow();
 
 	// MV following info for mainview
 	if(CG_ViewingDraw()) {
@@ -2668,7 +2827,7 @@ static qboolean CG_DrawFollow(void)
 
 					sprintf(deploytime, CG_TranslateString("Bonus Life! Deploying in %d seconds"), CG_CalculateReinfTime(qfalse) + cg.snap->ps.persistant[PERS_RESPAWNS_PENALTY] * deployTime );
 				} else {
-					sprintf(deploytime, CG_TranslateString("No more deployments this round"));
+					Com_sprintf(deploytime, sizeof(deploytime), "%s", CG_TranslateString("No more deployments this round"));
 				}
 			} else {
 				sprintf(deploytime, CG_TranslateString("Deploying in %d seconds"), CG_CalculateReinfTime(qfalse));
@@ -2704,7 +2863,14 @@ static qboolean CG_DrawFollow(void)
 CG_DrawWarmup
 =================
 */
-static void CG_DrawWarmup( void ) {
+static void CG_DrawWarmupContent(void);
+void CG_DrawWarmup(void) {
+	nitmodHudAnchor_t previous = CG_NitmodHudAnchor(NITMOD_HUD_CENTER);
+	CG_DrawWarmupContent();
+	CG_NitmodHudAnchor(previous);
+}
+
+static void CG_DrawWarmupContent(void) {
 	int			w;
 	int			sec;
 	int			cw;
@@ -3124,7 +3290,14 @@ void CG_ObjectivePrint( const char *str, int charWidth ) {
 	}
 }
 
-static void CG_DrawObjectiveInfo( void ) {
+static void CG_DrawObjectiveInfoContent(void);
+static void CG_DrawObjectiveInfo(void) {
+	nitmodHudAnchor_t previous = CG_NitmodHudAnchor(NITMOD_HUD_CENTER);
+	CG_DrawObjectiveInfoContent();
+	CG_NitmodHudAnchor(previous);
+}
+
+static void CG_DrawObjectiveInfoContent(void) {
 	char	*start;
 	int		l;
 	int		x, y, w,h;
@@ -3513,7 +3686,7 @@ static void CG_DrawNewCompass( void ) {
 		snap = cg.snap;
 	}
 
-	if ( !NITMOD_UsesOriginalProtocol() && ( snap->ps.pm_flags & PMF_LIMBO || snap->ps.persistant[PERS_TEAM] == TEAM_SPECTATOR || cg.mvTotalClients > 0 ) )
+	if ( !NITMOD_UsesNitmodHud() && ( snap->ps.pm_flags & PMF_LIMBO || snap->ps.persistant[PERS_TEAM] == TEAM_SPECTATOR || cg.mvTotalClients > 0 ) )
 		return;
 
 	// Arnout: bit larger
@@ -3521,13 +3694,13 @@ static void CG_DrawNewCompass( void ) {
 	basey = 20 - 16;
 	basew = 100 + 32;
 	baseh = 100 + 32;
-	if ( NITMOD_UsesOriginalProtocol() ) {
+	if ( NITMOD_UsesNitmodHud() ) {
 		basex = 46; basey = 382; basew = baseh = 86;
 	}
 
 	CG_DrawAutoMap();
 
-	if ( NITMOD_UsesOriginalProtocol() ) {
+	if ( NITMOD_UsesNitmodHud() ) {
 		/* Original Nitmod keeps the compact compass visible while expanding. */
 	} else if( cgs.autoMapExpanded ) {
 		if( cg.time - cgs.autoMapExpandTime < 100.f ) {
@@ -3722,6 +3895,7 @@ static int CG_PlayerAmmoValue( int *ammo, int *clips, int *akimboammo ) {
 			return weap;
 
 		case WP_LANDMINE:
+		case WP_TRIPMINE:
 		case WP_MEDIC_SYRINGE:
 		case WP_MEDIC_ADRENALINE:
 		case WP_GRENADE_LAUNCHER:
@@ -3762,6 +3936,17 @@ static int CG_PlayerAmmoValue( int *ammo, int *clips, int *akimboammo ) {
 			} else {
 				*ammo = cgs.gameManager->currentState.otherEntityNum2;
 			}
+		}
+	} else if( weap == WP_TRIPMINE ) {
+		/* Original Nitmod publishes remaining team tripmine slots through the
+		 * game-manager entity's time/time2 fields. Do not show the private
+		 * inventory clip here: the limit is shared by the whole team. */
+		if( !cgs.gameManager ) {
+			*ammo = 0;
+		} else if( cgs.clientinfo[ps->clientNum].team == TEAM_AXIS ) {
+			*ammo = cgs.gameManager->currentState.time;
+		} else {
+			*ammo = cgs.gameManager->currentState.time2;
 		}
 	} else if( weap == WP_MORTAR || weap == WP_MORTAR_SET || weap == WP_PANZERFAUST ) {
 		*ammo += *clips;
@@ -3948,7 +4133,7 @@ static void CG_DrawPlayerStatus( void ) {
 //	vec4_t			colorFaded = { 1.f, 1.f, 1.f, 0.3f };
 
 	ps = &cg.snap->ps;
-	if(NITMOD_UsesOriginalProtocol()) previous = CG_NitmodHudAnchor(NITMOD_HUD_RIGHT);
+	if(NITMOD_UsesNitmodHud()) previous = CG_NitmodHudAnchor(NITMOD_HUD_RIGHT);
 	
 	// Draw weapon icon and overheat bar
 	rect.x = 640 - 82;
@@ -3983,7 +4168,7 @@ static void CG_DrawPlayerStatus( void ) {
 
 
 // ==
-	if(NITMOD_UsesOriginalProtocol()) {
+	if(NITMOD_UsesNitmodHud()) {
 		CG_NitmodHudAnchor(previous);
 		CG_NitmodDrawStatusBars();
 		return;
@@ -4086,7 +4271,7 @@ static void CG_DrawPlayerStats( void ) {
 	float				w;
 	vec_t*				clr;
 
-	if (NITMOD_UsesOriginalProtocol()) {
+	if (NITMOD_UsesNitmodHud()) {
 		CG_NitmodDrawSkillLevels();
 		return;
 	}
@@ -4213,7 +4398,14 @@ static void CG_DrawStatsDebug( void )
 }
 
 //bani
-void CG_DrawDemoRecording( void ) {
+static void CG_DrawDemoRecordingContent(void);
+void CG_DrawDemoRecording(void) {
+	nitmodHudAnchor_t previous = CG_NitmodHudAnchor(NITMOD_HUD_LEFT);
+	CG_DrawDemoRecordingContent();
+	CG_NitmodHudAnchor(previous);
+}
+
+static void CG_DrawDemoRecordingContent(void) {
 	char status[1024];
 	char demostatus[128];
 	char wavestatus[128];
@@ -4286,7 +4478,11 @@ static void CG_Draw2D( void ) {
 		CG_DrawFlashBlendBehindHUD();
 
 		if ( cg.snap->ps.persistant[PERS_TEAM] == TEAM_SPECTATOR ) {
-			CG_DrawSpectator();
+			/* ET's large bottom-centre label is absent from the original
+			 * Nitmod HUD. Keep the normal ET presentation on other mods. */
+			if ( !NITMOD_UsesNitmodHud() ) {
+				CG_DrawSpectator();
+			}
 			CG_DrawCrosshair();
 			CG_DrawCrosshairNames();
 
@@ -4315,12 +4511,14 @@ static void CG_Draw2D( void ) {
 
 		CG_DrawVote();
 
-		CG_DrawLagometer();
+		if(!NITMOD_UsesNitmodHud()) CG_DrawLagometer(280);
 	}
 
 	/* Original globalstats is a full centered overlay, independent of the
 	 * scoreboard fade path. */
-	CG_NitmodDrawGlobalStats();
+	/* A modal stats panel owns the rest of this frame's HUD layer. Do not
+	 * paint popups, kill/spree messages or other transient windows over it. */
+	if(CG_NitmodDrawGlobalStats()) return;
 
 	// don't draw center string if scoreboard is up
 	if ( !CG_DrawScoreboard() ) {
@@ -4329,7 +4527,7 @@ static void CG_Draw2D( void ) {
 
 			if( cg.snap->ps.stats[STAT_HEALTH] > 0 ) {
 				nitmodHudAnchor_t previous = CG_NitmodHudAnchor(NITMOD_HUD_LEFT);
-				if ( !NITMOD_UsesOriginalProtocol() ) CG_DrawPlayerStatusHead();
+				if ( !NITMOD_UsesNitmodHud() ) CG_DrawPlayerStatusHead();
 				CG_NitmodHudAnchor(previous);
 				CG_DrawPlayerStatus();
 				CG_NitmodDrawActivePowerups();
@@ -4381,7 +4579,7 @@ static void CG_Draw2D( void ) {
 		CG_DrawNotify();
 
 		if ( cg_drawCompass.integer ) {
-			nitmodHudAnchor_t previous = CG_NitmodHudAnchor(NITMOD_UsesOriginalProtocol() ? NITMOD_HUD_LEFT : NITMOD_HUD_RIGHT);
+			nitmodHudAnchor_t previous = CG_NitmodHudAnchor(NITMOD_UsesNitmodHud() ? NITMOD_HUD_LEFT : NITMOD_HUD_RIGHT);
 			CG_DrawNewCompass();
 			CG_NitmodHudAnchor(previous);
 		} else if ( NITMOD_UsesOriginalProtocol() ) {
@@ -4422,24 +4620,44 @@ static void CG_Draw2D( void ) {
 }
 
 // NERVE - SMF
+static void CG_ResetCameraShake(void) {
+	cg.cameraShakeScale = cg.cameraShakeLength = cg.cameraShakePhase = 0;
+	cg.cameraShakeTime = 0;
+}
+
+float CG_CameraShakeFraction(void) {
+	double remaining = (double)cg.cameraShakeTime - cg.time;
+	if(remaining < 0 || !(cg.cameraShakeLength > 0 && cg.cameraShakeLength <= 1000) ||
+	   !(cg.cameraShakeScale >= -FLT_MAX / 16 && cg.cameraShakeScale <= FLT_MAX / 16) ||
+	   !(cg.cameraShakePhase >= -FLT_MAX && cg.cameraShakePhase <= FLT_MAX)) {
+		CG_ResetCameraShake();
+		return 0;
+	}
+	/* A backwards clock must not amplify the effect beyond its initial size. */
+	if(remaining > cg.cameraShakeLength) remaining = cg.cameraShakeLength;
+	return (float)(remaining / cg.cameraShakeLength);
+}
+
 void CG_StartShakeCamera( float p ) {
+	double duration, end;
+	if(!(p >= -FLT_MAX / 16 && p <= FLT_MAX / 16) || p == 0) {
+		CG_ResetCameraShake();
+		return;
+	}
 	cg.cameraShakeScale = p;
 
-	cg.cameraShakeLength = 1000 * (p*p);
-	cg.cameraShakeTime = cg.time + cg.cameraShakeLength;
+	duration = 1000.0 * p * p;
+	cg.cameraShakeLength = (float)(duration > 1000 ? 1000 : duration);
+	end = (double)cg.time + cg.cameraShakeLength;
+	cg.cameraShakeTime = end > INT_MAX ? INT_MAX : (int)end;
 	cg.cameraShakePhase = crandom()*M_PI; // start chain in random dir
 }
 
 void CG_ShakeCamera() {
 	float x, val;
 
-	if ( cg.time > cg.cameraShakeTime ) {
-		cg.cameraShakeScale = 0; // JPW NERVE all pending explosions resolved, so reset shakescale
-		return;
-	}
-	
-	// JPW NERVE starts at 1, approaches 0 over time
-	x = (cg.cameraShakeTime - cg.time) / cg.cameraShakeLength;
+	x = CG_CameraShakeFraction();
+	if(x <= 0) return;
 
 	// ydnar: move the camera
 	#if 0
