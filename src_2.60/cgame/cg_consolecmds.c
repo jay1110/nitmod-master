@@ -568,9 +568,11 @@ static void CG_BuddyVoiceChat_f( void ) {
 static void CG_MessageMode_f( void ) {
 	char	cmd[ 64 ];	
 
-	if( cgs.eventHandling != CGAME_EVENT_NONE ) {
-		return;
-	}
+	/* Chat is a modal engine UI popup. Limbo, spectator/fireteam input and
+	 * other cgame catchers must release their keys first; silently returning
+	 * here made every messageMode command appear dead in those states. */
+	if( cgs.eventHandling != CGAME_EVENT_NONE )
+		CG_EventHandling( CGAME_EVENT_NONE, qfalse );
 	
 	// get the actual command
 	trap_Argv( 0, cmd, 64 );
@@ -584,7 +586,10 @@ static void CG_MessageMode_f( void ) {
 	// fireteam say
 	else if( !Q_stricmp( cmd, "messagemode3" ) )
 	{
-		trap_Cvar_Set( "cg_messageType", "3" );
+		/* Fireteam chat is only meaningful while assigned to one. Match the
+		 * native client and fall back to team chat otherwise. */
+		trap_Cvar_Set( "cg_messageType",
+			CG_IsOnFireteam(cg.clientNum) ? "3" : "2" );
 	}
 	else if( !Q_stricmp( cmd, "messagemode4" ) )
 	{

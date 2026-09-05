@@ -13,7 +13,7 @@
 #define MAX_ITEMACTION 64
 #define MAX_MENUDEFFILE 4096
 #define MAX_MENUFILE 32768
-#define MAX_MENUS 128
+#define MAX_MENUS 256 // Nitmod original: Menu_New accepts menuCount < 0x100
 //#define MAX_MENUITEMS 256
 #define MAX_MENUITEMS 128 // JPW NERVE q3ta was 96
 #define MAX_COLOR_RANGES 10

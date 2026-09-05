@@ -30,6 +30,15 @@ def test_typed_adapter_uses_original_nitmod_contract():
 	assert 'Bot_Interface_Shutdown();' in MAIN
 
 
+def test_cgame_wasm_pmove_uses_direct_trace_callbacks():
+	pmove = (ROOT / "src_2.60/game/bg_pmove.c").read_text(encoding="utf-8")
+	helper = pmove.split("void PM_NITMOD_TraceWorld", 1)[1].split("// movement parameters", 1)[0]
+	assert '#if defined(CGAMEDLL) && defined(__EMSCRIPTEN__)' in helper
+	assert 'CG_TraceCapsule_World(' in helper
+	assert 'CG_TraceCapsule(' in helper
+	assert 'G_NITMOD_WasmTraceCapsule' not in pmove
+
+
 def test_empty_wasm_path_uses_preloaded_module_in_working_directory():
 	assert '(path && path[0]) ? path : "."' in LOADER
 	assert '"./%s.wasm32.so"' in LOADER

@@ -6682,19 +6682,15 @@ void _UI_SetActiveMenu( uiMenuCommand_t menu ) {
 		// ydnar: say, team say, etc
 		case UIMENU_INGAME_MESSAGEMODE:
 		{
-			const char *menuName;
+			char messageType[256];
 
-			//trap_Cvar_Set( "cl_paused", "1" );
 			trap_Key_SetCatcher( KEYCATCH_UI );
-			menuName = trap_Cvar_VariableValue("cg_messageType") == 4 ?
-				"ingame_messagemode4" : "ingame_messagemode";
-			/* Some installations rely on the server PK3 for the ordinary chat
-			 * menu. Keep that original menu authoritative when present, but do
-			 * not leave localhost without an editable chat dialog when it is
-			 * absent: menu4 uses the same cg_messageText/messageSend contract. */
-			if (!Menus_FindByName(menuName) && Q_stricmp(menuName, "ingame_messagemode4") != 0)
-				menuName = "ingame_messagemode4";
-			Menus_OpenByName(menuName);
+			trap_Cvar_VariableStringBuffer("cg_messageType", messageType,
+				                              sizeof(messageType));
+			if (atoi(messageType) == 4)
+				Menus_OpenByName("ingame_messagemode4");
+			else
+				Menus_OpenByName("ingame_messagemode");
 			return;
 		}
 			

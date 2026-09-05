@@ -13,10 +13,15 @@ read-only inputs and must not be edited.
   trajectory and 20-second lifetime match original `ThrowKnife`. The dedicated original
   pickup branch restores exactly one knife up to the eight-knife cap instead
   of feeding a bogus max-ammo count into firearm pickup. Live verification remains.
-- The chat input popup uses original Nitmod ABI slot 17. UI now prefers the
-  original `ingame_messagemode` definition and falls back to the compatible
-  bundled admin edit dialog when that server-PK3 menu is absent on localhost;
-  browser verification remains.
+- Chat popup dispatch now preserves the engine ET UI ABI slot 15. The earlier
+  reconstructed slot 17 displaced the engine command and prevented global,
+  team and fireteam chat from opening. Nitmod-private class popup IDs are now
+  appended after all standard ET menu commands; browser verification remains.
+- The removed `n_proneDelay`, `n_crouchStandDelay` and `n_standCrouchDelay`
+  movement consumers remain intentionally deferred. Re-port them with a
+  prediction-history sidecar; do not extend ABI-sensitive `pmoveExt_t` or
+  serialized player state. The original qagame writes deadline state at its
+  recovered offsets `+0x90/+0x94`, which are not valid offsets in this tree.
 - Manually configured top-centre `g_msg1`...`g_msg9` banners (`g_msgpos 2`)
   still require live-browser verification after the centred 4:3 viewport fix.
 - Bound `+attack2` now drives an edge-gated knife throw event and distinct

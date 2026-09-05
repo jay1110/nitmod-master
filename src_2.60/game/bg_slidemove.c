@@ -368,4 +368,3 @@ void PM_StepSlideMove( qboolean gravity ) {
 		}
 	}
 }
-

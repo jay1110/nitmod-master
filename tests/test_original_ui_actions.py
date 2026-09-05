@@ -32,7 +32,7 @@ assert 'uiInfo.playerIndex >= uiInfo.playerCount' in roster
 assert 'uiInfo.teamIndex >= uiInfo.myTeamCount' in roster
 assert 'key < 0 || key >= (int)(sizeof(menu->onKey)' in main
 
-# Original Nitmod ABI assigns class/class-alt to 15/16 and chat to 17.
+# Original Nitmod's UI dispatcher assigns class/classAlt/chat to 15/16/17.
 console = (root / 'src_2.60/cgame/cg_consolecmds.c').read_text()
 shared = (root / 'src_2.60/game/bg_public.h').read_text()
 assert '{ "classmenu", CG_NitmodClassMenu_f }' in console
@@ -44,10 +44,11 @@ assert shared.index('UIMENU_NITMOD_CLASSALT,') < shared.index('UIMENU_INGAME_MES
 for name in ('wm_class', 'wm_classAlt', 'ingame_messagemode4'):
     assert '"' + name + '"' in main
     assert name.lower().encode() in binary.lower()
-assert 'trap_Cvar_VariableValue("cg_messageType") == 4' in main
+assert 'trap_Cvar_VariableStringBuffer("cg_messageType"' in main
+assert 'atoi(messageType) == 4' in main
 assert '{ "messageMode4", CG_MessageMode_f }' in console
 
-# Original Nitmod's decompiled CG_MessageMode_f calls trap_UI_Popup(0x11).
+# Nitmod's message types remain intact behind the engine-compatible popup ID.
 assert 'else if( !Q_stricmp( cmd, "messagemode4" ) )' in console
 assert 'trap_Cvar_Set( "cg_messageType", "4" )' in console
 send = console.split('static void CG_MessageSend_f', 1)[1].split('static void CG_SetWeaponCrosshair_f', 1)[0]

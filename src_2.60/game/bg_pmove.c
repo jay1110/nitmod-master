@@ -847,7 +847,6 @@ Sets mins, maxs, and pm->ps->viewheight
 */
 static qboolean PM_CheckProne (void)
 {
-	int transitionDelay = ((pm->nitmodProneDelay & ~2) == 1) ? 1750 : 750;
 	//Com_Printf( "%i: PM_CheckProne (%i)\n", pm->cmd.serverTime, pm->pmext->proneGroundTime );
 
 	if( !(pm->ps->eFlags & EF_PRONE) ) {
@@ -886,7 +885,7 @@ static qboolean PM_CheckProne (void)
 
 		if( ((pm->ps->pm_flags & PMF_DUCKED && pm->cmd.doubleTap == DT_FORWARD) ||
 			(pm->cmd.wbuttons & WBUTTON_PRONE)) &&
-			pm->cmd.serverTime - -pm->pmext->proneTime > transitionDelay ) {
+			pm->cmd.serverTime - -pm->pmext->proneTime > 750 ) {
 			trace_t trace;
 
 			pm->mins[0] = pm->ps->mins[0];
@@ -919,7 +918,7 @@ static qboolean PM_CheckProne (void)
 // zinx - what was the reason for this, anyway? removing fixes bug 424
 //			pm->cmd.serverTime - pm->pmext->proneGroundTime > 450 ||
 			((pm->cmd.doubleTap == DT_BACK || pm->cmd.upmove > 10 || pm->cmd.wbuttons & WBUTTON_PRONE) &&
-			 pm->cmd.serverTime - pm->pmext->proneTime > transitionDelay) ) {
+				 pm->cmd.serverTime - pm->pmext->proneTime > 750) ) {
 			trace_t trace;
 
 			// see if we have the space to stop prone
@@ -2020,8 +2019,6 @@ Sets mins, maxs, and pm->ps->viewheight
 static void PM_CheckDuck (void)
 {
 	trace_t	trace;
-	qboolean wasDucked;
-	qboolean wantsDuck;
 
 	// Ridah, modified this for configurable bounding boxes
 	pm->mins[0] = pm->ps->mins[0];
@@ -2038,46 +2035,24 @@ static void PM_CheckDuck (void)
 		return;
 	}
 
-	wasDucked = (pm->ps->pm_flags & PMF_DUCKED) != 0;
-	wantsDuck = ((pm->cmd.upmove < 0 && !(pm->ps->eFlags & EF_MOUNTEDTANK) &&
-		!(pm->ps->pm_flags & PMF_LADDER)) || pm->ps->weapon == WP_MORTAR_SET);
-	/* Original PM_CheckDuck stance-delay pair. User crouch is held off after
-	 * standing, while an existing crouch is retained before standing. Forced
-	 * mortar crouch bypasses the input-side stand-to-crouch delay. */
-	if(wantsDuck && pm->ps->weapon != WP_MORTAR_SET && !wasDucked &&
-		pm->nitmodStandCrouchDelay > 0 &&
-		pm->cmd.serverTime < pm->pmext->nitmodStandCrouchTime)
-		wantsDuck = qfalse;
-
-	if( wantsDuck )
+	if( (pm->cmd.upmove < 0 && !(pm->ps->eFlags & EF_MOUNTEDTANK) &&
+		!(pm->ps->pm_flags & PMF_LADDER)) || pm->ps->weapon == WP_MORTAR_SET )
 	{	// duck
 		pm->ps->pm_flags |= PMF_DUCKED;
-		if(!wasDucked) {
-			pm->pmext->nitmodCrouchStandTime = pm->cmd.serverTime +
-				Q_max(0, pm->nitmodCrouchStandDelay);
-			pm->pmext->nitmodStandCrouchTime = 0;
-		}
 	}
 	else
 	{	// stand up if possible
 		if (pm->ps->pm_flags & PMF_DUCKED)
 		{
-			if(pm->nitmodCrouchStandDelay > 0 &&
-				pm->cmd.serverTime < pm->pmext->nitmodCrouchStandTime)
-				goto keep_ducked;
 			// try to stand up
 			pm->maxs[2] = pm->ps->maxs[2];
 			PM_TraceAll( &trace, pm->ps->origin, pm->ps->origin );
 			if (!trace.allsolid) {
 				pm->ps->pm_flags &= ~PMF_DUCKED;
-				pm->pmext->nitmodCrouchStandTime = 0;
-				pm->pmext->nitmodStandCrouchTime = pm->cmd.serverTime +
-					Q_max(0, pm->nitmodStandCrouchDelay);
 			}
 		}
 	}
 
-	keep_ducked:
 	if (pm->ps->pm_flags & PMF_DUCKED)
 	{
 		pm->maxs[2] = pm->ps->crouchMaxZ;

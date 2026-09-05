@@ -500,11 +500,6 @@ typedef struct {
 
 	int			proneGroundTime;	// time a prone player last had ground under him
 	float		proneLegsOffset;	// offset legs bounding box
-	/* Nitmod stance transition deadlines. Kept in pmoveExt so prediction and
-	 * server movement retain state without changing the engine ABI. */
-	int		nitmodCrouchStandTime;
-	int		nitmodStandCrouchTime;
-
 	vec3_t		mountedWeaponAngles;	// mortar, mg42 (prone), etc
 
 	int			weapRecoilTime;		// Arnout: time at which a weapon that has a recoil kickback has been fired last
@@ -591,9 +586,6 @@ typedef struct {
 	int nitmodVelocityToSpread;
 	int nitmodViewChangeToSpread;
 	float nitmodDoubleJumpHeight;
-	int nitmodProneDelay;
-	int nitmodCrouchStandDelay;
-	int nitmodStandCrouchDelay;
 } pmove_t;
 
 /* Original playerState slot 0x398: holdable[2], signed lean-button state. */
@@ -2283,11 +2275,9 @@ typedef enum {
 
 	UIMENU_WM_AUTOUPDATE,
 
-	/* Original Nitmod ABI: class menus occupy 15/16 and chat is 17. */
+	/* Original Nitmod UI ABI: class=15, classAlt=16, messageMode=17. */
 	UIMENU_NITMOD_CLASS,
 	UIMENU_NITMOD_CLASSALT,
-
-	// ydnar: say, team say, etc
 	UIMENU_INGAME_MESSAGEMODE,
 } uiMenuCommand_t;
 

@@ -836,9 +836,6 @@ void CG_PredictPlayerState( void ) {
 		cg_pmove.nitmodWarMode = NITMOD_SimpleConfig()->war;
 		cg_pmove.nitmodNoReload = (unsigned int)NITMOD_SimpleConfig()->noReload;
 		cg_pmove.nitmodDoubleJumpHeight = NITMOD_GameState()->doubleJumpHeight;
-		cg_pmove.nitmodProneDelay = NITMOD_SimpleConfig()->proneDelay;
-		cg_pmove.nitmodCrouchStandDelay = NITMOD_SimpleConfig()->crouchStandDelay;
-		cg_pmove.nitmodStandCrouchDelay = NITMOD_SimpleConfig()->standCrouchDelay;
 
 		cg.pmext.airleft = (cg.waterundertime - cg.time);
 
@@ -890,9 +887,6 @@ void CG_PredictPlayerState( void ) {
 	cg_pmove.nitmodWarMode = NITMOD_SimpleConfig()->war;
 	cg_pmove.nitmodNoReload = (unsigned int)NITMOD_SimpleConfig()->noReload;
 	cg_pmove.nitmodDoubleJumpHeight = NITMOD_GameState()->doubleJumpHeight;
-	cg_pmove.nitmodProneDelay = NITMOD_SimpleConfig()->proneDelay;
-	cg_pmove.nitmodCrouchStandDelay = NITMOD_SimpleConfig()->crouchStandDelay;
-	cg_pmove.nitmodStandCrouchDelay = NITMOD_SimpleConfig()->standCrouchDelay;
 	cg_pmove.character = CG_CharacterForClientinfo( &cgs.clientinfo[cg.snap->ps.clientNum], &cg_entities[cg.snap->ps.clientNum] );
 	cg.pmext.airleft = (cg.waterundertime - cg.time);
 

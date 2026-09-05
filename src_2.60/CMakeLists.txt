@@ -166,7 +166,7 @@ if(NITMOD_BUILD_UI)
         ui/ui_players.c ui/ui_shared.c ui/ui_syscalls.c ui/ui_util.c)
     nitmod_module(ui ui UIDLL ${NITMOD_UI_SRC}
         game/bg_campaign.c game/bg_classes.c game/bg_misc.c game/q_math.c game/q_shared.c
-        game/nitmod_weapon_akimbo.c)
+        game/nitmod_protocol.c game/nitmod_weapon_akimbo.c)
 endif()
 
 if(BUILD_TESTING)

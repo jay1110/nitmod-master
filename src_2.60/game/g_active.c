@@ -491,9 +491,6 @@ void SpectatorThink( gentity_t *ent, usercmd_t *ucmd ) {
 			}
 		}
 		pm.nitmodDoubleJumpHeight = g_DJHeight.value;
-		pm.nitmodProneDelay = G_NITMOD_LegacyCvarInteger("n_proneDelay", 0);
-		pm.nitmodCrouchStandDelay = G_NITMOD_LegacyCvarInteger("n_crouchStandDelay", 0);
-		pm.nitmodStandCrouchDelay = G_NITMOD_LegacyCvarInteger("n_standCrouchDelay", 0);
 		pm.nitmodReloadPreferenceFlags = NITMOD_EncodeReloadPreferences(0,
 			client->pers.bAutoReloadAux, client->pers.bAltReloadAux);
 		pm.character = client->pers.character;
@@ -1178,9 +1175,6 @@ void ClientThink_real( gentity_t *ent ) {
 		}
 	}
 	pm.nitmodDoubleJumpHeight = g_DJHeight.value;
-	pm.nitmodProneDelay = G_NITMOD_LegacyCvarInteger("n_proneDelay", 0);
-	pm.nitmodCrouchStandDelay = G_NITMOD_LegacyCvarInteger("n_crouchStandDelay", 0);
-	pm.nitmodStandCrouchDelay = G_NITMOD_LegacyCvarInteger("n_standCrouchDelay", 0);
 	pm.nitmodReloadPreferenceFlags = NITMOD_EncodeReloadPreferences(0,
 		client->pers.bAutoReloadAux, client->pers.bAltReloadAux);
 	pm.character = client->pers.character;
