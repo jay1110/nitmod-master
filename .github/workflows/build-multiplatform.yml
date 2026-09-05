@@ -1,0 +1,245 @@
+name: Build Nitmod binaries
+
+on:
+  push:
+    branches: [main, develop, "feature/**", "fix/**", "copilot/**"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nitmod-build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  linux:
+    name: Linux ${{ matrix.arch }}
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: i386
+            cflags: -m32
+            packages: gcc-multilib g++-multilib
+          - arch: x86_64
+            cflags: -m64
+            packages: ""
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build python3 binutils ${{ matrix.packages }}
+      - name: Configure
+        run: >-
+          cmake -S src_2.60 -B build/linux-${{ matrix.arch }} -G Ninja
+          -DCMAKE_BUILD_TYPE=Release
+          -DBUILD_TESTING=OFF
+          -DNITMOD_ARCH=${{ matrix.arch }}
+          -DNITMOD_REQUIRE_LINUX_I386=${{ matrix.arch == 'i386' && 'ON' || 'OFF' }}
+          -DCMAKE_C_FLAGS=${{ matrix.cflags }}
+          -DCMAKE_CXX_FLAGS=${{ matrix.cflags }}
+          -DCMAKE_MODULE_LINKER_FLAGS=${{ matrix.cflags }}
+      - name: Build all game modules
+        run: cmake --build build/linux-${{ matrix.arch }} --target cgame qagame ui
+      - name: Verify ELF modules
+        run: |
+          test -f build/linux-${{ matrix.arch }}/cgame.mp.${{ matrix.arch }}.so
+          test -f build/linux-${{ matrix.arch }}/qagame.mp.${{ matrix.arch }}.so
+          test -f build/linux-${{ matrix.arch }}/ui.mp.${{ matrix.arch }}.so
+          readelf --dyn-syms --wide build/linux-${{ matrix.arch }}/*.so | grep -q vmMain
+          readelf --dyn-syms --wide build/linux-${{ matrix.arch }}/*.so | grep -q dllEntry
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nitmod-linux-${{ matrix.arch }}
+          path: build/linux-${{ matrix.arch }}/*.so
+          if-no-files-found: error
+
+  linux-arm64:
+    name: Linux ARM64
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install cross compiler
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build python3 binutils-aarch64-linux-gnu gcc-aarch64-linux-gnu g++-aarch64-linux-gnu
+      - name: Configure
+        run: >-
+          cmake -S src_2.60 -B build/linux-aarch64 -G Ninja
+          -DCMAKE_BUILD_TYPE=Release
+          -DBUILD_TESTING=OFF
+          -DCMAKE_SYSTEM_NAME=Linux
+          -DCMAKE_SYSTEM_PROCESSOR=aarch64
+          -DCMAKE_C_COMPILER=aarch64-linux-gnu-gcc
+          -DCMAKE_CXX_COMPILER=aarch64-linux-gnu-g++
+          -DNITMOD_ARCH=aarch64
+      - name: Build all game modules
+        run: cmake --build build/linux-aarch64 --target cgame qagame ui
+      - name: Verify ELF modules
+        run: |
+          test -f build/linux-aarch64/cgame.mp.aarch64.so
+          test -f build/linux-aarch64/qagame.mp.aarch64.so
+          test -f build/linux-aarch64/ui.mp.aarch64.so
+          aarch64-linux-gnu-readelf -h build/linux-aarch64/*.so | grep -q AArch64
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nitmod-linux-aarch64
+          path: build/linux-aarch64/*.so
+          if-no-files-found: error
+
+  windows:
+    name: Windows ${{ matrix.arch }}
+    runs-on: windows-2022
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86
+            generator_arch: Win32
+            suffix: x86
+          - arch: x64
+            generator_arch: x64
+            suffix: x64
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure Visual Studio
+        run: cmake -S src_2.60 -B build/windows-${{ matrix.arch }} -A ${{ matrix.generator_arch }} -DBUILD_TESTING=OFF
+      - name: Build all game modules
+        run: cmake --build build/windows-${{ matrix.arch }} --config Release --target cgame qagame ui
+      - name: Stage and verify names
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force artifacts/windows-${{ matrix.arch }} | Out-Null
+          Copy-Item build/windows-${{ matrix.arch }}/Release/cgame_mp_${{ matrix.suffix }}.dll artifacts/windows-${{ matrix.arch }}/
+          Copy-Item build/windows-${{ matrix.arch }}/Release/qagame_mp_${{ matrix.suffix }}.dll artifacts/windows-${{ matrix.arch }}/
+          Copy-Item build/windows-${{ matrix.arch }}/Release/ui_mp_${{ matrix.suffix }}.dll artifacts/windows-${{ matrix.arch }}/
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nitmod-windows-${{ matrix.arch }}
+          path: artifacts/windows-${{ matrix.arch }}/*.dll
+          if-no-files-found: error
+
+  macos-universal:
+    name: macOS universal
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install build dependencies
+        run: brew install ninja
+      - name: Configure universal binaries
+        run: >-
+          cmake -S src_2.60 -B build/macos-universal -G Ninja
+          -DCMAKE_BUILD_TYPE=Release
+          -DBUILD_TESTING=OFF
+          -DCMAKE_OSX_ARCHITECTURES=x86_64\;arm64
+      - name: Build all game modules
+        run: cmake --build build/macos-universal --target cgame qagame ui
+      - name: Verify universal binaries
+        run: |
+          test -f build/macos-universal/cgame_mac
+          test -f build/macos-universal/qagame_mac
+          test -f build/macos-universal/ui_mac
+          lipo -verify_arch x86_64 arm64 build/macos-universal/cgame_mac
+          lipo -verify_arch x86_64 arm64 build/macos-universal/qagame_mac
+          lipo -verify_arch x86_64 arm64 build/macos-universal/ui_mac
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nitmod-macos-universal
+          path: |
+            build/macos-universal/cgame_mac
+            build/macos-universal/qagame_mac
+            build/macos-universal/ui_mac
+          if-no-files-found: error
+
+  wasm:
+    name: WebAssembly side modules
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mymindstorm/setup-emsdk@v14
+        with:
+          version: 4.0.12
+          actions-cache-folder: emsdk-cache
+      - name: Install build dependencies
+        run: sudo apt-get update && sudo apt-get install -y cmake ninja-build python3
+      - name: Build and verify all WASM modules
+        run: python3 -B tools/run_wasm_build.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nitmod-wasm32
+          path: build/wasm/*.mp.wasm32.so
+          if-no-files-found: error
+
+  android:
+    name: Android ${{ matrix.abi }}
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        abi: [arm64-v8a, armeabi-v7a, x86, x86_64]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: nttld/setup-ndk@v1
+        id: ndk
+        with:
+          ndk-version: r26c
+          add-to-path: false
+      - name: Install build dependencies
+        run: sudo apt-get update && sudo apt-get install -y cmake ninja-build python3
+      - name: Configure
+        run: >-
+          cmake -S src_2.60 -B build/android-${{ matrix.abi }} -G Ninja
+          -DCMAKE_BUILD_TYPE=Release
+          -DBUILD_TESTING=OFF
+          -DCMAKE_TOOLCHAIN_FILE=${{ steps.ndk.outputs.ndk-path }}/build/cmake/android.toolchain.cmake
+          -DANDROID_ABI=${{ matrix.abi }}
+          -DANDROID_PLATFORM=android-21
+      - name: Build all game modules
+        run: cmake --build build/android-${{ matrix.abi }} --target cgame qagame ui
+      - name: Verify modules
+        run: |
+          test -f build/android-${{ matrix.abi }}/cgame.mp.${{ matrix.abi }}.so
+          test -f build/android-${{ matrix.abi }}/qagame.mp.${{ matrix.abi }}.so
+          test -f build/android-${{ matrix.abi }}/ui.mp.${{ matrix.abi }}.so
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nitmod-android-${{ matrix.abi }}
+          path: build/android-${{ matrix.abi }}/*.so
+          if-no-files-found: error
+
+  package:
+    name: Assemble all binaries
+    needs: [linux, linux-arm64, windows, macos-universal, wasm, android]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: downloaded
+      - name: Install packaging tools
+        run: sudo apt-get update && sudo apt-get install -y zip
+      - name: Create release archive and checksums
+        run: |
+          mkdir -p release/nitmod
+          cp downloaded/nitmod-linux-i386/* release/nitmod/
+          cp downloaded/nitmod-linux-x86_64/* release/nitmod/
+          cp downloaded/nitmod-linux-aarch64/* release/nitmod/
+          cp downloaded/nitmod-windows-x86/* release/nitmod/
+          cp downloaded/nitmod-windows-x64/* release/nitmod/
+          cp downloaded/nitmod-macos-universal/* release/nitmod/
+          cp downloaded/nitmod-wasm32/* release/nitmod/
+          mkdir -p release/nitmod/android
+          for abi in arm64-v8a armeabi-v7a x86 x86_64; do
+            mkdir -p "release/nitmod/android/$abi"
+            cp downloaded/nitmod-android-$abi/* "release/nitmod/android/$abi/"
+          done
+          (cd release/nitmod && find . -type f -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS)
+          (cd release && zip -9 -r nitmod-binaries.zip nitmod)
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nitmod-all-binaries
+          path: release/nitmod-binaries.zip
+          if-no-files-found: error

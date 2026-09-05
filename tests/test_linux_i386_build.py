@@ -18,7 +18,7 @@ spec.loader.exec_module(build_tool)
 class LinuxBuildTests(unittest.TestCase):
     def test_artifact_names_follow_target_not_cached_arch(self):
         policy = (ROOT / "tools/cmake/ModuleArtifactName.cmake").as_posix()
-        cases = [("Windows", 8, "OFF", "qagame.host.windows64.dll"),
+        cases = [("Windows", 8, "OFF", "qagame_mp_x64.dll"),
                  ("Windows", 4, "OFF", "qagame_mp_x86.dll"),
                  ("Darwin", 8, "OFF", "qagame_mac"),
                  ("Linux", 4, "OFF", "qagame.mp.i386.so"),

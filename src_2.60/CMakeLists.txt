@@ -89,6 +89,8 @@ function(nitmod_module target base_name define)
         # function pointer, not unresolved ELF imports from the executable.
         target_link_libraries(${target} PRIVATE m)
         target_link_options(${target} PRIVATE "LINKER:--no-undefined")
+    elseif(ANDROID)
+        target_link_libraries(${target} PRIVATE m dl)
     endif()
 endfunction()
 
