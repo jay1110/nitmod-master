@@ -140,7 +140,7 @@ qboolean CG_FindCampaignInFile( char *filename, char *campaignShortName, cg_camp
 	return qfalse;
 }
 
-qboolean CG_FindArenaInfo( char* filename, char* mapname, arenaInfo_t* info ) {
+qboolean CG_FindArenaInfo( const char *filename, const char *mapname, arenaInfo_t *info ) {
 	int handle;
 	pc_token_t token;
 	const char* dummy;

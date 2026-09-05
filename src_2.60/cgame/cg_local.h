@@ -3194,6 +3194,7 @@ void CG_FitTextToWidth_SingleLine( char* instr, float scale, float w, int size);
 
 void CG_LocateCampaign( void );
 void CG_LocateArena( void );
+qboolean CG_FindArenaInfo( const char *filename, const char *mapname, arenaInfo_t *info );
 const char* CG_DescriptionForCampaign( void );
 const char* CG_NameForCampaign( void );
 void CG_CloseMenus();

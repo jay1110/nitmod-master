@@ -832,6 +832,12 @@ char *Q_CleanStr( char *string );
 // removes whitespaces and other bad directory characters
 char *Q_CleanDirName( char *dirname );
 
+#ifdef _vsnprintf
+#undef _vsnprintf
+#endif
+#ifdef vsnprintf
+#undef vsnprintf
+#endif
 #define _vsnprintf use_Q_vsnprintf
 #define vsnprintf use_Q_vsnprintf
 int Q_vsnprintf( char *dest, int size, const char *fmt, va_list argptr );
