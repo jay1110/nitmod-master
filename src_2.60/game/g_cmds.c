@@ -2755,8 +2755,18 @@ static qboolean G_NITMOD_ClassSteal(gentity_t *ent, gentity_t *body) {
 	if(BODY_VALUE(body) < 250) {
 		if(BODY_VALUE(body) == 0)
 			trap_SendServerCommand(ent->s.number, "cp \"^3Stealing class...\"");
-		step = 100 / Q_max(1, trap_Cvar_VariableIntegerValue("sv_fps"));
-		BODY_VALUE(body) += Q_max(1, step);
+		{
+			int serverFps = trap_Cvar_VariableIntegerValue("sv_fps");
+
+			if (serverFps < 1) {
+				serverFps = 1;
+			}
+			step = 100 / serverFps;
+			if (step < 1) {
+				step = 1;
+			}
+		}
+		BODY_VALUE(body) += step;
 		return qtrue;
 	}
 	body->nextthink = body->timestamp + 20000;
