@@ -30,21 +30,33 @@ static qboolean CG_NitmodLocationNumber(const char *token, float *value) {
 int CG_NitmodParseLocations(char *text) {
     char *cursor = text;
     const char *token;
+    char previousName[64] = "";
     locationCount = 0;
     CG_NitmodNamesReset();
     while(cursor && locationCount < NITMOD_MAX_LOCATIONS) {
         nitmodLocation_t entry;
+        int nameLength = 0;
         token = COM_ParseExt(&cursor, qtrue);
         if(!token || !token[0]) break;
         if(!CG_NitmodLocationNumber(token, &entry.origin[0])) break;
-        token = COM_ParseExt(&cursor, qtrue);
+        token = COM_ParseExt(&cursor, qfalse);
         if(!CG_NitmodLocationNumber(token, &entry.origin[1])) break;
-        token = COM_ParseExt(&cursor, qtrue);
+        token = COM_ParseExt(&cursor, qfalse);
         if(!CG_NitmodLocationNumber(token, &entry.origin[2])) break;
-        token = COM_ParseExt(&cursor, qtrue);
-        if(!token || !token[0]) break;
+        /* Original consumes the rest of this line, removing quotes, and
+         * uses @ to repeat the preceding name (including skipped origins). */
+        if(!cursor) break;
+        while(*cursor == ' ' || *cursor == '\t') ++cursor;
+        while(*cursor && *cursor != '\r' && *cursor != '\n') {
+            if(*cursor != '"' && nameLength < (int)sizeof(entry.name) - 1)
+                entry.name[nameLength++] = *cursor;
+            ++cursor;
+        }
+        entry.name[nameLength] = '\0';
+        if(!strcmp(entry.name, "@"))
+            Q_strncpyz(entry.name, previousName, sizeof(entry.name));
+        else Q_strncpyz(previousName, entry.name, sizeof(previousName));
         if(VectorCompare(entry.origin, vec3_origin)) continue;
-        Q_strncpyz(entry.name, token, sizeof(entry.name));
         if(entry.name[0]) locations[locationCount++] = entry;
     }
     return locationCount;
@@ -56,7 +68,8 @@ void CG_NitmodLoadLocations(void) {
     fileHandle_t file = 0;
     int length;
     locationCount = 0;
-    if(!NITMOD_UsesOriginalProtocol() || !cgs.rawmapname[0]) return;
+    /* Location assets are independent of configstring numbering. */
+    if(!NITMOD_UsesNitmodHud() || !cgs.rawmapname[0]) return;
     Com_sprintf(filename, sizeof(filename), "maps/%s_loc_override.dat", cgs.rawmapname);
     length = trap_FS_FOpenFile(filename, &file, FS_READ);
     if(length < 0) {
@@ -84,7 +97,7 @@ int CG_NitmodAddLocationMarkers(void) {
     vec3_t direction;
     float distance, x, y;
     char text[96];
-    if(!NITMOD_UsesOriginalProtocol() || !cg.snap || !cg.refdef_current ||
+    if(!NITMOD_UsesNitmodHud() || !cg.snap || !cg.refdef_current ||
        !cg_draw2D.integer || !(cg_locations.integer & 512)) return 0;
     for(i = 0; i < locationCount; ++i) {
         refEntity_t marker;
@@ -119,19 +132,19 @@ const char *CG_NitmodLocation(const vec3_t origin) {
             best = i;
         }
     }
-    return best >= 0 && locations[best].name[0] ? locations[best].name : "Unknown";
+    return best >= 0 && strlen(locations[best].name) > 1 ? locations[best].name : "Unknown";
 }
 
 void CG_NitmodLocationText(char *out, int size, const vec3_t origin, int enableBit) {
     const char *custom = "Unknown", *grid;
     if(!out || size <= 0) return;
     grid = BG_GetLocationString((vec_t *)origin);
-    if(NITMOD_UsesOriginalProtocol() && (cg_locations.integer & enableBit))
+    if(NITMOD_UsesNitmodHud() && (cg_locations.integer & enableBit))
         custom = CG_NitmodLocation(origin);
     if(!(cg_locations.integer & enableBit) || (!(cg_locations.integer & 8) && !Q_stricmp(custom, "Unknown")))
         Q_strncpyz(out, grid ? grid : " ", size);
     else if(cg_locations.integer & 16)
-        Com_sprintf(out, size, "%s %s", custom, grid ? grid : "");
+        Com_sprintf(out, size, "%s ^3(%s)", custom, grid ? grid : "");
     else Q_strncpyz(out, custom, size);
     if(!out[0]) Q_strncpyz(out, " ", size);
 }

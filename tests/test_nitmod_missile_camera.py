@@ -13,6 +13,9 @@ def test_original_weapon_mask_mapping():
 
 
 def test_original_server_compatible_owner_tracking():
+    track = VIEW.split("void CG_NitmodMissileCameraTrack", 1)[1].split("void CG_NitmodDrawMissileCamera", 1)[0]
+    assert "NITMOD_UsesNitmodHud()" in track
+    assert "NITMOD_UsesOriginalProtocol()" not in track
     assert "state->clientNum != cg.snap->ps.clientNum" in VIEW
     assert "CG_NitmodMissileCameraTrack(cent);" in ENTS
     assert "modelindex" not in VIEW.split("CG_NitmodMissileCameraTrack", 1)[1].split("CG_NitmodDrawMissileCamera", 1)[0]

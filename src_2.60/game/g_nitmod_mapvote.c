@@ -2,6 +2,7 @@
 #include "g_nitmod_mapvote.h"
 #include "g_nitmod_legacy_cvars.h"
 #include "nitmod_protocol.h"
+#include "nitmod_mapvote_order.h"
 
 #define NITMOD_MAPVOTE_MAX_MAPS 64
 #define NITMOD_MAPVOTE_CHOICES 3
@@ -14,6 +15,7 @@ typedef struct {
 	int timesPlayed;
 	int totalVotes;
 	int voteEligible;
+	int randomOrder;
 	qboolean available;
 } nitmodMapVoteEntry_t;
 
@@ -55,14 +57,21 @@ static int G_NITMOD_MapVoteFind( const char *name ) {
 }
 
 static void G_NITMOD_MapVoteReadHistory( void ) {
-	static char contents[16384];
+	char *contents;
 	fileHandle_t file;
 	char *cursor, *token;
 	int length, current = -1;
 
 	length = trap_FS_FOpenFile( "mapvoteinfo.cfg", &file, FS_READ );
-	if( length <= 0 ) return;
-	if( length >= (int)sizeof(contents) ) length = sizeof(contents) - 1;
+	if( length < 0 ) return;
+	/* Original G_mapvoteinfo_read (0x89400) reads the complete VFS file.
+	 * Keep the allocation base separate from COM_Parse's moving cursor. */
+	contents = (char *)malloc( (size_t)length + 1 );
+	if( !contents ) {
+		trap_FS_FCloseFile( file );
+		G_Printf( "mapvoteinfo: could not allocate history buffer\n" );
+		return;
+	}
 	trap_FS_Read( contents, length, file );
 	trap_FS_FCloseFile( file );
 	contents[length] = 0;
@@ -81,6 +90,7 @@ static void G_NITMOD_MapVoteReadHistory( void ) {
 		else if( current >= 0 && !Q_stricmp(key, "total_votes") ) mapVoteMaps[current].totalVotes = atoi(value);
 		else if( current >= 0 && !Q_stricmp(key, "vote_eligible") ) mapVoteMaps[current].voteEligible = atoi(value);
 	}
+	free( contents );
 }
 
 static void G_NITMOD_MapVoteWriteHistory( void ) {
@@ -147,6 +157,11 @@ static void G_NITMOD_MapVoteLoad( void ) {
 		char name[MAX_QPATH];
 		int length = strlen(file);
 		if( !length ) break;
+		/* Never index the shortened local copy with the VFS name length. */
+		if( length >= sizeof(name) ) {
+			file += length + 1;
+			continue;
+		}
 		Q_strncpyz( name, file, sizeof(name) );
 		if( length > 4 && !Q_stricmp(name + length - 4, ".bsp") ) name[length - 4] = 0;
 		file += length + 1;
@@ -155,6 +170,7 @@ static void G_NITMOD_MapVoteLoad( void ) {
 			sizeof(mapVoteMaps[mapVoteCount].name) );
 		mapVoteMaps[mapVoteCount].id = mapVoteCount;
 		mapVoteMaps[mapVoteCount].lastPlayed = -1;
+		mapVoteMaps[mapVoteCount].randomOrder = rand();
 		mapVoteMaps[mapVoteCount].available = qtrue;
 		++mapVoteCount;
 	}
@@ -163,16 +179,19 @@ static void G_NITMOD_MapVoteLoad( void ) {
 		nitmodMapVoteEntry_t *entry = &mapVoteMaps[index];
 		if( G_NITMOD_MapExcluded(entry->name) ) entry->available = qfalse;
 		if( !Q_stricmp(entry->name, current) ) {
+			++entry->timesPlayed;
 			entry->lastPlayed = 0;
 			if( g_minMapAge.integer >= 0 ) entry->available = qfalse;
 		}
 		if( entry->lastPlayed >= 0 && entry->lastPlayed <= g_minMapAge.integer ) entry->available = qfalse;
+		/* Original BeginIntermission ages rejected maps here, not at exit. */
+		if( !entry->available && entry->lastPlayed >= 0 ) ++entry->lastPlayed;
 		if( entry->available ) {
 			int position = mapVoteVisibleCount++;
 			/* Original G_SortMapsByzOrder returns equality for flag bit 8,
 			 * retaining the engine VFS enumeration order. */
-			while( !(g_mapVoteFlags.integer & 8) && position > 0 &&
-				mapVoteMaps[mapVoteVisible[position - 1]].voteEligible > entry->voteEligible ) {
+			while( position > 0 && NITMOD_MapVoteOrderCompare(g_mapVoteFlags.integer,
+				mapVoteMaps[mapVoteVisible[position - 1]].randomOrder, entry->randomOrder) > 0 ) {
 				mapVoteVisible[position] = mapVoteVisible[position - 1];
 				--position;
 			}
@@ -185,8 +204,19 @@ static void G_NITMOD_MapVoteLoad( void ) {
 
 static int G_NITMOD_MapVoteVisibleCount( void ) {
 	int count = g_maxMapsVotedFor.integer;
+	int i, used = (int)strlen("immaplist 0");
+	char record[MAX_QPATH + 48];
 	if( count < 0 ) count = 0;
 	if( count > mapVoteVisibleCount ) count = mapVoteVisibleCount;
+	/* List, tally, eligibility accounting and exit selection must agree on
+	 * the same complete records that fit the reliable command buffer. */
+	for( i = 0; i < count; ++i ) {
+		nitmodMapVoteEntry_t *entry = &mapVoteMaps[mapVoteVisible[i]];
+		Com_sprintf(record, sizeof(record), " %s %d %d %d", entry->name,
+			entry->id, entry->lastPlayed, entry->totalVotes);
+		if( used + (int)strlen(record) >= MAX_STRING_CHARS ) return i;
+		used += (int)strlen(record);
+	}
 	return count;
 }
 
@@ -198,7 +228,7 @@ void G_NITMOD_MapVoteSendList( gentity_t *ent ) {
 	if( !ent || !ent->client || !level.intermissiontime || !G_NITMOD_MapVoteActive() ) return;
 	G_NITMOD_MapVoteLoad();
 	count = G_NITMOD_MapVoteVisibleCount();
-	Com_sprintf( message, sizeof(message), "immaplist %d", (g_mapVoteFlags.integer & 4) != 0 );
+	Com_sprintf( message, sizeof(message), "immaplist %d", g_mapVoteFlags.integer & 4 );
 	for( i = 0; i < count; ++i ) {
 		nitmodMapVoteEntry_t *entry = &mapVoteMaps[mapVoteVisible[i]];
 		Com_sprintf( record, sizeof(record), " %s %d %d %d", entry->name,
@@ -224,22 +254,24 @@ void G_NITMOD_MapVoteSendTally( gentity_t *ent ) {
 
 void G_NITMOD_MapVoteCast( gentity_t *ent ) {
 	char argument[MAX_TOKEN_CHARS];
-	int id, slot = 1, old;
+	int id, slot = 1, old, argc;
 
 	if( !ent || !ent->client || !level.intermissiontime || !G_NITMOD_MapVoteActive() ) return;
 	G_NITMOD_MapVoteLoad();
-	if( trap_Argc() < 2 ) return;
+	/* G_IntermissionMapVote selects single/weighted voting by argument
+	 * count, independently of the menu's g_mapVoteFlags setting. */
+	argc = trap_Argc();
+	if( argc != 2 && argc != 3 ) return;
 	trap_Argv( 1, argument, sizeof(argument) );
 	if( !NITMOD_ParseProtocolInteger(argument, &id) ) return;
-	if( g_mapVoteFlags.integer & 4 ) {
-		if( trap_Argc() < 3 ) return;
+	if( argc == 3 ) {
 		trap_Argv( 2, argument, sizeof(argument) );
 		if( !NITMOD_ParseProtocolInteger(argument, &slot) ) return;
 	}
 	if( slot < 1 || slot > NITMOD_MAPVOTE_CHOICES || id < 0 || id >= mapVoteCount ||
 		!mapVoteMaps[id].available ) return;
 	for( old = 0; old < NITMOD_MAPVOTE_CHOICES; ++old ) {
-		if( old != slot - 1 && ent->client->pers.nitmodMapVotes[old] == id + 1 ) {
+		if( argc == 3 && old != slot - 1 && ent->client->pers.nitmodMapVotes[old] == id + 1 ) {
 			trap_SendServerCommand( ent - g_entities, "print \"^3Can't vote for the same map twice\n\"" );
 			return;
 		}
@@ -256,12 +288,15 @@ void G_NITMOD_MapVoteCast( gentity_t *ent ) {
 }
 
 qboolean G_NITMOD_MapVoteExitLevel( void ) {
-	int visible, winner, i, current;
+	int visible, winner, i;
 
 	if( !G_NITMOD_MapVoteActive() ) return qfalse;
 	G_NITMOD_MapVoteLoad();
 	visible = G_NITMOD_MapVoteVisibleCount();
-	if( visible <= 0 ) return qfalse;
+	if( visible <= 0 ) {
+		G_NITMOD_MapVoteWriteHistory();
+		return qfalse;
+	}
 	winner = mapVoteVisible[0];
 	for( i = 1; i < visible; ++i ) {
 		int candidate = mapVoteVisible[i];
@@ -270,14 +305,20 @@ qboolean G_NITMOD_MapVoteExitLevel( void ) {
 			 G_NITMOD_MapVoteTiePreferred(&mapVoteMaps[candidate], &mapVoteMaps[winner])) )
 			winner = candidate;
 	}
-	for( i = 0; i < mapVoteCount; ++i ) if( mapVoteMaps[i].lastPlayed >= 0 ) ++mapVoteMaps[i].lastPlayed;
-	current = G_NITMOD_MapVoteFind(mapVoteMapName);
-	if( current >= 0 ) {
-		++mapVoteMaps[current].timesPlayed;
-		mapVoteMaps[current].lastPlayed = 0;
+	/* ExitLevel ages only the offered prefix. Eligible maps beyond the
+	 * voting limit retain their age; rejected maps were aged during load. */
+	for( i = 0; i < visible; ++i ) {
+		nitmodMapVoteEntry_t *entry = &mapVoteMaps[mapVoteVisible[i]];
+		if( entry->lastPlayed >= 0 ) ++entry->lastPlayed;
 	}
 	G_NITMOD_MapVoteWriteHistory();
-	trap_SendConsoleCommand( EXEC_APPEND, va("map %s\n", mapVoteMaps[winner].name) );
+	/* Original ExitLevel (0x8ae72): only a positive winning tally overrides
+	 * nextmap. Return to the caller's normal rotation when nobody voted. */
+	if( mapVoteMaps[winner].votes <= 0 ) return qfalse;
+	/* ExitLevel ELF 0x7ae7a (Ghidra 0x8ae7a) passes g_nextmap.string
+	 * to the trailing set: the engine's map command can replace nextmap. */
+	trap_SendConsoleCommand( EXEC_APPEND,
+		va("map %s;set nextmap %s\n", mapVoteMaps[winner].name, g_nextmap.string) );
 	return qtrue;
 }
 

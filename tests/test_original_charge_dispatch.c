@@ -948,6 +948,7 @@ static int CheckLocationParsing(void) {
     char valid[] = "// comment\n100 200 300 \"Axis Spawn\"\n-50 25 1 Tunnel\n0 0 0 ignored\n";
     char truncated[] = "1 2 3 \"Valid\"\n4 5";
     char empty[] = "// only comments\n";
+    char repeated[] = "0 0 0 Allied Command Post\n10 20 30 @\n40 50 60 \"Upper Tunnel\"\n70 80 90 @\n";
     int errors = 0;
     if(CG_NitmodParseLocations(valid) != 2 || CG_NitmodLocationCount() != 2) ++errors;
     {
@@ -959,6 +960,14 @@ static int CheckLocationParsing(void) {
     if(CG_NitmodParseLocations(truncated) != 1 || CG_NitmodLocationCount() != 1) ++errors;
     if(CG_NitmodParseLocations(empty) != 0 || CG_NitmodLocationCount() != 0) ++errors;
     if(CG_NitmodParseLocations(NULL) != 0) ++errors;
+    if(CG_NitmodParseLocations(repeated) != 3) ++errors;
+    {
+        vec3_t first = {10, 20, 30}, last = {70, 80, 90};
+        locationTest = 1;
+        if(strcmp(CG_NitmodLocation(first), "Allied Command Post")) ++errors;
+        if(strcmp(CG_NitmodLocation(last), "Upper Tunnel")) ++errors;
+        locationTest = 0;
+    }
     return errors;
 }
 static int CheckProjectileOptions(void) {
@@ -2770,6 +2779,7 @@ static int CheckSnapshotHitSounds(void) {
     savedCg = cg; savedGame = cgs.gameState;
     cgs.gameState.stringOffsets[CS_SERVERINFO] = 1;
     snapshotHitTest = 1; snapshotHitLoads = 0;
+    NITMOD_RegisterHitSounds();
     for(mode = 0; mode < 2; ++mode) for(enabled = 0; enabled < 2; ++enabled)
     for(same = 0; same < 2; ++same) for(team = TEAM_AXIS; team <= TEAM_SPECTATOR; ++team)
     for(b = 0; b < 5; ++b) for(h = 0; h < 5; ++h) {
@@ -2793,7 +2803,7 @@ static int CheckSnapshotHitSounds(void) {
             if(expected == 2 && snapshotHitSamples[1] != 802) ++errors;
         }
     }
-    if(snapshotHitLoads != 2) ++errors; /* cache registrations, not per shot */
+    if(snapshotHitLoads != 4) ++errors; /* eager media registration, not per shot */
     strcpy(cgs.gameState.stringData + 1, "\\gamename\\nitmod");
     cgs.timelimit = 0; cg.painTime = 17; cg.time = 1000;
     cg.activeSnapshots[0].ps.stats[STAT_HEALTH] = 100;
@@ -2978,9 +2988,10 @@ static int CheckWoundedNames(void) {
     cgs.media.limboFont1.glyphs['A'].imageHeight = 10;
     cgs.media.limboFont1.glyphs['A'].glyph = 777;
     nameTest = 1;
-    for(mode = 0; mode < 2; ++mode) {
+    for(mode = 0; mode < 3; ++mode) {
         memset(&cgs.gameState, 0, sizeof(cgs.gameState)); cgs.gameState.stringOffsets[CS_SERVERINFO] = 1;
-        strcpy(cgs.gameState.stringData + 1, mode ? "\\gamename\\nitmod" : "\\gamename\\etmain");
+        strcpy(cgs.gameState.stringData + 1, mode == 2 ? "\\gamename\\nitmod\\nitmod_csLayout\\et260" :
+            mode ? "\\gamename\\nitmod" : "\\gamename\\etmain");
         for(alive = 0; alive < 2; ++alive) for(cls = 0; cls < 5; ++cls)
         for(targetAlive = 0; targetAlive < 2; ++targetAlive) for(team = 1; team <= 2; ++team)
         for(dead = 0; dead < 2; ++dead) for(r = 0; r < 7; ++r) {
@@ -3893,6 +3904,7 @@ static int CheckPrivateMessageSound(void) {
     cg.clientNum = 5;
     pmTest = 1; pmLoads = 0;
     NITMOD_ClearConfigStrings();
+    NITMOD_RegisterPrivateMessageSound();
     for(value = -1; value <= 1; ++value) for(target = 4; target <= 5; ++target)
         for(bits = 0; bits <= EV_EVENT_BITS; bits += EV_EVENT_BIT1) {
             pmValue = value; pmPlays = 0;
@@ -3903,6 +3915,7 @@ static int CheckPrivateMessageSound(void) {
         }
     if(pmLoads != 1) ++errors;
     NITMOD_ClearConfigStrings();
+    NITMOD_RegisterPrivateMessageSound();
     CG_EntityEvent(&cent, cent.lerpOrigin);
     if(pmLoads != 2) ++errors;
     pmTest = 0;
@@ -6042,7 +6055,9 @@ static int QDECL Engine(int command, ...) {
         if(command == CG_S_REGISTERSOUND) {
             const char *path = va_arg(args, const char *);
             int sound = !strcmp(path, "sound/hitsounds/body.wav") ? 801 :
-                !strcmp(path, "sound/hitsounds/head.wav") ? 802 : 0;
+                !strcmp(path, "sound/hitsounds/head.wav") ? 802 :
+                !strcmp(path, "sound/nit/hs.wav") ? 803 :
+                !strcmp(path, "sound/hitsounds/team.wav") ? 804 : 0;
             if(!sound || va_arg(args, int) != qfalse) exit(2);
             ++snapshotHitLoads; va_end(args); return sound;
         }
@@ -6491,7 +6506,8 @@ static int QDECL Engine(int command, ...) {
         }
         if(hitTest) {
             const char *path = va_arg(args, const char *);
-            int handle = !strcmp(path, "sound/nit/hs.wav") ? 91 : !strcmp(path, "sound/hitsounds/team.wav") ? 92 : 0;
+            int handle = !strcmp(path, "sound/nit/hs.wav") ? 91 : !strcmp(path, "sound/hitsounds/team.wav") ? 92 :
+                !strcmp(path, "sound/hitsounds/head.wav") ? 93 : !strcmp(path, "sound/hitsounds/body.wav") ? 94 : 0;
             if(!handle) exit(2);
             va_end(args); return handle;
         }
@@ -7360,6 +7376,8 @@ int main(int argc, char **argv) {
         NITMOD_ClearConfigStrings();
         cg.snap = &snapshot; snapshot.ps.clientNum = 5;
         hitTest = 1;
+        hitCvar = &nitmodHitSounds;
+        NITMOD_RegisterHitSounds();
         for(enabled = 0; enabled < 2; ++enabled) for(type = 2; type <= 5; ++type)
             for(bits = 0; bits <= EV_EVENT_BITS; bits += EV_EVENT_BIT1) {
                 hitValue = enabled; hitPlays = 0;

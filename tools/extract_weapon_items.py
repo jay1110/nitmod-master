@@ -51,7 +51,10 @@ def extract(root=ROOT, module='qagame'):
             break
         if item[9] == 1:
             result.append({'id': item[10], 'classname': string(item[0]), 'name': string(item[7]),
-                           'ammo': item[12], 'clip': item[13], 'address': base + index * 56})
+                           'ammo': item[12], 'clip': item[13], 'address': base + index * 56,
+                           'models': [string(pointer) for pointer in item[2:5]],
+                           'sound': string(item[1]), 'icon': string(item[5]),
+                           'ammo_icon': string(item[6]), 'quantity': item[8]})
     return result
 
 

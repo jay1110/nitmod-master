@@ -11,6 +11,7 @@
 */
 
 #include "g_local.h"
+#include "nitmod_ammo_rewards.h"
 #include "g_nitmod_restrictions.h"
 #include "g_nitmod_weapon_definition.h"
 #include "g_nitmod_etbot_lifecycle.h"
@@ -310,6 +311,18 @@ int Add_Ammo(gentity_t *ent, int weapon, int count, qboolean fillClip) {
 	int ammoweap = BG_FindAmmoForWeapon(weapon);
 	int originalCount;
 	int maxammo = BG_MaxAmmoForWeapon( ammoweap, ent->client->sess.skill );
+	if(ammoweap == WP_KNIFE) {
+		int knifeClip = BG_FindClipForWeapon(WP_KNIFE);
+		int before = ent->client->ps.ammoclip[knifeClip];
+		maxammo = (ent->client->sess.nitmodSkillMasks[SK_LIGHT_WEAPONS] & 32u) ? GetAmmoTableData(WP_KNIFE)->maxammo : 1;
+		COM_BitSet(ent->client->ps.weapons, WP_KNIFE);
+		ent->client->ps.ammoclip[knifeClip] += count;
+		if(ent->client->ps.ammoclip[knifeClip] > maxammo) ent->client->ps.ammoclip[knifeClip] = maxammo;
+		return ent->client->ps.ammoclip[knifeClip] > before;
+	}
+	if(ammoweap != WP_KNIFE) maxammo = NITMOD_AmmoRewardCapacity(ammoweap,
+		ent->client->sess.nitmodSkillMasks,
+		GetAmmoTableData(ammoweap)->maxammo, GetAmmoTableData(ammoweap)->maxclip);
 
 	originalCount = ent->client->ps.ammo[ammoweap];
 
@@ -383,7 +396,9 @@ for any two-handed weapon
 =================================================================
 */
 qboolean AddMagicAmmo(gentity_t *receiver, int numOfClips) {
-	return BG_AddMagicAmmo(&receiver->client->ps, receiver->client->sess.skill, receiver->client->sess.sessionTeam, numOfClips);
+	return BG_AddMagicAmmoWar(&receiver->client->ps, receiver->client->sess.skill,
+		receiver->client->sess.sessionTeam, numOfClips, receiver->client->sess.nitmodSkillMasks,
+		(unsigned int)G_NITMOD_LegacyCvarInteger("g_adrenaline", 0), G_NITMOD_ConfiguredWarMode());
 }
 
 //======================================================================
@@ -554,8 +569,8 @@ int Pickup_Weapon( gentity_t *ent, gentity_t *other ) {
 		AddMagicAmmo( other, ent->count );
 		if (ent->parent) {
 			Bot_Event_RecievedAmmo(other - g_entities, ent->parent);
-			if( ent->parent->client && ent->parent != other &&
-				ent->parent->client->sess.sessionTeam == other->client->sess.sessionTeam ) {
+			/* Original records the supplier before class/team reward checks. */
+			if( ent->parent->client ) {
 				other->client->pers.nitmodLastAmmoClient = ent->parent - g_entities;
 			}
 		}
@@ -564,32 +579,34 @@ int Pickup_Weapon( gentity_t *ent, gentity_t *other ) {
 		if( other->client->ps.stats[STAT_PLAYER_CLASS] != PC_FIELDOPS ) {
 			if ( ent->parent && ent->parent->client && other->client->sess.sessionTeam == ent->parent->client->sess.sessionTeam ) {
 				/* Original Pickup_Weapon checks g_misc bit 8 around the whole
-				 * Field Ops reward block. The pack still supplies ammunition and
-				 * advances PCSpecialPickedUpCount; only score/skill rewards are
-				 * suppressed. */
+				 * Field Ops reward block, including its cadence counter.
+				 * The pack still supplies ammunition when rewards are disabled. */
 				if( !(G_NITMOD_LegacyCvarInteger("g_misc", 0) & 8) ) {
 					if (!(ent->parent->client->PCSpecialPickedUpCount % LT_SPECIAL_PICKUP_MOD)) {
 						AddScore(ent->parent, WOLF_AMMO_UP);
 						G_LogPrintf("Ammo_Pack: %d %d\n", (int)(ent->parent - g_entities), (int)(other - g_entities));	// OSP
 					}
+					ent->parent->client->PCSpecialPickedUpCount++;
 					G_AddSkillPoints( ent->parent, SK_SIGNALS, 1.f );
 					G_DebugAddSkillPoints( ent->parent, SK_SIGNALS, 1.f, "ammo pack picked up" );
 				}
-				ent->parent->client->PCSpecialPickedUpCount++;
 
 				// extracted code originally here into AddMagicAmmo -xkan, 9/18/2002
 				// add 1 clip of magic ammo for any two-handed weapon
 			}
 			return RESPAWN_SP;
 		}
+		/* Original returns after magic ammo for Field Ops too; do not treat
+		 * the consumed WP_AMMO pack as a newly acquired primary weapon. */
+		return RESPAWN_SP;
 	}
 
 	/* Original Pickup_Weapon handles thrown knives before g_weaponItems and
 	 * firearm ownership. Each entity restores exactly one throwing knife; at
 	 * eight stored knives it remains in the world. */
 	if( ent->item->giTag == WP_KNIFE ) {
-		int ammo = BG_FindAmmoForWeapon(WP_KNIFE);
-		if( other->client->ps.ammo[ammo] > 7 ) return 0;
+		int ammo = BG_FindClipForWeapon(WP_KNIFE);
+		if( other->client->ps.ammoclip[ammo] > 7 ) return 0;
 		Add_Ammo(other, WP_KNIFE, 1, qfalse);
 		return -1;
 	}
@@ -604,7 +621,10 @@ int Pickup_Weapon( gentity_t *ent, gentity_t *other ) {
 	// JPW NERVE  prevents drop/pickup weapon "quick reload" exploit
 	if( alreadyHave ) {
 		int ammoAdded = 0;
-		if( quantity ) {
+		/* Original Pickup_Weapon excludes wire IDs 23/24 (Carbine/Garand)
+		 * from the clip-quantity grant when already owned. Separate dropped
+		 * reserve and rifle-grenade quantities still follow their own paths. */
+		if( quantity && ent->item->giTag != WP_CARBINE && ent->item->giTag != WP_GARAND ) {
 			ammoAdded += Add_Ammo( other, ent->item->giTag, quantity, qfalse );
 		}
 		if( reserveQuantity ) {
@@ -721,13 +741,15 @@ int Pickup_Weapon( gentity_t *ent, gentity_t *other ) {
 int Pickup_Health (gentity_t *ent, gentity_t *other) {
 	int			max;
 //	int			quantity = 0;
+	/* Last supplier powers chat substitution; it is not a reward/assist
+	 * eligibility flag. Original Pickup_Health updates it for medics too. */
+	if( ent->parent && ent->parent->client ) {
+		other->client->pers.nitmodLastHealthClient = ent->parent - g_entities;
+	}
 
 	// if medic isn't giving ammo to self or another medic or the enemy, give him some props
 	if( other->client->ps.stats[STAT_PLAYER_CLASS] != PC_MEDIC ) {
 		if( ent->parent && ent->parent->client && other->client->sess.sessionTeam == ent->parent->client->sess.sessionTeam ) {
-			if( ent->parent != other ) {
-				other->client->pers.nitmodLastHealthClient = ent->parent - g_entities;
-			}
 			/* Original Pickup_Health gates the complete Medic reward block
 			 * with g_misc bit 4. Healing and assist ownership stay active. */
 			if( !(G_NITMOD_LegacyCvarInteger("g_misc", 0) & 4) ) {
@@ -735,10 +757,10 @@ int Pickup_Health (gentity_t *ent, gentity_t *other) {
 					AddScore(ent->parent, WOLF_HEALTH_UP);
 					G_LogPrintf("Health_Pack: %d %d\n", (int)(ent->parent - g_entities), (int)(other - g_entities));	// OSP
 				}
+				ent->parent->client->PCSpecialPickedUpCount++;
 				G_AddSkillPoints( ent->parent, SK_FIRST_AID, 1.f );
 				G_DebugAddSkillPoints( ent->parent, SK_FIRST_AID, 1.f, "health pack picked up" );
 			}
-			ent->parent->client->PCSpecialPickedUpCount++;
 		}
 	}	
 	
@@ -852,7 +874,7 @@ void Touch_Item( gentity_t *ent, gentity_t *other, trace_t *trace ) {
 	}
 
 	// the same pickup rules are used for client side and server side
-	if ( !BG_CanItemBeGrabbed( &ent->s, &other->client->ps, other->client->sess.skill, other->client->sess.sessionTeam ) ) {
+	if ( !BG_CanItemBeGrabbedWar( &ent->s, &other->client->ps, other->client->sess.skill, other->client->sess.sessionTeam, other->client->sess.nitmodSkillMasks, (unsigned int)G_NITMOD_LegacyCvarInteger("g_adrenaline", 0), G_NITMOD_ConfiguredWarMode() ) ) {
 		return;
 	}
 

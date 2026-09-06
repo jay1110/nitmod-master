@@ -10,6 +10,15 @@ QAGAME = (ROOT / "src_2.60/game/g_nitmod_mapvote.c").read_text(encoding="utf-8")
 
 
 def main():
+    tally_request = SOURCE.split("void CG_NitmodMapVoteRequestTally( void ) {")[1].split("/* Original CG_parseMapVoteListInfo")[0]
+    assert "nitmodMapVoteListReceived" not in tally_request
+    assert "nitmodMapVoteTallyTime > 1000" in tally_request
+    assert "CG_NitmodMapVoteRequestTally();" in DEBRIEF
+    assert "CG_NitmodMapVoteEnabled() && cgs.nitmodMapVoteListReceived" not in DEBRIEF
+    # Original G_IntermissionMapList sends flags & 4; cgame uses nonzero.
+    assert '"immaplist %d", g_mapVoteFlags.integer & 4' in QAGAME
+    assert "multi > 1" not in SOURCE
+    assert "cgs.nitmodMapVoteMulti = multi != 0;" in SOURCE
     assert "( argc - 2 ) / 4" in SOURCE
     assert "NITMOD_MAX_MAPVOTE_MAPS" in SOURCE
     assert "records = NITMOD_MAX_MAPVOTE_MAPS" in SOURCE

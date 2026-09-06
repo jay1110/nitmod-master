@@ -275,7 +275,7 @@ void NITMOD_DropLimboPacks(gentity_t *ent) {
 		war, g_gamestate.integer, ent->client->sess.playerType, healthPack ? PC_MEDIC : PC_FIELDOPS);
 	if(!count) return;
 	skilled = healthPack ? ent->client->sess.skill[SK_FIRST_AID] >= 2 : ent->client->sess.skill[SK_SIGNALS] >= 1;
-	item = healthPack ? BG_FindItemForClassName("item_health") : BG_FindItem(skilled ? "Mega Ammo Pack" : "Ammo Pack");
+	item = healthPack ? BG_FindItemForClassName("item_health") : BG_FindItem((ent->client->sess.nitmodSkillMasks[SK_SIGNALS] & 32u) ? "Huge Ammo Pack" : (ent->client->sess.nitmodSkillMasks[SK_SIGNALS] & 2u) ? "Mega Ammo Pack" : "Ammo Pack");
 	charge = healthPack ? level.medicChargeTime[team-1] : level.lieutenantChargeTime[team-1];
 	delay = NITMOD_PackSinkDelay(healthPack ? n_medPackSinkDelay.integer : n_ammoPackSinkDelay.integer);
 	for(i = 0; i < count; ++i) {
@@ -303,7 +303,7 @@ void NITMOD_DropLimboPacks(gentity_t *ent) {
 		pack = LaunchItem(item, origin, velocity, ent->s.number);
 		pack->parent = ent; pack->s.teamNum = team;
 		pack->think = MagicSink; pack->nextthink = level.time + delay;
-		if(!healthPack) pack->count = pack->s.density = skilled ? 2 : 1;
+		if(!healthPack) pack->count = pack->s.density = (ent->client->sess.nitmodSkillMasks[SK_SIGNALS] & 2u) ? 2 : 1;
 	}
 }
 
@@ -518,7 +518,9 @@ void Weapon_MagicAmmo( gentity_t *ent )  {
 		ent->client->ps.classWeaponTime += level.lieutenantChargeTime[ent->client->sess.sessionTeam-1]*0.25;
 	}
 
-	item = BG_FindItem( ent->client->sess.skill[SK_SIGNALS] >= 1 ? "Mega Ammo Pack" : "Ammo Pack" );	
+	/* Original Weapon_MagicAmmo_Ext reads the Signals reward mask at client
+	 * +0xedc, not its numeric level. Bit 32 takes precedence over bit 2. */
+	item = BG_FindItem( (ent->client->sess.nitmodSkillMasks[SK_SIGNALS] & 32u) ? "Huge Ammo Pack" : (ent->client->sess.nitmodSkillMasks[SK_SIGNALS] & 2u) ? "Mega Ammo Pack" : "Ammo Pack" );
 	VectorCopy( ent->client->ps.viewangles, angles );
 
 	// clamp pitch
@@ -562,7 +564,7 @@ void Weapon_MagicAmmo( gentity_t *ent )  {
 
 	ent2->parent = ent;
 
-	if( ent->client->sess.skill[SK_SIGNALS] >= 1 ) {
+	if( ent->client->sess.nitmodSkillMasks[SK_SIGNALS] & 2u ) {
 		ent2->count = 2;
 		ent2->s.density = 2;
 	} else {
@@ -1771,7 +1773,10 @@ void Weapon_Engineer( gentity_t *ent ) {
 			return;
 		traceEnt = &g_entities[ tr.entityNum ];
 
-		if ( traceEnt->methodOfDeath == MOD_LANDMINE ) {
+		if ( traceEnt->methodOfDeath == MOD_LANDMINE ||
+			traceEnt->methodOfDeath == MOD_POISON_GAS_MINE ) {
+			/* Save before G_FreeEntity clears the entity on rejected placement. */
+			int mineWeapon = traceEnt->s.weapon == WP_POISON_MINE ? WP_POISON_MINE : WP_LANDMINE;
 			trace_t tr2;
 			vec3_t base;
 			vec3_t tr_down = {0, 0, 16};
@@ -1787,7 +1792,7 @@ void Weapon_Engineer( gentity_t *ent ) {
 
 				G_FreeEntity( traceEnt );
 
-				Add_Ammo(ent, WP_LANDMINE, 1, qfalse);
+				Add_Ammo(ent, mineWeapon, 1, qfalse);
 
 				// rain - #202 - give back the correct charge amount
 				if (ent->client->sess.skill[SK_EXPLOSIVES_AND_CONSTRUCTION] >= 3) {
@@ -1811,7 +1816,7 @@ void Weapon_Engineer( gentity_t *ent ) {
 
 					G_FreeEntity( traceEnt );
 
-					Add_Ammo(ent, WP_LANDMINE, 1, qfalse);
+					Add_Ammo(ent, mineWeapon, 1, qfalse);
 					// rain - #202 - give back the correct charge amount
 					if (ent->client->sess.skill[SK_EXPLOSIVES_AND_CONSTRUCTION] >= 3)
 						ent->client->ps.classWeaponTime -= .33f * level.engineerChargeTime[ent->client->sess.sessionTeam-1];
@@ -1883,7 +1888,7 @@ evilbanigoto:
 
 						trap_SendServerCommand(ent-g_entities, "cp \"Landmine defused...\" 1");
 
-						Add_Ammo(ent, WP_LANDMINE, 1, qfalse);
+						Add_Ammo(ent, mineWeapon, 1, qfalse);
 
 						if( G_LandmineTeam( traceEnt ) != ent->client->sess.sessionTeam ) {
 							G_AddSkillPoints( ent, SK_EXPLOSIVES_AND_CONSTRUCTION, 4.f );
@@ -2165,6 +2170,7 @@ evilbanigoto:
 							}
 							//bani - fix #238
 							traceEnt->etpro_misc_1 |= 1;
+							traceEnt->nitmodDynamiteObjective = hit->s.number;
 						}
 //bani
 //						i = num;

@@ -20,10 +20,15 @@ int UI_ServerHumanCount(const char *status, const char *master) {
     serverStatusInfo_t parsed;
     const char *value;
     int row, humans=0;
+    qboolean authoritative;
     value=Info_ValueForKey(status ? status : "", "humans");
-    if(!*value && master && strstr(Info_ValueForKey(master,"version"),"ET Legacy"))
+    authoritative = *value != 0;
+    if(!authoritative && master && strstr(Info_ValueForKey(master,"version"),"ET Legacy")) {
         value=Info_ValueForKey(master,"humans");
-    if(*value) {
+        /* Original LAB_000245f7 treats an empty Legacy count as zero too. */
+        authoritative=qtrue;
+    }
+    if(authoritative) {
         long count=strtol(value,NULL,10);
         return count<0 ? 0 : count>MAX_CLIENTS ? MAX_CLIENTS : (int)count;
     }
@@ -38,8 +43,12 @@ int UI_ServerHumanCount(const char *status, const char *master) {
 
 int UI_CompareBrowserServers(int first,int second) {
     if(uiInfo.serverStatus.sortKey==SORT_CLIENTS && first>=0 && first<MAX_GLOBAL_SERVERS &&
-       second>=0 && second<MAX_GLOBAL_SERVERS && browserHumanKnown[first] && browserHumanKnown[second]) {
-        int order=(browserHumans[first]>browserHumans[second])-(browserHumans[first]<browserHumans[second]);
+       second>=0 && second<MAX_GLOBAL_SERVERS) {
+        /* One comparator domain, as in original UI_ServersQsortCompare_bis.
+         * Unknown entries must not reuse counts from an earlier refresh. */
+        int a=browserHumanKnown[first] ? browserHumans[first] : 0;
+        int b=browserHumanKnown[second] ? browserHumans[second] : 0;
+        int order=(a>b)-(a<b);
         return uiInfo.serverStatus.sortDir ? -order : order;
     }
     return trap_LAN_CompareServers(ui_netSource.integer,uiInfo.serverStatus.sortKey,
@@ -164,6 +173,17 @@ void UI_ServerPopulationText(int server, const char *master, char *out, int size
  * the original total. Favorites and pending replies can revisit an index. */
 static int nitmodBrowserPlayers[MAX_GLOBAL_SERVERS];
 
+/* Original full refresh zeroes the human-count table as well as status data. */
+static void UI_ResetBrowserStatusCache(int source) {
+    memset(nitmodNxacStatus,0xff,sizeof(nitmodNxacStatus));
+    memset(nitmodBrowserPlayers,0,sizeof(nitmodBrowserPlayers));
+    memset(browserHumans,0,sizeof(browserHumans));
+    memset(browserHumanKnown,0,sizeof(browserHumanKnown));
+    memset(browserHumanPending,0,sizeof(browserHumanPending));
+    memset(browserHumanStarted,0,sizeof(browserHumanStarted));
+    nitmodNxacStatusSource=source;
+}
+
 static int UI_NitmodNxacStatus( int serverNum, const char *master ) {
 	char address[MAX_ADDRESSLENGTH];
 	char status[MAX_SERVERSTATUS_TEXT];
@@ -208,11 +228,7 @@ void UI_BuildServerDisplayList(qboolean force) {
 	}
 	if(nitmodNxacStatusSource != ui_netSource.integer) force = qtrue;
 	if( force ) {
-		memset( nitmodNxacStatus, 0xff, sizeof( nitmodNxacStatus ) );
-		memset( nitmodBrowserPlayers, 0, sizeof( nitmodBrowserPlayers ) );
-		memset(browserHumanKnown,0,sizeof(browserHumanKnown));
-		memset(browserHumanPending,0,sizeof(browserHumanPending));
-		nitmodNxacStatusSource = ui_netSource.integer;
+		UI_ResetBrowserStatusCache(ui_netSource.integer);
 	}
 
 	// do motd updates here too

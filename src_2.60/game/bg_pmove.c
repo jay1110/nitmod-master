@@ -3157,15 +3157,15 @@ static qboolean PM_NitmodThrowKnife(void) {
 		}
 		return qfalse;
 	}
-	ammo = BG_FindAmmoForWeapon(WP_KNIFE);
-	if(pm->ps->ammo[ammo] <= 0) {
+	ammo = BG_FindClipForWeapon(WP_KNIFE);
+	if(pm->ps->ammoclip[ammo] <= 0) {
 		/* Consume the button while selected so an empty throw cannot fall
 		 * through into the ordinary stabbing/fire path. */
 		return qtrue;
 	}
 	/* Edge-gate the held button: remain in WEAPON_FIRING until it is released. */
 	if(pm->ps->weaponstate != WEAPON_FIRING) {
-		pm->ps->ammo[ammo]--;
+		pm->ps->ammoclip[ammo]--;
 		PM_StartWeaponAnim(WEAP_ATTACK2);
 		PM_AddEvent(EV_NITMOD_THROW_KNIFE);
 		pm->ps->weaponstate = WEAPON_FIRING;

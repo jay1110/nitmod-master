@@ -6,7 +6,8 @@ MAPVOTE = (GAME / "g_nitmod_mapvote.c").read_text(encoding="utf-8")
 VOTE = (GAME / "g_vote.c").read_text(encoding="utf-8")
 MAIN = (GAME / "g_main.c").read_text(encoding="utf-8")
 
-assert "!(g_mapVoteFlags.integer & 8)" in MAPVOTE
+assert "NITMOD_MapVoteOrderCompare(g_mapVoteFlags.integer" in MAPVOTE
+assert "mapVoteMaps[mapVoteCount].randomOrder = rand();" in MAPVOTE
 assert "g_mapVoteFlags.integer & 16" in VOTE
 assert 'LogExit("Nextmap vote passed!")' in VOTE
 assert 'Choose a new map!' in VOTE

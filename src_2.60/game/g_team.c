@@ -3,6 +3,7 @@
 
 #include "g_local.h"
 #include "g_nitmod_config.h"
+#include "nitmod_clamp.h"
 
 qboolean G_IsClassDisabled(gentity_t *ent, int playerClass, qboolean quiet) {
 	vmCvar_t *limits[] = { &team_maxSoldiers, &team_maxMedics, &team_maxEngineers,
@@ -892,13 +893,14 @@ void TeamplayInfoMessage( team_t team ) {
 				}
 			} 
 
-			if(player->r.svFlags & SVF_POW) {
-				continue;
-			}
+			/* Original refreshes location in this sender, including direct calls.
+			 * Retain this protocol layout's two coordinates (not original XYZ). */
+			player->client->pers.teamState.location[0] = NITMOD_ClampIntegerBound(player->r.currentOrigin[0]);
+			player->client->pers.teamState.location[1] = NITMOD_ClampIntegerBound(player->r.currentOrigin[1]);
 			Com_sprintf( entry, sizeof(entry), " %i %i %i %i %i", level.sortedClients[i], player->client->pers.teamState.location[0], player->client->pers.teamState.location[1], h, player->s.powerups );
 
 			j = strlen(entry);
-			if (stringlength + j > sizeof(string)) {
+			if (stringlength + j >= sizeof(string)) {
 				break;
 			}
 			strcpy (string + stringlength, entry);
@@ -919,7 +921,7 @@ void TeamplayInfoMessage( team_t team ) {
 	for(i = 0; i < level.numConnectedClients; i++) {
 		player = g_entities + level.sortedClients[i];
 		if (player->inuse && player->client->sess.sessionTeam == team) {
-			if( player->client->pers.connected == CON_CONNECTED ) {
+			if( player->client->pers.connected == CON_CONNECTED && !(player->r.svFlags & SVF_BOT) ) {
 				trap_SendServerCommand( player-g_entities, tinfo);
 			}
 		}

@@ -1447,16 +1447,6 @@ static int UI_TeamIndexFromName(const char *name) {
 }
 
 
-/*
-==============
-UI_DrawSaveGameShot
-==============
-*/
-static void UI_DrawSaveGameShot(rectDef_t *rect, float scale, vec4_t color) {
-  	trap_R_SetColor( color );
-  	UI_DrawHandlePic( rect->x, rect->y, rect->w, rect->h, uiInfo.savegameList[uiInfo.savegameIndex].sshotImage);
-    trap_R_SetColor(NULL);
-}
 
 
 /*
@@ -1486,30 +1476,6 @@ static void UI_DrawClanLogo(rectDef_t *rect, float scale, vec4_t color) {
 UI_DrawClanCinematic
 ==============
 */
-static void UI_DrawClanCinematic(rectDef_t *rect, float scale, vec4_t color) {
-  int i;
-  i = UI_TeamIndexFromName(UI_Cvar_VariableString("ui_teamName"));
-  if (i >= 0 && i < uiInfo.teamCount) {
-
-		if (uiInfo.teamList[i].cinematic >= -2) {
-			if (uiInfo.teamList[i].cinematic == -1) {
-				uiInfo.teamList[i].cinematic = trap_CIN_PlayCinematic(va("%s.roq", uiInfo.teamList[i].imageName), 0, 0, 0, 0, (CIN_loop | CIN_silent) );
-			}
-			if (uiInfo.teamList[i].cinematic >= 0) {
-			  trap_CIN_RunCinematic(uiInfo.teamList[i].cinematic);
-				trap_CIN_SetExtents(uiInfo.teamList[i].cinematic, rect->x, rect->y, rect->w, rect->h);
-	 			trap_CIN_DrawCinematic(uiInfo.teamList[i].cinematic);
-			} else {
-				uiInfo.teamList[i].cinematic = -2;
-			}
-		} else {
-	  	trap_R_SetColor( color );
-			UI_DrawHandlePic( rect->x, rect->y, rect->w, rect->h, uiInfo.teamList[i].teamIcon);
-			trap_R_SetColor(NULL);
-		}
-	}
-
-}
 
 void UI_DrawPreviewCinematic(rectDef_t *rect, float scale, vec4_t color) {
 	if(!rect) return;
@@ -1791,18 +1757,20 @@ void UI_DrawMapCinematic(rectDef_t *rect, float scale, vec4_t color, qboolean ne
     trap_CIN_DrawCinematic(handle);
 }
 
-static void UI_DrawCampaignPreview(rectDef_t *rect, float scale, vec4_t color, qboolean net) {
-	int campaign = (net) ? ui_currentNetCampaign.integer : ui_currentCampaign.integer; 
-	if (campaign < 0 || campaign > uiInfo.campaignCount) {
-		if (net) {
-			ui_currentNetCampaign.integer = 0;
-			trap_Cvar_Set("ui_currentNetCampaign", "0");
-		} else {
-			ui_currentCampaign.integer = 0;
-			trap_Cvar_Set("ui_currentCampaign", "0");
-		}
-		campaign = 0;
+/* Preserve original selection reset, but never index an empty catalog. */
+static int UI_CampaignPreviewIndex(qboolean net) {
+	vmCvar_t *selection = net ? &ui_currentNetCampaign : &ui_currentCampaign;
+	if(uiInfo.campaignCount <= 0 || uiInfo.campaignCount > MAX_CAMPAIGNS) return -1;
+	if(selection->integer < 0 || selection->integer >= uiInfo.campaignCount) {
+		selection->integer = 0;
+		trap_Cvar_Set(net ? "ui_currentNetCampaign" : "ui_currentCampaign", "0");
 	}
+	return selection->integer;
+}
+
+static void UI_DrawCampaignPreview(rectDef_t *rect, float scale, vec4_t color, qboolean net) {
+	int campaign = UI_CampaignPreviewIndex(net);
+	if(campaign < 0) return;
 
 	if (uiInfo.campaignList[campaign].campaignShot == -1) {
 		uiInfo.campaignList[campaign].campaignShot = trap_R_RegisterShaderNoMip(uiInfo.campaignList[campaign].campaignShotName);
@@ -1816,17 +1784,8 @@ static void UI_DrawCampaignPreview(rectDef_t *rect, float scale, vec4_t color, q
 }			
 
 static void UI_DrawCampaignCinematic(rectDef_t *rect, float scale, vec4_t color, qboolean net) {
-	int campaign = (net) ? ui_currentNetCampaign.integer : ui_currentCampaign.integer; 
-	if (campaign < 0 || campaign > uiInfo.campaignCount) {
-		if (net) {
-			ui_currentNetCampaign.integer = 0;
-			trap_Cvar_Set("ui_currentNetCampaign", "0");
-		} else {
-			ui_currentCampaign.integer = 0;
-			trap_Cvar_Set("ui_currentCampaign", "0");
-		}
-		campaign = 0;
-	}
+	int campaign = UI_CampaignPreviewIndex(net);
+	if(campaign < 0) return;
 
 	if (uiInfo.campaignList[campaign].campaignCinematic >= -1) {
 		if (uiInfo.campaignList[campaign].campaignCinematic == -1) {
@@ -1845,18 +1804,9 @@ static void UI_DrawCampaignCinematic(rectDef_t *rect, float scale, vec4_t color,
 }
 
 static void UI_DrawCampaignName(rectDef_t *rect, float scale, vec4_t color, int textStyle, qboolean net) {
-	int campaign = (net) ? ui_currentNetCampaign.integer : ui_currentCampaign.integer; 
+	int campaign = UI_CampaignPreviewIndex(net);
+	if(campaign < 0) return;
 	
-	if (campaign < 0 || campaign > uiInfo.campaignCount) {
-		if (net) {
-			ui_currentNetCampaign.integer = 0;
-			trap_Cvar_Set("ui_currentNetCampaign", "0");
-		} else {
-			ui_currentCampaign.integer = 0;
-			trap_Cvar_Set("ui_currentCampaign", "0");
-		}
-		campaign = 0;
-	}
 
 	if(!uiInfo.campaignList[campaign].unlocked) {
 		return;
@@ -1867,34 +1817,26 @@ static void UI_DrawCampaignName(rectDef_t *rect, float scale, vec4_t color, int 
 
 
 static void UI_DrawCampaignMapPreview(rectDef_t *rect, float scale, vec4_t color, qboolean net, int map) {
-	int campaign = (net) ? ui_currentNetCampaign.integer : ui_currentCampaign.integer; 
-	if (campaign < 0 || campaign > uiInfo.campaignCount) {
-		if (net) {
-			ui_currentNetCampaign.integer = 0;
-			trap_Cvar_Set("ui_currentNetCampaign", "0");
-		} else {
-			ui_currentCampaign.integer = 0;
-			trap_Cvar_Set("ui_currentCampaign", "0");
-		}
-		campaign = 0;
+	int campaign = UI_CampaignPreviewIndex(net);
+	mapInfo *info;
+	qhandle_t shot;
+	if(campaign < 0) return;
+	if(map < 0 || map >= MAX_MAPS_PER_CAMPAIGN ||
+		uiInfo.campaignList[campaign].mapCount < 0 ||
+		uiInfo.campaignList[campaign].mapCount > MAX_MAPS_PER_CAMPAIGN) return;
+
+	/* Original draws the unknown-map image for empty slots too. */
+	info = map < uiInfo.campaignList[campaign].mapCount ?
+		uiInfo.campaignList[campaign].mapInfos[map] : NULL;
+	if(info && info->levelShot == -1) {
+		info->levelShot = trap_R_RegisterShaderNoMip(info->imageName);
 	}
-
-	if( uiInfo.campaignList[campaign].mapInfos[map] && uiInfo.campaignList[campaign].mapInfos[map]->levelShot == -1 ) {
-		uiInfo.campaignList[campaign].mapInfos[map]->levelShot = trap_R_RegisterShaderNoMip(uiInfo.campaignList[campaign].mapInfos[map]->imageName);
-	}
-
-	if( uiInfo.campaignList[campaign].mapInfos[map] && uiInfo.campaignList[campaign].mapInfos[map]->levelShot > 0 ) {
-		UI_DrawHandlePic( rect->x, rect->y, rect->w, rect->h, uiInfo.campaignList[campaign].mapInfos[map]->levelShot );
-		
-		if(uiInfo.campaignList[campaign].progress < map) {
-			UI_DrawHandlePic( rect->x+8, rect->y+8, rect->w-16, rect->h-16, trap_R_RegisterShaderNoMip( "gfx/2d/friendlycross.tga" ));
-		}
-	} else {
-		UI_DrawHandlePic( rect->x, rect->y, rect->w, rect->h, trap_R_RegisterShaderNoMip("levelshots/unknownmap") );
-
-		if(uiInfo.campaignList[campaign].progress < map) {
-			UI_DrawHandlePic( rect->x+8, rect->y+8, rect->w-16, rect->h-16, trap_R_RegisterShaderNoMip( "gfx/2d/friendlycross.tga" ));
-		}
+	shot = info && info->levelShot > 0 ? info->levelShot :
+		trap_R_RegisterShaderNoMip("levelshots/unknownmap");
+	UI_DrawHandlePic(rect->x, rect->y, rect->w, rect->h, shot);
+	if(uiInfo.campaignList[campaign].progress < map) {
+		UI_DrawHandlePic(rect->x+8, rect->y+8, rect->w-16, rect->h-16,
+			trap_R_RegisterShaderNoMip("gfx/2d/friendlycross.tga"));
 	}
 }
 
@@ -1929,83 +1871,13 @@ static void UI_DrawMissionBriefingTitle(rectDef_t *rect, float scale, vec4_t col
 }
 
 static void UI_DrawMissionBriefingObjectives(rectDef_t *rect, float scale, vec4_t color, float text_x, float text_y, int textStyle, int align) {
-	const char *p, *textPtr, *newLinePtr;
-	char buff[1024];
-	int height, len, textWidth, newLine, newLineWidth;
-	float y;
-	rectDef_t textRect;
-
-	char buffer[64];
-	mapInfo* mi;
-
-	trap_Cvar_VariableStringBuffer( "mapname", buffer, 64 );
-	
-	mi = UI_FindMapInfoByMapname( buffer );
-	if(!mi) {
-		return;
-	}
-
-	textPtr = mi->objectives;
-
-	height = Text_Height( textPtr, scale, 0 );
-
-	textRect.x = 0;
-	textRect.y = 0;
-	textRect.w = rect->w;
-	textRect.h = rect->h;
-
-	textWidth = 0;
-	newLinePtr = NULL;
-	y = text_y;
-	len = 0;
-	buff[0] = '\0';
-	newLine = 0;
-	newLineWidth = 0;
-	p = textPtr;
-	while (p) {
-		if (*p == ' ' || *p == '\t' || *p == '\n' || *p == '\0') {
-			newLine = len;
-			newLinePtr = p+1;
-			newLineWidth = textWidth;
-		}
-		textWidth = Text_Width(buff, scale, 0);
-		if ( (newLine && textWidth > rect->w) || *p == '\n' || *p == '\0') {
-			if (len) {
-				if (align == ITEM_ALIGN_LEFT) {
-					textRect.x = text_x;
-				} else if (align == ITEM_ALIGN_RIGHT) {
-					textRect.x = text_x - newLineWidth;
-				} else if (align == ITEM_ALIGN_CENTER) {
-					textRect.x = text_x - newLineWidth / 2;
-				}
-				textRect.y = y;
-
-				textRect.x += rect->x;
-				textRect.y += rect->y;
-
-				//
-				buff[newLine] = '\0';
-				Text_Paint(textRect.x, textRect.y, scale, color, buff, 0, 0, textStyle);
-			}
-			if (*p == '\0') {
-				break;
-			}
-			//
-			y += height + 5;
-			p = newLinePtr;
-			len = 0;
-			newLine = 0;
-			newLineWidth = 0;
-			continue;
-		}
-		buff[len++] = *p++;
-
-		if(buff[len-1] == 13) {
-			buff[len-1] = ' ';
-		}
-
-		buff[len] = '\0';
-	}
+	char mapname[64];
+	mapInfo *info;
+	trap_Cvar_VariableStringBuffer("mapname", mapname, sizeof(mapname));
+	info = UI_FindMapInfoByMapname(mapname);
+	if(!info || !info->objectives) return;
+	UI_DrawDescriptionText(rect, scale, color, text_x, text_y, textStyle, align,
+		info->objectives, 0);
 }
 
 static qboolean updateModel = qtrue;
@@ -2129,7 +2001,7 @@ static void UI_DrawPlayerModel(rectDef_t *rect) {
 
 
 static void UI_DrawNetFilter(rectDef_t *rect, float scale, vec4_t color, int textStyle) {
-	if (ui_serverFilterType.integer < 0 || ui_serverFilterType.integer > numServerFilters) {
+	if (ui_serverFilterType.integer < 0 || ui_serverFilterType.integer >= numServerFilters) {
 		ui_serverFilterType.integer = 0;
 	}
   Text_Paint(rect->x, rect->y, scale, color, va("Filter: %s", serverFilters[ui_serverFilterType.integer].description), 0, 0, textStyle);
@@ -2502,7 +2374,7 @@ static int UI_OwnerDrawWidth(int ownerDraw, float scale) {
 			s = va("Source: %s", netSources[ui_netSource.integer]);
 			break;*/
 		case UI_NETFILTER:
-			if (ui_serverFilterType.integer < 0 || ui_serverFilterType.integer > numServerFilters) {
+			if (ui_serverFilterType.integer < 0 || ui_serverFilterType.integer >= numServerFilters) {
 				ui_serverFilterType.integer = 0;
 			}
 			s = va("Filter: %s", serverFilters[ui_serverFilterType.integer].description );
@@ -2717,13 +2589,13 @@ static void UI_DrawServerRefreshDate(rectDef_t *rect, float scale, vec4_t color,
 		// NERVE - SMF
 		serverCount = trap_LAN_GetServerCount( ui_netSource.integer );
 		if ( serverCount >= 0 )
-			Text_Paint(rect->x, rect->y, scale, newColor, va( trap_TranslateString( "Getting info for %d servers (ESC to cancel)" ), serverCount), 0, 0, textStyle);
+			Text_Paint(rect->x, rect->y, scale, newColor, va( "Getting info for %d servers (ESC to cancel)", serverCount), 0, 0, textStyle);
 		else
-			Text_Paint(rect->x, rect->y, scale, newColor, trap_TranslateString( "Waiting for response from Master Server" ), 0, 0, textStyle);
+			Text_Paint(rect->x, rect->y, scale, newColor, "Waiting for response from Master Server", 0, 0, textStyle);
 	} else {
 		char buff[64];
 		Q_strncpyz(buff, UI_Cvar_VariableString(va("ui_lastServerRefresh_%i", ui_netSource.integer)), 64);
-		Text_Paint(rect->x, rect->y, scale, color, va( trap_TranslateString( "Refresh Time: %s" ), buff), 0, 0, textStyle);
+		Text_Paint(rect->x, rect->y, scale, color, va( "Refresh Time: %s", buff), 0, 0, textStyle);
 	}
 }
 
@@ -2844,21 +2716,21 @@ static void UI_OwnerDraw(float x, float y, float w, float h, float text_x, float
 			UI_DrawEffects(&rect, scale, color);
 			break;
 		case UI_PLAYERMODEL:
-			UI_DrawPlayerModel(&rect);
+			/* Original Nitmod ownerdraw 202 is intentionally empty. */
 			break;
 		case UI_CLANNAME:
 			UI_DrawClanName(&rect, scale, color, textStyle);
 			break;
 
 		case UI_SAVEGAME_SHOT:	// (SA)
-			UI_DrawSaveGameShot(&rect, scale, color);
+			/* Original Nitmod ownerdraw 258 (0x102) is empty. */
 			break;
 
 		case UI_CLANLOGO:
-			UI_DrawClanLogo(&rect, scale, color);
+			/* Original Nitmod ownerdraw 204 is intentionally empty. */
 			break;
 		case UI_CLANCINEMATIC:
-			UI_DrawClanCinematic(&rect, scale, color);
+			/* Original Nitmod UI_OwnerDraw: 251 is intentionally a no-op. */
 			break;
 		case UI_PREVIEWCINEMATIC:
 			UI_DrawPreviewCinematic(&rect, scale, color);
@@ -2938,14 +2810,13 @@ static void UI_OwnerDraw(float x, float y, float w, float h, float text_x, float
 		case UI_BLUETEAM3:
 		case UI_BLUETEAM4:
 		case UI_BLUETEAM5:
-			UI_DrawTeamMember(&rect, scale, color, qtrue, ownerDraw - UI_BLUETEAM1 + 1, textStyle);
+			/* Original Nitmod ownerdraws 210..219 are intentionally empty. */
 			break;
 		case UI_REDTEAM1:
 		case UI_REDTEAM2:
 		case UI_REDTEAM3:
 		case UI_REDTEAM4:
 		case UI_REDTEAM5:
-			UI_DrawTeamMember(&rect, scale, color, qfalse, ownerDraw - UI_REDTEAM1 + 1, textStyle);
 			break;
 /*		case UI_NETSOURCE:
 			UI_DrawNetSource(&rect, scale, color, textStyle);
@@ -2999,16 +2870,13 @@ static void UI_OwnerDraw(float x, float y, float w, float h, float text_x, float
 			UI_DrawTierGameType(&rect, scale, color, textStyle);
 			break;*/
 		case UI_ALLMAPS_SELECTION:
-			UI_DrawAllMapsSelection(&rect, scale, color, textStyle, qtrue);
 			break;
 		case UI_MAPS_SELECTION:
-			UI_DrawAllMapsSelection(&rect, scale, color, textStyle, qfalse);
 			break;
 		case UI_OPPONENT_NAME:
 			UI_DrawOpponentName(&rect, scale, color, textStyle);
 			break;
 		case UI_BOTNAME:
-			UI_DrawBotName(&rect, scale, color, textStyle);
 			break;
 /*		case UI_BOTSKILL:
 			UI_DrawBotSkill(&rect, scale, color, textStyle);
@@ -3020,7 +2888,6 @@ static void UI_OwnerDraw(float x, float y, float w, float h, float text_x, float
 			UI_DrawCrosshair(&rect, scale, color);
 			break;
 		case UI_SELECTEDPLAYER:
-			UI_DrawSelectedPlayer(&rect, scale, color, textStyle);
 			break;
 		case UI_SERVERREFRESHDATE:
 			UI_DrawServerRefreshDate(&rect, scale, color, textStyle);
@@ -3053,28 +2920,8 @@ qboolean UI_OwnerDrawVisible(int flags) {
 			flags &= ~UI_SHOW_NOTFFA;
 		}
 
-		if (flags & UI_SHOW_LEADER) {
-			// these need to show when this client can give orders to a player or a group
-			if (!uiInfo.teamLeader) {
-				vis = qfalse;
-			} else {
-				// if showing yourself
-				if (ui_selectedPlayer.integer < uiInfo.myTeamCount && uiInfo.teamClientNums[ui_selectedPlayer.integer] == uiInfo.playerNumber) { 
-					vis = qfalse;
-				}
-			}
-			flags &= ~UI_SHOW_LEADER;
-		} 
-		if (flags & UI_SHOW_NOTLEADER) {
-			// these need to show when this client is assigning their own status or they are NOT the leader
-			if (uiInfo.teamLeader) {
-				// if not showing yourself
-				if (!(ui_selectedPlayer.integer < uiInfo.myTeamCount && uiInfo.teamClientNums[ui_selectedPlayer.integer] == uiInfo.playerNumber)) { 
-					vis = qfalse;
-				}
-			}
-			flags &= ~UI_SHOW_NOTLEADER;
-		} 
+		/* Original Nitmod ignores the inherited ET leader visibility bits. */
+		flags &= ~(UI_SHOW_LEADER | UI_SHOW_NOTLEADER);
 		if (flags & UI_SHOW_FAVORITESERVERS) {
 			// this assumes you only put this type of display flag on something showing in the proper context
 			if (ui_netSource.integer != AS_FAVORITES) {
@@ -3425,17 +3272,8 @@ static qboolean UI_TeamMember_HandleKey(int flags, float *special, int key, qboo
 
 static qboolean UI_NetFilter_HandleKey(int flags, float *special, int key) {
 	if( key == K_MOUSE1 || key == K_MOUSE2 || key == K_ENTER || key == K_KP_ENTER ) {
-		if (key == K_MOUSE2) {
-			ui_serverFilterType.integer--;
-		} else {
-			ui_serverFilterType.integer++;
-		}
-
-		if (ui_serverFilterType.integer >= numServerFilters) {
-			ui_serverFilterType.integer = 0;
-		} else if (ui_serverFilterType.integer < 0) {
-			ui_serverFilterType.integer = numServerFilters - 1;
-		}
+		/* Original Nitmod has one filter; accepted keys reset directly. */
+		ui_serverFilterType.integer = 0;
 		UI_BuildServerDisplayList(qtrue);
 		return qtrue;
 	}
@@ -3605,22 +3443,19 @@ static qboolean UI_OwnerDrawHandleKey(int ownerDraw, int flags, float *special, 
       UI_NetFilter_HandleKey(flags, special, key);
 			break;
 		case UI_OPPONENT_NAME:
-			UI_OpponentName_HandleKey(flags, special, key);
+			/* Original Nitmod key dispatch falls through to false for this ID. */
 			break;
 		case UI_BOTNAME:
-			return UI_BotName_HandleKey(flags, special, key);
 			break;
 		/*case UI_BOTSKILL:
 			return UI_BotSkill_HandleKey(flags, special, key);
 			break;*/
 		case UI_REDBLUE:
-			UI_RedBlue_HandleKey(flags, special, key);
 			break;
 		case UI_CROSSHAIR:
 			UI_Crosshair_HandleKey(flags, special, key);
 			break;
 		case UI_SELECTEDPLAYER:
-			UI_SelectedPlayer_HandleKey(flags, special, key);
 			break;
     default:
       break;
@@ -4550,7 +4385,8 @@ void UI_RunMenuScript(char **args) {
 		} else if (Q_stricmp(name, "orders") == 0) {
 			const char *orders;
 			if (String_Parse(args, &orders)) {
-				int selectedPlayer = trap_Cvar_VariableValue("cg_selectedPlayer");
+				int selectedPlayer;
+				if(!UI_NitmodTeamSelection(&selectedPlayer)) return;
 				if (selectedPlayer < uiInfo.myTeamCount) {
 					strcpy(buff, orders);
 					trap_Cmd_ExecuteText( EXEC_APPEND, va(buff, uiInfo.teamClientNums[selectedPlayer]) );
@@ -4574,7 +4410,8 @@ void UI_RunMenuScript(char **args) {
 		} else if (Q_stricmp(name, "voiceOrdersTeam") == 0) {
 			const char *orders;
 			if (String_Parse(args, &orders)) {
-				int selectedPlayer = trap_Cvar_VariableValue("cg_selectedPlayer");
+				int selectedPlayer;
+				if(!UI_NitmodTeamSelection(&selectedPlayer)) return;
 				if (selectedPlayer == uiInfo.myTeamCount) {
 					trap_Cmd_ExecuteText( EXEC_APPEND, orders );
 					trap_Cmd_ExecuteText( EXEC_APPEND, "\n" );
@@ -4587,7 +4424,8 @@ void UI_RunMenuScript(char **args) {
 		} else if (Q_stricmp(name, "voiceOrders") == 0) {
 			const char *orders;
 			if (String_Parse(args, &orders)) {
-				int selectedPlayer = trap_Cvar_VariableValue("cg_selectedPlayer");
+				int selectedPlayer;
+				if(!UI_NitmodTeamSelection(&selectedPlayer)) return;
 				if (selectedPlayer < uiInfo.myTeamCount) {
 					strcpy(buff, orders);
 					trap_Cmd_ExecuteText( EXEC_APPEND, va(buff, uiInfo.teamClientNums[selectedPlayer]) );
@@ -4618,15 +4456,6 @@ void UI_RunMenuScript(char **args) {
 		// DHM - Nerve
 		} else if( Q_stricmp( name, "loadCachedServers" ) == 0 ) {
 			trap_LAN_LoadCachedServers();	// load servercache.dat
-		} else if( Q_stricmp( name, "setupCampaign" ) == 0 ) {
-			trap_Cvar_Set( "ui_campaignmap", va( "%i", uiInfo.campaignList[ui_currentCampaign.integer].progress ) );
-		} else if( Q_stricmp( name, "playCampaign" ) == 0 ) {
-			int map = trap_Cvar_VariableValue( "ui_campaignmap" );
-			
-			if( map <= uiInfo.campaignList[ui_currentCampaign.integer].progress ) {
-				//trap_Cmd_ExecuteText( EXEC_APPEND, va("spmap \"%s\"\n", uiInfo.campaignList[ui_currentCampaign.integer].mapInfos[uiInfo.campaignList[ui_currentCampaign.integer].progress]->mapLoadName));
-				trap_Cmd_ExecuteText( EXEC_APPEND, va("spmap \"%s\"\n", uiInfo.campaignList[ui_currentCampaign.integer].mapInfos[map]->mapLoadName));
-			}
 		} else if( Q_stricmp( name, "loadProfiles" ) == 0 ) {
 			UI_LoadProfiles();
 		} else if( Q_stricmp( name, "createProfile" ) == 0 ) {
@@ -6125,18 +5954,20 @@ static void UI_StopCinematic(int handle) {
 	if (handle >= 0) {
 	  trap_CIN_StopCinematic(handle);
 	} else {
-		handle = abs(handle);
-		if (handle == UI_MAPCINEMATIC) {
+		if (handle == -UI_MAPCINEMATIC) {
+			if (uiInfo.mapCount < 0 || uiInfo.mapCount > MAX_MAPS ||
+				ui_currentMap.integer < 0 || ui_currentMap.integer >= uiInfo.mapCount) return;
 			if (uiInfo.mapList[ui_currentMap.integer].cinematic >= 0) {
 			  trap_CIN_StopCinematic(uiInfo.mapList[ui_currentMap.integer].cinematic);
 			  uiInfo.mapList[ui_currentMap.integer].cinematic = -1;
 			}
-		} else if (handle == UI_NETMAPCINEMATIC) {
+		} else if (handle == -UI_NETMAPCINEMATIC) {
 			if (uiInfo.serverStatus.currentServerCinematic >= 0) {
 			  trap_CIN_StopCinematic(uiInfo.serverStatus.currentServerCinematic);
 				uiInfo.serverStatus.currentServerCinematic = -1;
 			}
-		} else if (handle == UI_CLANCINEMATIC) {
+		} else if (handle == -UI_CLANCINEMATIC) {
+		  if (uiInfo.teamCount < 0 || uiInfo.teamCount > MAX_TEAMS) return;
 		  int i = UI_TeamIndexFromName(UI_Cvar_VariableString("ui_teamName"));
 		  if (i >= 0 && i < uiInfo.teamCount) {
 				if (uiInfo.teamList[i].cinematic >= 0) {

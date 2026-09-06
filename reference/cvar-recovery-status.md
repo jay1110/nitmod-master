@@ -24,8 +24,9 @@ that field to sound/nit/pm.wav. The typed implementation registers the Cvar
 in cgame's ordinary table, honors live changes, and dispatches only original
 Nitmod event 98. Native event numbers are unchanged.
 
-The sound is loaded lazily when first needed and its handle is reset at
-NITMOD_ClearConfigStrings. That differs from original eager registration;
+The sound is now registered by CG_RegisterSounds and its handle is reset at
+NITMOD_ClearConfigStrings, followed by registration during map sound loading.
+This replaces the former lazy-on-first-event behavior with original eager loading;
 valid enabled events use the same path, target, channel and volume. Invalid
 client numbers are additionally rejected. The existing PM text protocol is
 not implemented by this sound event.

@@ -8,6 +8,7 @@ void G_NITMOD_ResetPickupDefinitions(void);
 void G_NITMOD_LoadMapWeaponDefinitions(void);
 void G_NITMOD_WeaponDamageOverrides(int weapon, int *damage, int *splash, int *radius);
 int G_NITMOD_WeaponSpreadOverride(int weapon, float *spread);
+int G_NITMOD_PoisonInterval(int fallback);
 float G_NITMOD_WeaponMovementScale(int weapon);
 int G_NITMOD_WeaponFalloffMode(int weapon, int fallback);
 int G_NITMOD_WeaponHeadshotAllowed(int weapon, int fallback);

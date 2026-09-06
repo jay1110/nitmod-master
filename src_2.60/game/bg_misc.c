@@ -8,6 +8,8 @@
 
 #include "q_shared.h"
 #include "bg_public.h"
+#include "nitmod_ammo_rewards.h"
+#include "nitmod_grenade_rewards.h"
 #include "../../pak/ui/menudef.h"
 
 #ifdef CGAMEDLL
@@ -143,7 +145,7 @@ ammotable_t ammoTableMP[WP_NUM_WEAPONS] = {
 	//	MAX				USES	MAX		START	START  RELOAD	FIRE			NEXT	HEAT,	COOL,	MOD,	...
 	//	AMMO			AMT.	CLIP	AMMO	CLIP	TIME	DELAY			SHOT
 	{	0,				0,		0,		0,		0,		0,		50,				0,		0,		0,		0						},	// WP_NONE					// 0
-	{	999,			0,		999,	0,		0,		0,		50,				200,	0,		0,		MOD_KNIFE				},	// WP_KNIFE					// 1
+	{	8,			0,		8,	0,		4,		0,		50,				200,	0,		0,		MOD_KNIFE				},	// WP_KNIFE: original clip capacity/start
 	{	24,				1,		8,		24,		8,		1500,	DELAY_PISTOL,	400,	0,		0,		MOD_LUGER				},	// WP_LUGER					// 2	// NOTE: also 32 round 'snail' magazine
 	{	90,				1,		30,		30,		30,		2400,	DELAY_LOW,		150,	0,		0,		MOD_MP40				},	// WP_MP40					// 3
 	{	45,				1,		15,		0,		4,		1000,	DELAY_THROW,	1600,	0,		0,		MOD_GRENADE_LAUNCHER	},	// WP_GRENADE_LAUNCHER		// 4
@@ -2560,6 +2562,13 @@ model="models/powerups/xp_key/key.md3"
 		"icons/iconw_plandmine_1_select", "icons/ammo9", "Poison Landmine", 0,
 		IT_WEAPON, WP_POISON_MINE, WP_POISON_MINE, WP_POISON_MINE, "", ""
 	},
+	/* Original item 34. Append locally to preserve existing native indices. */
+	{
+		"weapon_magicammo3", "sound/misc/w_pkup.wav",
+		{ "models/multiplayer/binocs/v_binocs.md3", "models/multiplayer/binocs/v_binocs.md3", "models/multiplayer/binocs/v_binocs.md3" },
+		"icons/iconw_ammopack_1", "icons/ammo2", "Huge Ammo Pack", 50,
+		IT_WEAPON, WP_AMMO, WP_AMMO, WP_AMMO, "", ""
+	},
 	// end of list marker
 	{NULL}
 };
@@ -2844,6 +2853,16 @@ BG_AddMagicAmmo:
 WARNING: when numOfClips is 0, DO NOT CHANGE ANYTHING under ps.
 =================================
 */
+/* Embedded rows verified in both original cgame and qagame; no engine reads. */
+int BG_NitmodGrenadesForClass(int cls, const unsigned int *rewards, int war) {
+	static const float rows[7][6] = {
+		{0,0,0,0,0,0}, {4,8,8,8,8,8}, {1,2,2,2,2,3},
+		{1,2,2,2,2,3}, {0,0,0,0,0,0}, {4,4,4,4,4,5}, {2,2,2,2,2,3}
+	};
+	if(!rewards) return 0;
+	return NITMOD_GrenadeRewardCount(cls, rows, rewards, war);
+}
+
 int BG_GrenadesForClass( int cls, int* skills ) {
 	switch( cls ) {
 		case PC_MEDIC:
@@ -2880,14 +2899,35 @@ weapon_t BG_GrenadeTypeForTeam( team_t team ) {
 
 // Gordon: setting numOfClips = 0 allows you to check if the client needs ammo, but doesnt give any
 qboolean BG_AddMagicAmmo( playerState_t *ps, int *skill, int teamNum, int numOfClips ) {
+	return BG_AddMagicAmmoRewards(ps, skill, teamNum, numOfClips, NULL);
+}
+
+qboolean BG_AddMagicAmmoRewards( playerState_t *ps, int *skill, int teamNum, int numOfClips, const unsigned int *rewards ) {
+	/* Callers without synchronized options retain their previous behavior. */
+	return BG_AddMagicAmmoOptions(ps, skill, teamNum, numOfClips, rewards, 2u);
+}
+
+qboolean BG_AddMagicAmmoOptions( playerState_t *ps, int *skill, int teamNum, int numOfClips, const unsigned int *rewards, unsigned int adrenalineOptions ) {
+	return BG_AddMagicAmmoWar(ps, skill, teamNum, numOfClips, rewards, adrenalineOptions, 0);
+}
+
+qboolean BG_AddMagicAmmoWar( playerState_t *ps, int *skill, int teamNum, int numOfClips, const unsigned int *rewards, unsigned int adrenalineOptions, int war ) {
 	int			i, weapon;
 	int			ammoAdded = qfalse;
 	int			maxammo;
 	int			clip;
 	int			weapNumOfClips;
 
+	/* Original BG_AddMagicAmmo restores the helmet before testing ammunition,
+	 * including the numOfClips == 0 pickup probe. Preserve that side effect. */
+	if( ps->eFlags & EF_HEADSHOT ) {
+		ps->eFlags &= ~EF_HEADSHOT;
+		ammoAdded = qtrue;
+	}
+
 	// Gordon: handle grenades first
-	i = BG_GrenadesForClass( ps->stats[STAT_PLAYER_CLASS], skill );
+	i = rewards ? BG_NitmodGrenadesForClass(ps->stats[STAT_PLAYER_CLASS], rewards, war) :
+		BG_GrenadesForClass(ps->stats[STAT_PLAYER_CLASS], skill);
 	weapon = BG_GrenadeTypeForTeam( teamNum );
 
 	clip = BG_FindClipForWeapon(weapon);
@@ -2909,8 +2949,23 @@ qboolean BG_AddMagicAmmo( playerState_t *ps, int *skill, int teamNum, int numOfC
 		}
 	}
 
+	/* Original knife refill grants ownership and fills the clip even when
+	 * the knife bit was absent. Reward32 selects the configured capacity. */
+	clip = BG_FindClipForWeapon(WP_KNIFE);
+	maxammo = (rewards ? (rewards[SK_LIGHT_WEAPONS] & 32u) != 0 : skill[SK_LIGHT_WEAPONS] >= 5) ?
+		GetAmmoTableData(WP_KNIFE)->maxammo : 1;
+	if(ps->ammoclip[clip] < maxammo) {
+		if(!numOfClips) return qtrue;
+		ps->ammoclip[clip] += numOfClips;
+		if(ps->ammoclip[clip] > maxammo) ps->ammoclip[clip] = maxammo;
+		COM_BitSet(ps->weapons, WP_KNIFE);
+		ammoAdded = qtrue;
+	}
+
 	if( COM_BitCheck( ps->weapons, WP_MEDIC_SYRINGE ) ) {
-		i = skill[ SK_FIRST_AID ] >= 2 ? 12 : 10;
+		/* Original BG_AddMagicAmmo: ammoTableMP[11].maxammo + reward bonus.
+		 * Keep the current skill adapter; do not discard custom weapon limits. */
+		i = GetAmmoTableData(WP_MEDIC_SYRINGE)->maxammo + ((rewards ? (rewards[SK_FIRST_AID] & 4u) != 0 : skill[ SK_FIRST_AID ] >= 2) ? 2 : 0);
 
 		clip = BG_FindClipForWeapon( WP_MEDIC_SYRINGE );
 
@@ -2929,11 +2984,42 @@ qboolean BG_AddMagicAmmo( playerState_t *ps, int *skill, int teamNum, int numOfC
 		}
 	}
 
+	/* Original weapon 43: bit2 disables refill; bit4 caps it at one.
+	 * Otherwise First Aid reward bit4 adds two to the script capacity. */
+	if(COM_BitCheck(ps->weapons, WP_MEDIC_ADRENALINE) && !(adrenalineOptions & 2u)) {
+		clip = BG_FindClipForWeapon(WP_MEDIC_ADRENALINE);
+		maxammo = (adrenalineOptions & 4u) ? 1 : GetAmmoTableData(WP_MEDIC_ADRENALINE)->maxammo +
+			((rewards ? (rewards[SK_FIRST_AID] & 4u) != 0 : skill[SK_FIRST_AID] >= 2) ? 2 : 0);
+		if(ps->ammoclip[clip] < maxammo) {
+			if(!numOfClips) return qtrue;
+			ps->ammoclip[clip] += numOfClips;
+			if(ps->ammoclip[clip] > maxammo) ps->ammoclip[clip] = maxammo;
+			ammoAdded = qtrue;
+		}
+	}
+
+	/* Original BG_AddMagicAmmo: weapon 47, ammoTableMP[47].maxammo.
+	 * Poison syringes refill their clip, without First Aid bonus. */
+	if( COM_BitCheck(ps->weapons, WP_POISON_SYRINGE) ) {
+		clip = BG_FindClipForWeapon(WP_POISON_SYRINGE);
+		maxammo = GetAmmoTableData(WP_POISON_SYRINGE)->maxammo;
+		if(ps->ammoclip[clip] < maxammo) {
+			if(!numOfClips) return qtrue;
+			ps->ammoclip[clip] += numOfClips;
+			if(ps->ammoclip[clip] > maxammo) ps->ammoclip[clip] = maxammo;
+			ammoAdded = qtrue;
+		}
+	}
+
 	// Gordon: now other weapons
 	for(i = 0; reloadableWeapons[i] >= 0; i++) {
 		weapon = reloadableWeapons[i];
 		if (COM_BitCheck(ps->weapons, weapon)) {
 			maxammo = BG_MaxAmmoForWeapon( weapon, skill );
+			if(rewards) {
+				maxammo = NITMOD_AmmoRewardCapacity(weapon, rewards,
+					GetAmmoTableData(weapon)->maxammo, GetAmmoTableData(weapon)->maxclip);
+			}
 
 			// Handle weapons that just use clip, and not ammo
 			if( weapon == WP_FLAMETHROWER ) {
@@ -3098,6 +3184,18 @@ int BG_EffectiveMaxHealth(const playerState_t *ps) {
 }
 
 qboolean	BG_CanItemBeGrabbed( const entityState_t *ent, const playerState_t *ps, int *skill, int teamNum ) {
+	return BG_CanItemBeGrabbedRewards(ent, ps, skill, teamNum, NULL);
+}
+
+qboolean BG_CanItemBeGrabbedRewards( const entityState_t *ent, const playerState_t *ps, int *skill, int teamNum, const unsigned int *rewards ) {
+	return BG_CanItemBeGrabbedOptions(ent, ps, skill, teamNum, rewards, 2u);
+}
+
+qboolean BG_CanItemBeGrabbedOptions( const entityState_t *ent, const playerState_t *ps, int *skill, int teamNum, const unsigned int *rewards, unsigned int adrenalineOptions ) {
+	return BG_CanItemBeGrabbedWar(ent, ps, skill, teamNum, rewards, adrenalineOptions, 0);
+}
+
+qboolean BG_CanItemBeGrabbedWar( const entityState_t *ent, const playerState_t *ps, int *skill, int teamNum, const unsigned int *rewards, unsigned int adrenalineOptions, int war ) {
 	gitem_t	*item;
 
 	if ( ent->modelindex < 1 || ent->modelindex >= bg_numItems ) {
@@ -3110,10 +3208,9 @@ qboolean	BG_CanItemBeGrabbed( const entityState_t *ent, const playerState_t *ps,
 	case IT_WEAPON:
 		if( item->giTag == WP_AMMO ) {
 			// magic ammo for any two-handed weapon
-			// xkan, 11/21/2002 - only pick up if ammo is not full, numClips is 0, so ps will
-			// NOT be changed (I know, it places the burden on the programmer, rather than the 
-			// compiler, to ensure that).
-			return BG_AddMagicAmmo( (playerState_t *)ps, skill, teamNum, 0);	// Arnout: had to cast const away
+			/* Zero clips leaves ammo unchanged; original helmet restoration
+			 * still mutates EF_HEADSHOT during this probe. */
+			return BG_AddMagicAmmoWar( (playerState_t *)ps, skill, teamNum, 0, rewards, adrenalineOptions, war);
 		}
 
 		return qtrue;
@@ -4508,29 +4605,23 @@ int BG_MaxAmmoForWeapon( weapon_t weaponNum, int *skill ) {
 		case WP_GRENADE_PINEAPPLE:
 		case WP_GRENADE_LAUNCHER:
 			// FIXME: this is class dependant, not ammo table
-			if( skill[SK_EXPLOSIVES_AND_CONSTRUCTION] >= 1 )
-				return( GetAmmoTableData(weaponNum)->maxammo + 4 );
-			else if( skill[SK_FIRST_AID] >= 1 )
+			if( skill[SK_EXPLOSIVES_AND_CONSTRUCTION] < 1 && skill[SK_FIRST_AID] >= 1 )
 				return( GetAmmoTableData(weaponNum)->maxammo + 1 );
 			else
 				return( GetAmmoTableData(weaponNum)->maxammo );
 			break;
-		/*case WP_MOBILE_MG42:
-		case WP_PANZERFAUST:
+		/* Original heavy reward bit 32; current shared API receives levels.
+		 * Panzerfaust deliberately has no heavy reward capacity bonus. */
 		case WP_FLAMETHROWER:
-			if( skill[SK_HEAVY_WEAPONS] >= 1 )
-				return( GetAmmoTableData(weaponNum)->maxammo + GetAmmoTableData(weaponNum)->maxclip );
-			else
-				return( GetAmmoTableData(weaponNum)->maxammo );
-			break;
+			return GetAmmoTableData(weaponNum)->maxammo + (skill[SK_HEAVY_WEAPONS] >= 5 ? 50 : 0);
+		case WP_MOBILE_MG42:
+		case WP_MOBILE_MG42_SET:
+			return GetAmmoTableData(weaponNum)->maxammo + (skill[SK_HEAVY_WEAPONS] >= 5 ? GetAmmoTableData(weaponNum)->maxclip : 0);
 		case WP_MORTAR:
 		case WP_MORTAR_SET:
-			if( skill[SK_HEAVY_WEAPONS] >= 1 )
-				return( GetAmmoTableData(weaponNum)->maxammo + 2 );
-			else
-				return( GetAmmoTableData(weaponNum)->maxammo );
-			break;*/
+			return GetAmmoTableData(weaponNum)->maxammo + (skill[SK_HEAVY_WEAPONS] >= 5 ? 2 : 0);
 		case WP_MEDIC_SYRINGE:
+		case WP_MEDIC_ADRENALINE:
 			if( skill[SK_FIRST_AID] >= 2 )
 				return( GetAmmoTableData(weaponNum)->maxammo + 2 );
 			else
@@ -4547,7 +4638,7 @@ int BG_MaxAmmoForWeapon( weapon_t weaponNum, int *skill ) {
 		case WP_GARAND_SCOPE:
 		case WP_K43_SCOPE:
 		case WP_FG42SCOPE:
-			if( skill[SK_MILITARY_INTELLIGENCE_AND_SCOPED_WEAPONS] >= 1 )
+			if( skill[SK_MILITARY_INTELLIGENCE_AND_SCOPED_WEAPONS] >= 1 || skill[SK_LIGHT_WEAPONS] >= 1 )
 				return( GetAmmoTableData(weaponNum)->maxammo + GetAmmoTableData(weaponNum)->maxclip );
 			else
 				return( GetAmmoTableData(weaponNum)->maxammo );

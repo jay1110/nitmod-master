@@ -2,6 +2,9 @@
 #include <limits.h>
 
 static int searchReplies, searchLastTime;
+/* Original UI_BuildFindPlayerList accepts while total rows < 0xf.
+ * One row is reserved for progress, leaving fourteen server matches. */
+#define NITMOD_FINDPLAYER_ROWS 15
 
 static qboolean UI_StatusHasPlayer(const serverStatusInfo_t *info, const char *needle) {
     int row;
@@ -64,7 +67,7 @@ void UI_BuildFindPlayerList(qboolean force) {
                 if(UI_StatusHasPlayer(&info,uiInfo.findPlayerName)) {
                     int count = uiInfo.numFoundPlayerServers-1;
                     for(j=0;j<count;++j) if(!Q_stricmp(uiInfo.foundPlayerServerAddresses[j],slot->adrstr)) break;
-                    if(j==count && count < MAX_FOUNDPLAYER_SERVERS-1) {
+                    if(j==count && count < NITMOD_FINDPLAYER_ROWS-1) {
                         Q_strncpyz(uiInfo.foundPlayerServerAddresses[count],slot->adrstr,MAX_ADDRESSLENGTH);
                         Q_strncpyz(uiInfo.foundPlayerServerNames[count],slot->name,MAX_ADDRESSLENGTH);
                         ++uiInfo.numFoundPlayerServers;
@@ -75,7 +78,7 @@ void UI_BuildFindPlayerList(qboolean force) {
                 UI_QueryServerStatus(slot->adrstr,NULL); slot->valid=qfalse;
             }
         }
-        if(uiInfo.numFoundPlayerServers == MAX_FOUNDPLAYER_SERVERS) {
+        if(uiInfo.numFoundPlayerServers >= NITMOD_FINDPLAYER_ROWS) {
             if(slot->valid) UI_QueryServerStatus(slot->adrstr,NULL);
             slot->valid=qfalse; continue;
         }
@@ -88,7 +91,7 @@ void UI_BuildFindPlayerList(qboolean force) {
         }
         if(slot->valid) active=1;
     }
-    if(uiInfo.numFoundPlayerServers == MAX_FOUNDPLAYER_SERVERS) {
+    if(uiInfo.numFoundPlayerServers >= NITMOD_FINDPLAYER_ROWS) {
         for(i=0;i<MAX_SERVERSTATUSREQUESTS;++i) if(uiInfo.pendingServerStatus.server[i].valid) {
             UI_QueryServerStatus(uiInfo.pendingServerStatus.server[i].adrstr,NULL);
             uiInfo.pendingServerStatus.server[i].valid=qfalse;

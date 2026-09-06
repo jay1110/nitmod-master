@@ -89,7 +89,7 @@ const char *CG_NitmodCrosshairEntityName(int entity, qboolean construction) {
 void CG_NitmodDrawCrosshairLabel(const char *text, const vec4_t color) {
     vec4_t tint;
     nitmodHudAnchor_t previous;
-    if(!text || !*text || !color || !NITMOD_UsesOriginalProtocol()) return;
+    if(!text || !*text || !color || !NITMOD_UsesNitmodHud()) return;
     Vector4Copy(color, tint);
     previous = CG_NitmodHudAnchor(NITMOD_HUD_CENTER);
     CG_Text_Paint_Ext(320 - CG_Text_Width_Ext(text, .2f, 0, &cgs.media.limboFont2) * .5f,
@@ -101,7 +101,7 @@ void CG_NitmodDrawCrosshairHealth(int health, int maxHealth, const vec4_t color)
     float fraction;
     vec4_t fill, background;
     nitmodHudAnchor_t previous;
-    if(!color || !NITMOD_UsesOriginalProtocol() || maxHealth <= 0) return;
+    if(!color || !NITMOD_UsesNitmodHud() || maxHealth <= 0) return;
     fraction = health <= 0 ? 0 : health >= maxHealth ? 1 : (float)health / maxHealth;
     Vector4Set(fill, 1, fraction, fraction, (.25f + fraction * .5f) * color[3]);
     Vector4Set(background, 1, 1, 1, .25f * color[3]);
@@ -130,7 +130,8 @@ int CG_NitmodCrosshairMaxHealth(int client) {
     if(!ci->infoValid || ci->cls < PC_SOLDIER || ci->cls > PC_COVERTOPS) return 0;
     health = NITMOD_ClassMaxHealth(ci->cls);
     if(health > 0) return health;
-    if(NITMOD_ParseProtocolInteger(Info_ValueForKey(CG_ConfigString(39), keys[ci->cls]), &health) && health > 0)
+    if(NITMOD_UsesOriginalProtocol() &&
+       NITMOD_ParseProtocolInteger(Info_ValueForKey(CG_ConfigString(39), keys[ci->cls]), &health) && health > 0)
         return health;
     health = 100;
     viewer = cg.snap->ps.clientNum;
@@ -176,7 +177,7 @@ qboolean CG_NitmodDrawCrosshairPlayer(int client, qboolean disguised, int health
     qhandle_t icon;
     vec4_t tint;
     nitmodHudAnchor_t previous;
-    if(!NITMOD_UsesOriginalProtocol() || client < 0 || client >= MAX_CLIENTS ||
+    if(!NITMOD_UsesNitmodHud() || (disguised && !NITMOD_UsesOriginalProtocol()) || client < 0 || client >= MAX_CLIENTS ||
        !color || !cg_drawCrosshairNames.integer) return qfalse;
     ci = &cgs.clientinfo[client];
     if(!ci->infoValid) return qfalse;
@@ -218,13 +219,15 @@ qboolean CG_NitmodScanMine(const centity_t *cent) {
     const entityState_t *es;
     vec3_t end;
     trace_t trace;
-    int client, i;
-    if(!cent || !NITMOD_UsesOriginalProtocol() || !HintClient(&client) ||
+    int client, i, owner, team;
+    if(!cent || !NITMOD_UsesNitmodHud() || !HintClient(&client) ||
        !cg.refdef_current || cg.renderingThirdPerson || cgs.gametype == 8) return qfalse;
     es = &cent->currentState;
+    team = NITMOD_UsesOriginalProtocol() ? (es->otherEntityNum2 ? TEAM_AXIS : TEAM_ALLIES) : es->teamNum;
+    owner = NITMOD_UsesOriginalProtocol() ? es->otherEntityNum : es->clientNum;
     if((es->weapon != WP_LANDMINE && es->weapon != WP_POISON_MINE) || es->eType != ET_MISSILE ||
        es->teamNum < 0 || es->teamNum >= 4 ||
-       cgs.clientinfo[client].team != (es->otherEntityNum2 ? TEAM_AXIS : TEAM_ALLIES)) return qfalse;
+       cgs.clientinfo[client].team != team) return qfalse;
     VectorMA(cg.refdef_current->vieworg, 512, cg.refdef_current->viewaxis[0], end);
     CG_Trace(&trace, cg.refdef_current->vieworg, NULL, NULL, end, -1, CONTENTS_SOLID);
     for(i = 0; i < 3; ++i) {
@@ -232,7 +235,7 @@ qboolean CG_NitmodScanMine(const centity_t *cent) {
         if(!(delta * delta < 256)) return qfalse;
     }
     /* Original owner is otherEntityNum, not clientNum or spotting density. */
-    mineOwner = es->otherEntityNum >= 0 && es->otherEntityNum < MAX_CLIENTS ? es->otherEntityNum : -1;
+    mineOwner = owner >= 0 && owner < MAX_CLIENTS ? owner : -1;
     mineObserved = cg.time;
     return mineOwner >= 0;
 }
@@ -243,7 +246,7 @@ qboolean CG_NitmodDrawMineHint(void) {
     nitmodHudAnchor_t previous;
     int owner = mineOwner;
     mineOwner = -1; /* The original consumes the candidate once per frame. */
-    if(owner < 0 || owner >= MAX_CLIENTS || !NITMOD_UsesOriginalProtocol() ||
+    if(owner < 0 || owner >= MAX_CLIENTS || !NITMOD_UsesNitmodHud() ||
        !cg.snap || cg.renderingThirdPerson || cgs.gametype == 8 || cg_drawCrosshair.integer < 0 ||
        mineObserved != cg.time || !cgs.clientinfo[owner].infoValid) return qfalse;
     Com_sprintf(text, sizeof(text), "%s^7's landmine", cgs.clientinfo[owner].name);
@@ -313,7 +316,7 @@ qboolean CG_NitmodScanDynamite(const centity_t *cent) {
     int client, team, i;
     vec3_t end;
     trace_t trace;
-    if(!cent || !NITMOD_UsesOriginalProtocol() || !HintClient(&client) ||
+    if(!cent || !NITMOD_UsesNitmodHud() || !HintClient(&client) ||
        !cg.refdef_current || cg.renderingThirdPerson || cgs.gametype == 8) return qfalse;
     es = &cent->currentState; team = cgs.clientinfo[client].team;
     if((team != TEAM_AXIS && team != TEAM_ALLIES) || es->eType != ET_MISSILE ||
@@ -327,6 +330,9 @@ qboolean CG_NitmodScanDynamite(const centity_t *cent) {
         if(!(delta * delta < 256)) return qfalse;
     }
     dynamiteHint.state = *es; dynamiteHint.observed = cg.time; dynamiteHint.active = qtrue;
+    /* Reconstructed qagame transmits its configured fuse in time. Keep the
+     * original snapshot untouched; only normalize our private hint copy. */
+    if(!NITMOD_UsesOriginalProtocol()) dynamiteHint.state.time2 = es->time;
     cg.crosshairClientNum = es->number; cg.crosshairClientTime = cg.time;
     return qtrue;
 }
@@ -339,7 +345,7 @@ qboolean CG_NitmodDrawDynamiteHint(void) {
     double remaining;
     float fraction;
     int client;
-    if(!dynamiteHint.active || !NITMOD_UsesOriginalProtocol() || !HintClient(&client) ||
+    if(!dynamiteHint.active || !NITMOD_UsesNitmodHud() || !HintClient(&client) ||
        cg.renderingThirdPerson || cgs.gametype == 8 || cg_drawCrosshair.integer < 0 ||
        cg.crosshairClientNum != es->number || (double)cg.time - dynamiteHint.observed < 0 ||
        (double)cg.time - dynamiteHint.observed >= 1000 ||

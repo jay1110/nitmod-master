@@ -11,15 +11,11 @@ int G_NITMOD_CanCheckWeapons( const gentity_t *entity, int isDemoClient ) {
 }
 
 unsigned int G_NITMOD_FirstAidUnlocks( const gclient_t *client ) {
-    unsigned int unlocks = 0;
     if( !client ) return 0;
-    if( client->sess.skill[SK_FIRST_AID] >= 2 ) unlocks |= 4u;
-    if( client->sess.skill[SK_FIRST_AID] >= 4 ) unlocks |= 16u;
     /* Original client+0xed8 is a reward mask rather than a numeric level.
      * Its sixth First Aid reward (bit 5) enables the optional non-medic
      * regeneration path in ClientTimerActions. */
-    if( client->sess.skill[SK_FIRST_AID] >= 5 ) unlocks |= 32u;
-    return unlocks;
+    return client->sess.nitmodSkillMasks[SK_FIRST_AID];
 }
 
 int G_NITMOD_CheckAdrenaline( gentity_t *entity, int isDemoClient,

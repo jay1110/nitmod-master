@@ -1389,8 +1389,8 @@ static qboolean CG_Debriefing_DrawContent(void) {
 	if( !trap_Key_GetCatcher() ) {
 		trap_Key_SetCatcher( KEYCATCH_CGAME );
 	}
-	if(cgs.dbMode == 0 && CG_NitmodMapVoteEnabled() && cgs.nitmodMapVoteListReceived)
-		CG_NitmodMapVoteRequest();
+	if(cgs.dbMode == 0 && CG_NitmodMapVoteEnabled())
+		CG_NitmodMapVoteRequestTally();
 
 	switch( cgs.dbMode ) {
 		case 2:

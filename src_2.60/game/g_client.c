@@ -3,6 +3,7 @@
 #include "g_nitmod_legacy_cvars.h"
 #include "g_nitmod_abilities.h"
 #include "nitmod_protocol.h"
+#include "nitmod_secondary_weapon.h"
 #include <limits.h>
 
 void NITMOD_SetSpawnProtection(gclient_t *client, qboolean revived) {
@@ -724,6 +725,8 @@ AddExtraSpawnAmmo
 */
 static void AddExtraSpawnAmmo( gclient_t *client, weapon_t weaponNum)
 {
+	/* Original AddExtraSpawnAmmo: war modes 1..4 suppress reward ammo. */
+	if ((unsigned int)G_NITMOD_ConfiguredWarMode() - 1u < 4u) return;
 	switch( weaponNum ) {
 		//case WP_KNIFE:
 		case WP_LUGER:
@@ -733,29 +736,29 @@ static void AddExtraSpawnAmmo( gclient_t *client, weapon_t weaponNum)
 		case WP_CARBINE:
 		case WP_KAR98:
 		case WP_SILENCED_COLT:
-			if( client->sess.skill[SK_LIGHT_WEAPONS] >= 1 )
+			if( (client->sess.nitmodSkillMasks[SK_LIGHT_WEAPONS] & 2u) )
 				client->ps.ammo[BG_FindAmmoForWeapon(weaponNum)] += GetAmmoTableData(weaponNum)->maxclip;
 			break;
 		case WP_MP40:
 		case WP_THOMPSON:
-			if( (client->sess.skill[SK_FIRST_AID] >= 1 && client->sess.playerType == PC_MEDIC) || client->sess.skill[SK_LIGHT_WEAPONS] >= 1 ) {
+			if( ((client->sess.nitmodSkillMasks[SK_FIRST_AID] & 2u) && client->sess.playerType == PC_MEDIC) || (client->sess.nitmodSkillMasks[SK_LIGHT_WEAPONS] & 2u) ) {
 				client->ps.ammo[BG_FindAmmoForWeapon(weaponNum)] += GetAmmoTableData(weaponNum)->maxclip;
 			}
 			break;
 		case WP_M7:
 		case WP_GPG40:
-			if( client->sess.skill[SK_EXPLOSIVES_AND_CONSTRUCTION] >= 1 )
+			if( (client->sess.nitmodSkillMasks[SK_EXPLOSIVES_AND_CONSTRUCTION] & 2u) )
 				client->ps.ammo[BG_FindAmmoForWeapon(weaponNum)] += 4;
 			break;
 		case WP_GRENADE_PINEAPPLE:
 		case WP_GRENADE_LAUNCHER:
 			if( client->sess.playerType == PC_ENGINEER ) {
-				if( client->sess.skill[SK_EXPLOSIVES_AND_CONSTRUCTION] >= 1 ) {
+				if( (client->sess.nitmodSkillMasks[SK_EXPLOSIVES_AND_CONSTRUCTION] & 2u) ) {
 					client->ps.ammoclip[BG_FindAmmoForWeapon(weaponNum)] += 4;
 				}
 			}
 			if( client->sess.playerType == PC_MEDIC ) {
-				if( client->sess.skill[SK_FIRST_AID] >= 1 ) {
+				if( (client->sess.nitmodSkillMasks[SK_FIRST_AID] & 2u) ) {
 					client->ps.ammoclip[BG_FindAmmoForWeapon(weaponNum)] += 1;
 				}
 			}
@@ -773,19 +776,19 @@ static void AddExtraSpawnAmmo( gclient_t *client, weapon_t weaponNum)
 			break;*/
 		case WP_MEDIC_SYRINGE:
 		case WP_MEDIC_ADRENALINE:
-			if( client->sess.skill[SK_FIRST_AID] >= 2 )
+			if( (client->sess.nitmodSkillMasks[SK_FIRST_AID] & 4u) )
  				client->ps.ammoclip[BG_FindAmmoForWeapon(weaponNum)] += 2;
 			break;
 		case WP_GARAND:
 		case WP_K43:
 		case WP_FG42:
-			if( client->sess.skill[SK_MILITARY_INTELLIGENCE_AND_SCOPED_WEAPONS] >= 1 || client->sess.skill[SK_LIGHT_WEAPONS] >= 1 )
+			if( (client->sess.nitmodSkillMasks[SK_MILITARY_INTELLIGENCE_AND_SCOPED_WEAPONS] & 2u) || (client->sess.nitmodSkillMasks[SK_LIGHT_WEAPONS] & 2u) )
 				client->ps.ammo[BG_FindAmmoForWeapon(weaponNum)] += GetAmmoTableData(weaponNum)->maxclip;
 			break;
 		case WP_GARAND_SCOPE:
 		case WP_K43_SCOPE:
 		case WP_FG42SCOPE:
-			if( client->sess.skill[SK_MILITARY_INTELLIGENCE_AND_SCOPED_WEAPONS] >= 1 )
+			if( (client->sess.nitmodSkillMasks[SK_MILITARY_INTELLIGENCE_AND_SCOPED_WEAPONS] & 2u) || (client->sess.nitmodSkillMasks[SK_LIGHT_WEAPONS] & 2u) )
 				client->ps.ammo[BG_FindAmmoForWeapon(weaponNum)] += GetAmmoTableData(weaponNum)->maxclip;
 			break;
 		default:
@@ -805,6 +808,35 @@ qboolean AddWeaponToPlayer( gclient_t *client, weapon_t weapon, int ammo, int am
 	Bot_Event_AddWeapon(client->ps.clientNum, Bot_WeaponGameToBot(weapon));
 
 	return qtrue;
+}
+
+/* Preserve the already selected primary: original grants secondary before
+ * primary, whereas the ET 2.60 adapter grants them in the opposite order. */
+static qboolean G_NITMOD_GrantSelectedSecondary(gclient_t *client, int dualSMG,
+    unsigned int medicOptions) {
+    weapon_t weapon = NITMOD_CorrectSecondaryWeapon(client->sess.playerWeapon2,
+        client->sess.sessionTeam, client->sess.skill[SK_LIGHT_WEAPONS],
+        client->sess.skill[SK_HEAVY_WEAPONS], client->sess.playerType,
+        dualSMG, medicOptions);
+    const ammotable_t *table;
+    int alternate;
+    if(weapon == WP_NONE)
+        weapon = NITMOD_DefaultSecondaryWeapon(client->sess.sessionTeam,
+            client->sess.playerType, client->sess.nitmodSkillMasks[SK_LIGHT_WEAPONS],
+            client->sess.nitmodSkillMasks[SK_HEAVY_WEAPONS], client->pers.clientFlags);
+    table = GetAmmoTableData(weapon);
+    if(BG_IsAkimboWeapon(weapon))
+        client->ps.ammoclip[BG_FindClipForWeapon(BG_AkimboSidearm(weapon))] = table->defaultStartingClip;
+    /* If the corrected secondary is already the primary, its later original
+     * primary grant wins. Do not overwrite that class-specific ammo here. */
+    if(weapon != client->ps.weapon)
+        AddWeaponToPlayer(client, weapon, table->defaultStartingAmmo, table->defaultStartingClip, qfalse);
+    alternate = client->sess.playerType == PC_COVERTOPS ? weapAlts[weapon] : WP_NONE;
+    if(alternate != WP_NONE) {
+        table = GetAmmoTableData(alternate);
+        AddWeaponToPlayer(client, alternate, table->defaultStartingAmmo, table->defaultStartingClip, qfalse);
+    }
+    return qtrue;
 }
 
 void BotSetPOW(int entityNum, qboolean isPOW);
@@ -957,7 +989,11 @@ void SetWolfSpawnWeapons( gclient_t *client )
 		}
 	}
 
-	AddWeaponToPlayer( client, WP_KNIFE, 1, 0, qtrue );
+	/* Original SetWolfSpawnWeapons: Light Weapons reward bit32 selects
+	 * the configured starting clip; otherwise exactly one knife. */
+	AddWeaponToPlayer( client, WP_KNIFE, 0,
+		(client->sess.nitmodSkillMasks[SK_LIGHT_WEAPONS] & 32u) ?
+		GetAmmoTableData(WP_KNIFE)->defaultStartingClip : 1, qtrue );
 
 	client->ps.weaponstate = WEAPON_READY;
 
@@ -970,7 +1006,7 @@ void SetWolfSpawnWeapons( gclient_t *client )
 		AddWeaponToPlayer( client, WP_PLIERS, 0, 1, qfalse );
 
 		if( g_knifeonly.integer != 1 ) {
-			if( client->sess.skill[SK_BATTLE_SENSE] >= 1 ) {
+			if( client->sess.nitmodSkillMasks[SK_BATTLE_SENSE] & 2u ) {
 				if( AddWeaponToPlayer( client, WP_BINOCULARS, 1, 0, qfalse ) ) {
 					client->ps.stats[STAT_KEYS] |= ( 1 << INV_BINOCS );
 				}
@@ -1043,7 +1079,7 @@ void SetWolfSpawnWeapons( gclient_t *client )
 				AddWeaponToPlayer( client, WP_GRENADE_PINEAPPLE, 0, 1, qfalse );
 			}
 		} else if( pc == PC_MEDIC ) {
-			if( client->sess.skill[SK_BATTLE_SENSE] >= 1 ) {
+			if( client->sess.nitmodSkillMasks[SK_BATTLE_SENSE] & 2u ) {
 				if( AddWeaponToPlayer( client, WP_BINOCULARS, 1, 0, qfalse ) ) {
 					client->ps.stats[STAT_KEYS] |= ( 1 << INV_BINOCS );
 				}
@@ -1062,7 +1098,7 @@ void SetWolfSpawnWeapons( gclient_t *client )
 				AddWeaponToPlayer( client, WP_GRENADE_PINEAPPLE, 0, 1, qfalse );
 			}
 		} else if ( pc == PC_SOLDIER ) {
-			if( client->sess.skill[SK_BATTLE_SENSE] >= 1 ) {
+			if( client->sess.nitmodSkillMasks[SK_BATTLE_SENSE] & 2u ) {
 				if( AddWeaponToPlayer( client, WP_BINOCULARS, 1, 0, qfalse ) ) {
 					client->ps.stats[STAT_KEYS] |= ( 1 << INV_BINOCS );
 				}
@@ -1161,76 +1197,7 @@ void SetWolfSpawnWeapons( gclient_t *client )
 			}
 		}
 
-		switch( client->sess.sessionTeam ) {
-			case TEAM_AXIS:
-				switch( pc ) {
-					case PC_SOLDIER:
-						if( client->sess.skill[SK_HEAVY_WEAPONS] >= 4 && client->sess.playerWeapon2 == WP_MP40 ) {
-							AddWeaponToPlayer( client, WP_MP40, 2*(GetAmmoTableData(WP_MP40)->defaultStartingAmmo), GetAmmoTableData(WP_MP40)->defaultStartingClip, qtrue );
-						} else if( client->sess.skill[SK_LIGHT_WEAPONS] >= 4 && client->sess.playerWeapon2 == WP_AKIMBO_LUGER ) {
-							client->ps.ammoclip[BG_FindClipForWeapon(BG_AkimboSidearm(WP_AKIMBO_LUGER))] = GetAmmoTableData(WP_AKIMBO_LUGER)->defaultStartingClip;
-							AddWeaponToPlayer( client, WP_AKIMBO_LUGER, GetAmmoTableData(WP_AKIMBO_LUGER)->defaultStartingAmmo, GetAmmoTableData(WP_AKIMBO_LUGER)->defaultStartingClip, qfalse );
-						} else {
-							AddWeaponToPlayer( client, WP_LUGER, GetAmmoTableData(WP_LUGER)->defaultStartingAmmo, GetAmmoTableData(WP_LUGER)->defaultStartingClip, qfalse );
-						}
-						break;
-
-					case PC_COVERTOPS:
-						if( client->sess.skill[SK_LIGHT_WEAPONS] >= 4 && ( client->sess.playerWeapon2 == WP_AKIMBO_SILENCEDLUGER || client->sess.playerWeapon2 == WP_AKIMBO_LUGER ) ) {
-							client->ps.ammoclip[BG_FindClipForWeapon(BG_AkimboSidearm(WP_AKIMBO_SILENCEDLUGER))] = GetAmmoTableData(WP_AKIMBO_SILENCEDLUGER)->defaultStartingClip;
-							AddWeaponToPlayer( client, WP_AKIMBO_SILENCEDLUGER, GetAmmoTableData(WP_AKIMBO_SILENCEDLUGER)->defaultStartingAmmo, GetAmmoTableData(WP_AKIMBO_SILENCEDLUGER)->defaultStartingClip, qfalse );
-						} else {
-							AddWeaponToPlayer( client, WP_LUGER, GetAmmoTableData(WP_LUGER)->defaultStartingAmmo, GetAmmoTableData(WP_LUGER)->defaultStartingClip, qfalse );
-							AddWeaponToPlayer( client, WP_SILENCER, GetAmmoTableData(WP_SILENCER)->defaultStartingAmmo, GetAmmoTableData(WP_SILENCER)->defaultStartingClip, qfalse );
-							client->pmext.silencedSideArm = 1;
-						}
-						break;
-
-					default:
-						if( client->sess.skill[SK_LIGHT_WEAPONS] >= 4 && client->sess.playerWeapon2 == WP_AKIMBO_LUGER ) {
-							client->ps.ammoclip[BG_FindClipForWeapon(BG_AkimboSidearm(WP_AKIMBO_LUGER))] = GetAmmoTableData(WP_AKIMBO_LUGER)->defaultStartingClip;
-							AddWeaponToPlayer( client, WP_AKIMBO_LUGER, GetAmmoTableData(WP_AKIMBO_LUGER)->defaultStartingAmmo, GetAmmoTableData(WP_AKIMBO_LUGER)->defaultStartingClip, qfalse );
-						} else {
-							AddWeaponToPlayer( client, WP_LUGER, GetAmmoTableData(WP_LUGER)->defaultStartingAmmo, GetAmmoTableData(WP_LUGER)->defaultStartingClip, qfalse );
-						}
-						break;
-				}
-				break;
-			default:
-				switch( pc ) {
-					case PC_SOLDIER:
-						if( client->sess.skill[SK_HEAVY_WEAPONS] >= 4 && client->sess.playerWeapon2 == WP_THOMPSON ) {
-							AddWeaponToPlayer( client, WP_THOMPSON, 2*(GetAmmoTableData(WP_THOMPSON)->defaultStartingAmmo), GetAmmoTableData(WP_THOMPSON)->defaultStartingClip, qtrue );
-						} else if( client->sess.skill[SK_LIGHT_WEAPONS] >= 4 && client->sess.playerWeapon2 == WP_AKIMBO_COLT ) {
-							client->ps.ammoclip[BG_FindClipForWeapon(BG_AkimboSidearm(WP_AKIMBO_COLT))] = GetAmmoTableData(WP_AKIMBO_COLT)->defaultStartingClip;
-							AddWeaponToPlayer( client, WP_AKIMBO_COLT, GetAmmoTableData(WP_AKIMBO_COLT)->defaultStartingAmmo, GetAmmoTableData(WP_AKIMBO_COLT)->defaultStartingClip, qfalse );
-						} else {
-							AddWeaponToPlayer( client, WP_COLT, GetAmmoTableData(WP_COLT)->defaultStartingAmmo, GetAmmoTableData(WP_COLT)->defaultStartingClip, qfalse );
-						}
-						break;
-
-					case PC_COVERTOPS:
-						if( client->sess.skill[SK_LIGHT_WEAPONS] >= 4 && ( client->sess.playerWeapon2 == WP_AKIMBO_SILENCEDCOLT || client->sess.playerWeapon2 == WP_AKIMBO_COLT ) ) {
-							client->ps.ammoclip[BG_FindClipForWeapon(BG_AkimboSidearm(WP_AKIMBO_SILENCEDCOLT))] = GetAmmoTableData(WP_AKIMBO_SILENCEDCOLT)->defaultStartingClip;
-							AddWeaponToPlayer( client, WP_AKIMBO_SILENCEDCOLT, GetAmmoTableData(WP_AKIMBO_SILENCEDCOLT)->defaultStartingAmmo, GetAmmoTableData(WP_AKIMBO_SILENCEDCOLT)->defaultStartingClip, qfalse );
-						} else {
-							AddWeaponToPlayer( client, WP_COLT, GetAmmoTableData(WP_COLT)->defaultStartingAmmo, GetAmmoTableData(WP_COLT)->defaultStartingClip, qfalse );
-							AddWeaponToPlayer( client, WP_SILENCED_COLT, GetAmmoTableData(WP_SILENCED_COLT)->defaultStartingAmmo, GetAmmoTableData(WP_SILENCED_COLT)->defaultStartingClip, qfalse );
-							client->pmext.silencedSideArm = 1;
-						}
-						break;
-
-					default:
-						if( client->sess.skill[SK_LIGHT_WEAPONS] >= 4 && client->sess.playerWeapon2 == WP_AKIMBO_COLT ) {
-							client->ps.ammoclip[BG_FindClipForWeapon(BG_AkimboSidearm(WP_AKIMBO_COLT))] = GetAmmoTableData(WP_AKIMBO_COLT)->defaultStartingClip;
-							AddWeaponToPlayer( client, WP_AKIMBO_COLT, GetAmmoTableData(WP_AKIMBO_COLT)->defaultStartingAmmo, GetAmmoTableData(WP_AKIMBO_COLT)->defaultStartingClip, qfalse );
-						} else {
-							AddWeaponToPlayer( client, WP_COLT, GetAmmoTableData(WP_COLT)->defaultStartingAmmo, GetAmmoTableData(WP_COLT)->defaultStartingClip, qfalse );
-						}
-						break;
-				}
-		}
-
+		G_NITMOD_GrantSelectedSecondary(client, g_dualSMG.integer, medicOptions);
 		if( pc == PC_SOLDIER ) {
 			if( client->sess.sessionTeam == TEAM_AXIS ) {
 				AddWeaponToPlayer( client, WP_GRENADE_LAUNCHER,  0, 4, qfalse );
@@ -1347,7 +1314,7 @@ void G_NITMOD_SetHealthLimits(gclient_t *client, int numMedics, int war, int gam
 	maximum = 100;
 	if(!war && gametype != 8) {
 		maximum += numMedics >= 3 ? 25 : numMedics * 10;
-		if(client->sess.skill[SK_BATTLE_SENSE] >= 3) maximum += 15;
+		if(client->sess.nitmodSkillMasks[SK_BATTLE_SENSE] & 8u) maximum += 15;
 	}
 	if(override > 0) maximum = override;
 	client->pers.maxHealth = client->ps.stats[STAT_MAX_HEALTH] = maximum;
@@ -1359,7 +1326,7 @@ void G_NITMOD_SetHealthLimits(gclient_t *client, int numMedics, int war, int gam
 int G_NITMOD_SpawnHealth(const gclient_t *client, int war, int gametype, int override) {
 	if(!client) return 0;
 	return client->ps.stats[STAT_MAX_HEALTH] -
-		(!war && gametype != 8 && !override && client->sess.skill[SK_BATTLE_SENSE] >= 3 ? 15 : 0);
+		(!war && gametype != 8 && !override && (client->sess.nitmodSkillMasks[SK_BATTLE_SENSE] & 8u) ? 15 : 0);
 }
 
 void AddMedicTeamBonus( gclient_t *client ) {

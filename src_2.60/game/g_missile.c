@@ -1544,11 +1544,16 @@ void G_LandminePrime( gentity_t *self ) {
 }
 
 qboolean G_LandmineSnapshotCallback( int entityNum, int clientNum ) {
-	gentity_t* ent		= &g_entities[ entityNum ];
-	gentity_t* clEnt	= &g_entities[ clientNum ];
+	gentity_t *ent, *clEnt;
 	team_t team;
+	if(entityNum < 0 || entityNum >= MAX_GENTITIES || clientNum < 0 || clientNum >= MAX_CLIENTS) return qfalse;
+	ent = &g_entities[entityNum]; clEnt = &g_entities[clientNum];
+	if(!clEnt->client) return qfalse;
+	/* Original callback checks viewer/mine PVS before every visibility grant. */
+	if(!trap_InPVS(clEnt->r.currentOrigin, ent->r.currentOrigin)) return qfalse;
 
-	if( clEnt->client->sess.skill[ SK_BATTLE_SENSE ] >= 4 ) {
+	/* Original client+0xed0 bit 4 is an independent Battle Sense reward. */
+	if( clEnt->client->sess.nitmodSkillMasks[SK_BATTLE_SENSE] & 16u ) {
 		return qtrue;
 	}
 
@@ -1743,6 +1748,7 @@ gentity_t *fire_grenade (gentity_t *self, vec3_t start, vec3_t dir, int grenadeW
       break;
 		case WP_LANDMINE:
 		case WP_POISON_MINE:
+			bolt->s.clientNum = self->s.number;
 			bolt->accuracy				= 0;
 			G_NITMOD_RegisterLandmine( bolt );
 			bolt->s.teamNum				= self->client->sess.sessionTeam + 4;
@@ -1787,6 +1793,7 @@ gentity_t *fire_grenade (gentity_t *self, vec3_t start, vec3_t dir, int grenadeW
 			break;
 		case WP_DYNAMITE:
 
+			bolt->s.clientNum = self->s.number;
 			bolt->accuracy = 0; // JPW NERVE sets to score below if dynamite is in trigger_objective_info & it's an objective
 			trap_SendServerCommand( self-g_entities, "cp \"Dynamite is set, but NOT armed!\"");
 			// differentiate non-armed dynamite with non-pulsing dlight

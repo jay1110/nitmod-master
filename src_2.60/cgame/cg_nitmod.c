@@ -7,6 +7,7 @@
 #include "cg_local.h"
 #include "cg_nitmod.h"
 #include "../game/nitmod_snapshots.h"
+#include "../game/nitmod_clamp.h"
 
 qboolean Nit_RemoveWordInString( char *text, const char *word ) {
 	char *match;
@@ -29,27 +30,11 @@ qboolean Nit_RemoveWordInString( char *text, const char *word ) {
 }
 
 void nitrox_ClampFloat( float *value, float minimum, float maximum ) {
-	if ( !value ) {
-		return;
-	}
-
-	if ( *value < minimum ) {
-		*value = minimum;
-	} else if ( *value > maximum ) {
-		*value = maximum;
-	}
+	NITMOD_ClampFloating(value, minimum, maximum);
 }
 
 void nitrox_ClampInt( int *value, float minimum, float maximum ) {
-	if ( !value ) {
-		return;
-	}
-
-	if ( *value < minimum ) {
-		*value = minimum >= 0.0f ? (int)( minimum + 0.5f ) : (int)( minimum - 0.5f );
-	} else if ( *value > maximum ) {
-		*value = maximum >= 0.0f ? (int)( maximum + 0.5f ) : (int)( maximum - 0.5f );
-	}
+	NITMOD_ClampInteger(value, minimum, maximum);
 }
 
 void nitrox_StripLeadingSpaces( char *text ) {

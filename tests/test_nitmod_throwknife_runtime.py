@@ -36,3 +36,18 @@ def test_client_accepts_original_and_reconstructed_event_ids():
     assert "case 95:" in EVENTS
     assert "case EV_NITMOD_THROW_KNIFE:" in EVENTS
     assert "NITMOD_FIRE_THROWKNIFE" in EVENTS
+
+
+def test_prediction_routes_internal_knife_without_remapping_native_events():
+    source = (ROOT / "src_2.60/cgame/cg_event.c").read_text(encoding="utf-8")
+    assert "(original || event == EV_NITMOD_THROW_KNIFE)" in source
+    assert source.index("(original || event == EV_NITMOD_THROW_KNIFE)") < source.index("if(original && wireEvent <= 93)")
+    assert "CG_EntityEventForProtocol(cent, position, qfalse);" in source
+
+
+if __name__ == "__main__":
+    test_attack2_is_edge_gated_and_emits_private_throw_event()
+    test_server_spawns_a_pickable_dropped_knife()
+    test_client_accepts_original_and_reconstructed_event_ids()
+    test_prediction_routes_internal_knife_without_remapping_native_events()
+    print("Knife source regressions: emission, spawn, handler and prediction routing passed")

@@ -46,12 +46,14 @@ static qboolean ScanBank(int bank, int excluded, int *choice) {
  * Keep selection decisions separate from sound/zoom/weapon-history effects. */
 nitmodAmmoAction_t CG_NitmodAmmoSelection(qboolean force, int *choice) {
     int current = cg.weaponSelect, bank = 0, cycle = 0, i;
-    if(!choice || !NITMOD_UsesOriginalProtocol()) return NITMOD_AMMO_NATIVE;
+    /* Decisions below use normalized native IDs, not original wire fields.
+     * Reconstructed Nitmod servers need the same pliers/detonator routing. */
+    if(!choice || (!NITMOD_UsesOriginalProtocol() && !NITMOD_UsesNitmodHud())) return NITMOD_AMMO_NATIVE;
     *choice = current;
     if(current == WP_PLIERS || (current == WP_SATCHEL_DET && cg.predictedPlayerState.ammo[WP_SATCHEL_DET]))
         return NITMOD_AMMO_KEEP;
     if(force) {
-        if(current == WP_SMOKE_BOMB) {
+        if(current == WP_SMOKE_BOMB || current == WP_POISON_BOMB) {
             if(CG_WeaponSelectable(WP_LUGER)) { *choice = WP_LUGER; return NITMOD_AMMO_FINISH; }
             if(CG_WeaponSelectable(WP_COLT)) { *choice = WP_COLT; return NITMOD_AMMO_FINISH; }
         } else if(current == WP_DYNAMITE || current == WP_LANDMINE ||

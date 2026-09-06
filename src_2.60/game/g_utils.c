@@ -474,6 +474,7 @@ void G_SetMovedir( vec3_t angles, vec3_t movedir ) {
 
 
 void G_InitGentity( gentity_t *e ) {
+	e->nitmodDynamiteObjective = 0;
 	e->inuse = qtrue;
 	e->classname = "noclass";
 	e->s.number = e - g_entities;

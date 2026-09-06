@@ -29,6 +29,12 @@ assert [item['id'] for item in items if item['classname'] == 'weapon_landmine'] 
 client_items = module.extract(root, 'cgame')
 identity = lambda row: (row['id'], row['classname'], row['name'], row['ammo'], row['clip'])
 assert list(map(identity, client_items)) == list(map(identity, items))
+for rows in (items, client_items):
+    huge = next(row for row in rows if row['name'] == 'Huge Ammo Pack')
+    mega = next(row for row in rows if row['name'] == 'Mega Ammo Pack')
+    assert huge['classname'] == 'weapon_magicammo3'
+    assert huge['id'] == huge['ammo'] == huge['clip'] == 12
+    assert huge['quantity'] == 50 and huge['models'] == mega['models']
 for rows, base in [(items, 0x2a59a0), (client_items, 0x12ed00)]:
     bomb = next(row for row in rows if row['id'] == 48)
     assert (bomb['address'] - base) // 56 == 54

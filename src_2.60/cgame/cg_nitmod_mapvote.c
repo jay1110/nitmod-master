@@ -134,16 +134,21 @@ void CG_NitmodMapVoteRequest( void ) {
 		}
 		return;
 	}
-	if( !cgs.nitmodMapVoteTallyTime ||
-		cg.time < cgs.nitmodMapVoteTallyTime ||
-		(double)cg.time - cgs.nitmodMapVoteTallyTime >= 1000 ) {
+}
+
+/* Original CG_Debriefing_Draw polls independently of InfoRequests/list
+ * receipt, only while the voting page is visible and UI is not catching. */
+void CG_NitmodMapVoteRequestTally( void ) {
+	if( cg.time < cgs.nitmodMapVoteTallyTime ||
+		(double)cg.time - cgs.nitmodMapVoteTallyTime > 1000 ) {
 		cgs.nitmodMapVoteTallyTime = cg.time;
 		trap_SendClientCommand( "imvotetally" );
 	}
 }
 
 /* Original CG_parseMapVoteListInfo 0x45230.  The original wire record is:
- * map name, numeric map id, maps since last played, total times played. */
+ * map name, numeric map id, maps since last played, accumulated votes.
+ * The mode is the raw flag mask (4 for multi-vote), not a boolean 0/1. */
 void CG_NitmodParseMapVoteList( void ) {
 	int argc = trap_Argc();
 	int records;
@@ -176,7 +181,7 @@ void CG_NitmodParseMapVoteList( void ) {
 			records, NITMOD_MAX_MAPVOTE_MAPS );
 		records = NITMOD_MAX_MAPVOTE_MAPS;
 	}
-	if( !NITMOD_ParseProtocolInteger(CG_Argv(1), &multi) || multi > 1 ) {
+	if( !NITMOD_ParseProtocolInteger(CG_Argv(1), &multi) ) {
 		CG_Printf( "^3Nitmod: malformed immaplist mode\n" );
 		return;
 	}

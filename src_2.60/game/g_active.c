@@ -9,6 +9,7 @@
 #include "g_nitmod_abilities.h"
 #include "nitmod_air.h"
 #include "nitmod_weapon_reload.h"
+#include "nitmod_regeneration.h"
 #include <limits.h>
 
 /*
@@ -660,10 +661,11 @@ void G_NITMOD_HealthTimer(gentity_t *ent, int msec, unsigned int medicOptions, i
 		/* Original ClientTimerActions (ELF 0x4e2f0): DM option bit 1 admits
 		 * every class. Otherwise a living medic regenerates normally, and
 		 * g_medics bit 4 admits a client with the sixth First Aid reward. */
-		regenerate = g_gametype.integer == 8 ? !!(g_DMOptions.integer & 2) :
-			((client->sess.playerType == PC_MEDIC &&
-			  !(client->ps.eFlags & (EF_DEAD | EF_VIEWING_CAMERA))) ||
-			 ((medicOptions & 16u) && (G_NITMOD_FirstAidUnlocks(client) & 32u)));
+		regenerate = NITMOD_RegenerationEligible(g_gametype.integer == GT_WOLF_DM,
+			g_DMOptions.integer, medicOptions,
+			client->sess.playerType == PC_MEDIC &&
+			!(client->ps.eFlags & (EF_DEAD | NITMOD_EF_POISONED)),
+			G_NITMOD_FirstAidUnlocks(client));
 		if( regenerate ) {
 			int maximum = BG_EffectiveMaxHealth(&client->ps);
 			if( ent->health < client->ps.stats[STAT_MAX_HEALTH]) {
@@ -1095,7 +1097,7 @@ void ClientThink_real( gentity_t *ent ) {
 	G_NITMOD_CheckAdrenaline(ent, qfalse, G_NITMOD_FirstAidUnlocks(client),
 		(unsigned int)G_NITMOD_LegacyCvarInteger("g_adrenClasses", 2));
 
-	if((client->ps.eFlags & EF_VIEWING_CAMERA) || level.match_pause != PAUSE_NONE
+	if(G_NITMOD_IsViewingCamera(client) || level.match_pause != PAUSE_NONE
 #ifdef SAVEGAME_SUPPORT
 	  || (g_gametype.integer == GT_SINGLE_PLAYER && saveGamePending && g_reloading.integer && (g_reloading.integer != RELOAD_FAILED))) {
 #else
@@ -1111,7 +1113,7 @@ void ClientThink_real( gentity_t *ent ) {
 		// freeze player (RELOAD_FAILED still allowed to move/look)
 		if(level.match_pause != PAUSE_NONE) {
 			client->ps.pm_type = PM_FREEZE;
-		} else if((client->ps.eFlags & EF_VIEWING_CAMERA)
+		} else if(G_NITMOD_IsViewingCamera(client)
 #ifdef SAVEGAME_SUPPORT
 			|| (g_gametype.integer == GT_SINGLE_PLAYER && g_reloading.integer & (RELOAD_NEXTMAP_WAITING|RELOAD_ENDGAME))) {
 #else

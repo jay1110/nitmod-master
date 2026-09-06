@@ -13,6 +13,7 @@ qboolean UI_NitmodProfileSettings(const char *name);
 qboolean UI_NitmodRedirectAddress(const char *text, char *out, int size);
 qboolean UI_NitmodFoundPlayerAddress(char *out, int size);
 qboolean UI_NitmodPlayerSelectionValid(void);
+qboolean UI_NitmodTeamSelection(int *selection);
 void UI_NitmodRefreshPlayers(void);
 qboolean UI_GameTypeForCatalogRow(int index, int *game);
 qboolean UI_SelectedNetGameType(int *game);

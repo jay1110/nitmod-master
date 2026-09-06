@@ -9,6 +9,7 @@
 #include "nitmod_announcements.h"
 #include "nitmod_spree.h"
 #include "nitmod_config_store.h"
+#include "nitmod_clamp.h"
 
 static nitmodConfigStore_t nitmodConfigStore;
 static unsigned int nitmodClientCapabilities[MAX_CLIENTS];
@@ -184,25 +185,11 @@ qboolean NITMOD_BuildFilePath( const char *directory, const char *name,
 }
 
 void nitrox_ClampFloat( float *value, float minimum, float maximum ) {
-	if( !value ) {
-		return;
-	}
-	if( *value < minimum ) {
-		*value = minimum;
-	} else if( *value > maximum ) {
-		*value = maximum;
-	}
+	NITMOD_ClampFloating(value, minimum, maximum);
 }
 
 void nitrox_ClampInt( int *value, float minimum, float maximum ) {
-	if( !value ) {
-		return;
-	}
-	if( *value < minimum ) {
-		*value = minimum >= 0.0f ? (int)( minimum + 0.5f ) : (int)( minimum - 0.5f );
-	} else if( *value > maximum ) {
-		*value = maximum >= 0.0f ? (int)( maximum + 0.5f ) : (int)( maximum - 0.5f );
-	}
+	NITMOD_ClampInteger(value, minimum, maximum);
 }
 
 void nitrox_stripLeadingSpaces( char *text ) {

@@ -1,5 +1,1302 @@
 # Nitmod reconstruction status
 
+## Review 2026-09-05
+
+User confirmed tripmine and knife throw working. Uploaded nkey screenshot
+shows correct nitmod home path and FS_READ length=100: strict 44-byte file-size
+gate was rejecting the file before decoding. Loader now reads only the first
+44 bytes for lengths >=44, consistent with original decode64 padding stop;
+strict prefix/checksum validation remains and no file is rewritten. Actual
+loader WASM test covers sizes 0..100, arbitrary trailing bytes and invalid
+prefix; all pass. cgame rebuilt/export checked. User's real key content was
+not read; browser verification of that specific key remains pending.
+
+OPEN user reports: tripmine cannot be wall-placed/armed; uploaded nkey.dat
+not accepted. Need local-vs-original-server and upload destination to isolate.
+Added secret-free nkey loader diagnostic distinguishing unavailable file,
+wrong byte length and decoder/checksum rejection; no key/file mutation added.
+cgame WASM rebuilt/export checked. Neither reported bug is claimed fixed.
+Original decoder stops at padding, while current loader requires exactly
+44 bytes; trailing-data compatibility is a candidate, not an established cause.
+
+Reported +attack2 knife crash (Unknown event 131): PM_NitmodThrowKnife emits
+EV_NITMOD_THROW_KNIFE; prediction calls CG_EntityEventForProtocol with original
+false. Existing extended handler accepted 131 but was gated behind original,
+so prediction reached the fatal default. Dispatch now admits this specific
+internal event irrespective of protocol. Original wire event 95 retains its
+existing handler; native ET 94..106 are not globally reinterpreted. Knife
+emission/spawn/handler/prediction source regressions pass. cgame WASM rebuilt
+and exports checked. Browser reproduction/retest still pending; qagame/ui
+unchanged. This is a routing fix, not suppression of unknown events.
+
+Preview lifecycle verification: executable ui_main.c WASM fixture covers start,
+handle reuse, invalid-selection stop, failure latch and empty-list reset.
+All assertions pass. This tests the existing safe adapter, not original binary
+runtime parity: original ownerdraw 254 decompilation appears to call Play for
+every handle >= -1; that behavior requires further disassembly/engine review
+before any change. No production code changed during this verification.
+
+Browser refresh ownerdraw 247: restored literal status messages instead of
+ET translation calls, matching original ui_ui_draw.c case 0xf7 (waiting,
+server count, refresh timestamp). Scoped change only; other translations
+remain. Three-string reference/source regression passes; UI WASM rebuilt
+and export checked. No rendered browser test; cgame/qagame unchanged.
+
+UI ownerdraw 258 / UI_SAVEGAME_SHOT now matches original empty case 0x102
+in ui_ui_draw.c. Removed obsolete ET savegame screenshot draw helper and its
+unchecked selected-index access; savegame actions were not modified. Expanded
+source-reference test verifies 17 no-op dispatches and retained active draws.
+UI WASM rebuilt/export checked; cgame/qagame unchanged. No visual runtime
+comparison performed for this change.
+
+Crosshair health audit: original CG_CrosshairClientMaxHealth (cgame_client.c
+around 6280) independently counts viewer-team medics, caps their bonus at 25,
+then applies target Battle Sense bit 8 and medic multiplier. Existing cgame
+adapter already follows this; deliberately did not replace it with server
+war-mode rules. Actual cg_nitmod_hints.c WASM fixture now checks 48 additional
+viewer/target-team, valid-entry, medic-count and reward cases, all passing
+alongside existing override/capability tests. Verification-only change; no
+production module rebuild or new feature claimed for this audit.
+
+Health reward gate: G_NITMOD_SetHealthLimits now selects the +15 Battle Sense
+bonus from reward bit 8, matching original AddMedicTeamBonus (nitmod_unknown.c
+around 1567, client +0xed0). G_NITMOD_SpawnHealth uses the same gate when
+subtracting that bonus; numeric levels no longer independently affect it.
+Actual g_client.c WASM tests pass 25,600 independent mask/level/class/medic/
+war/gametype/override combinations, including existing medic overhealth rules.
+qagame rebuilt and export checked, cgame/ui unchanged. This verifies the
+adapter and recovered gate, not a full original-module gameplay replay.
+
+Secondary spawn cleanup: removed the unreachable legacy team/class switch
+after the correction/default adapter became total. A single call now grants
+secondary weapons; obsolete doubled-SMG ammo code is no longer retained.
+Updated source-wiring test to check the unified path instead of eight legacy
+conditions. Actual adapter's 3,240 WASM cases still pass; qagame rebuilt and
+exports checked. This removes dead code, not a new gameplay parity claim.
+
+Secondary fallback mapped: original client +0xb0c is cg_uinfo bit 6
+(nitmod_client.c around 2603). Invalid requested weapons now select defaults
+using Heavy/Light reward bit 16 and that opt-out, including covert silenced
+Akimbo. Evidence: G_AddClassWeapons mask/fallback branches in nitmod_weapons.c.
+81,920 independent fallback mask/team/class/opt-out combinations, 480 selector
+combinations and 3,240 actual grant-adapter cases pass in WASM. qagame build
+and exports checked. Legacy branch is now unreachable but retained pending
+cleanup; no claim of complete class-loadout or browser parity. Respawn already
+sets covert silencer mode in bg_pmove.c; no extra state override added.
+
+Valid secondary selections now enter G_NITMOD_GrantSelectedSecondary during
+spawn: calls the recovered correction, grants typed configured ammo, initializes
+the Akimbo companion clip and adds covert alternate weapons. Adapter keeps
+the existing primary selection because ET 2.60 grants primary first (original
+G_AddClassWeapons grants it after secondary). When both selections resolve to
+the same weapon, existing primary ammo wins. Invalid correction NONE retains
+the existing selection path pending mapping of original fallback conditions.
+Actual g_client.c WASM fixture passes 3,240 request/team/class/level cases and
+same-primary ammo preservation. qagame rebuilt/export checked; cgame/ui current.
+No full spawn/browser replay or complete secondary fallback parity claimed.
+
+Secondary correction reconstructed as typed NITMOD_CorrectSecondaryWeapon
+in nitmod_secondary_weapon.h. Source: original nitmod_weapons.c lines 102-136.
+Preserves numeric-level tests in this function (distinct from later fallback
+reward bits), team correction, dualSMG restriction, medic option 2, covert
+silenced Akimbo and invalid-selection NONE. WASM executable: 480 combinations
+with six assertions each pass. Not yet wired into spawn: selection order and
+fallback semantics must be integrated together; production modules unchanged
+by this preparatory step. No full original-binary runtime comparison claimed.
+
+Secondary spawn reward gates: six Akimbo and two soldier secondary-SMG
+branches now use Light/Heavy Weapons bit 16 instead of numeric level >= 4.
+Evidence: original G_AddClassWeapons in nitmod_weapons.c, mask offsets
+0xee0/0xee4 and 0x10 tests (around lines 175/231). This migrates the gates
+only; the full original G_CorrectSecondaryWeapon selection/fallback path
+and remaining class loadout differences are still open. Source-wiring test
+checks all eight sites; this is not an executable full-spawn parity test.
+
+Spawn binoculars: Engineer/Medic/Soldier grants now require Battle Sense
+reward bit 2 rather than numeric level >= 1. Original evidence is
+G_AddClassSpecificTools_part_3, nitmod_game.c around 2257: mask at 0xed0
+shifted by 1 and masked with 1; Field Ops has its separate Signals/options
+override (already present). Source-wiring regression passes; qagame WASM
+rebuilt with export checks. This is not a live spawn test. cgame/ui unchanged.
+
+Spawn reward parity: actual AddExtraSpawnAmmo now tests explicit reward bits
+instead of numeric skill levels, suppresses bonuses in war modes 1..4, and
+allows Light Weapons bit 2 for scoped rifles as in the original. Evidence:
+qagame AddExtraSpawnAmmo ELF 0x476f0 (unsigned jbe war gate at 0x47717),
+sorted nitmod_unknown.c line 897 onward. Original G_AddClassWeapons assigns
+base grenade counts 4/1/4/1/2 for soldier/medic/engineer/fieldops/covert, then
+adds the engineer/medic bonus; it does NOT use the refill maximum at spawn.
+No blanket max-ammo spawn override was introduced. Executable WASM fixture
+includes the actual g_client.c routine: 25,920 weapon/class/mask/level/war
+combinations plus isolated scoped Light Weapons assertion pass. WASM targets
+build successfully; qagame relinked and export-checked, cgame/ui up to date.
+Browser gameplay parity remains untested for this change.
+
+Grenade refill integration: BG_AddMagicAmmoWar and BG_CanItemBeGrabbedWar
+now share the recovered reward-mask cap and explicit cached war mode in
+qagame AddMagicAmmo/Touch_Item. This matches the inline table selection and
+g_war guard in original nitmod_bg.c BG_AddMagicAmmo (around line 5044).
+Compatibility entry points retain the legacy level path when rewards are NULL.
+Actual bg_misc.c WASM execution passes 12,800 class/mask/war/team/clip cases
+covering pickup eligibility, non-mutating ammo probes, grants and saturation;
+existing syringe/poison/adrenaline/knife tests also pass. All three WASM
+modules rebuilt successfully with export checks. No browser gameplay run.
+Spawn quantities remain a separate open parity item: G_AddClassWeapons uses
+its own class branches; no unverified spawn override was added. No pak or
+engine changes, and no new network messages or cvars.
+
+Shared grenade API added: BG_NitmodGrenadesForClass uses verified embedded
+rows, explicit reward masks and war mode without engine calls. Executable WASM
+fixture now links actual bg_misc.c and checks the API for 640 combinations.
+Not yet called by spawn/refill; both must migrate consistently. Existing cached
+G_NITMOD_ConfiguredWarMode can supply server state. No configuration writer
+is assumed. This is shared-core implementation, not a completed gameplay port.
+
+Grenade evidence follow-up: extractor now pins both cgame and qagame SHA-256
+and verifies all seven embedded rows match (cgame table 0x12e4c0). Original
+qagame BG_GrenadesForClass x87 sequence at 0x21533..0x215d1 sets truncation
+control bits 0xc00, converts contributions separately, then adds integers.
+Added positive/negative fractional tests; candidate calculator passes. No
+runtime configuration writer has been established; earlier 'configurable'
+wording was a hypothesis, not proven behavior. Gameplay integration remains
+pending, production module behavior unchanged in this verification step.
+
+Grenade reconstruction: hash-pinned ELF extractor now reads CSWTCH.87 class
+mapping [5,2,1,3,6] and seven six-float jP_GrenadesPerLevel rows. Typed candidate
+calculator includes class reward plus light-weapons reward and war suppression.
+640 WASM class/mask/war tests plus additive reward pass. Not wired into live
+BG_GrenadesForClass yet: configuration transport/loading and validated numeric
+conversion ranges remain required. Existing gameplay is deliberately unchanged.
+Reference table baseline: engineer 4->8; medic/signals 1->2->3; heavy 4->5;
+covert 2->3, with transitions selected by changed entries and reward bits.
+
+Grenade reward-table reconstruction started: typed NITMOD_RewardTableValue
+implements original BG_GrenadesForClass adjacent-entry change test with sparse
+reward masks. 46,656 WASM cases compare against the explicit original branch
+sequence. Not yet connected to gameplay: jP_GrenadesPerLevel configuration,
+class-to-skill mapping, light-weapons contribution, conversion and g_war gating
+must be reconstructed before replacing BG_GrenadesForClass. No claim of working
+new grenade limits. Original qagame symbols: table 0x2a5160, CSWTCH.87 0x22df90.
+
+Server-status parser runtime audit: actual UI_ParseServerStatus tested in WASM
+for each population 0..64 (all row numbers, score/ping/name values and non-null
+columns checked), malformed row isolation, names with spaces, empty input and
+maximum-size non-delimited input. All pass. Original UI_GetServerStatusInfo
+player-row/column layout inspected; existing bounded parser retained. This turn
+adds verification, no new production feature. Synthetic transcripts are not
+original-binary replay or live engine testing.
+
+Server status values: removed reconstructed g_gametype decoration. Original
+UI_GetServerStatusInfo sorting at LAB_000254bf swaps value pointers unchanged
+and only renames keys. Actual UI_QueryServerStatus WASM fixture verifies seven
+values including known IDs, leading zeroes and unknown strings remain intact
+under Game type. All pass; all WASM targets build, ui exports checked. Status
+network response is stubbed; live panel comparison remains pending.
+
+Human-count precedence: original LAB_000245f7 treats ET Legacy master humans
+as authoritative even when empty (strtol yields zero). Port now does the same
+instead of falling through to positive-ping player counting. Explicit status
+humans still wins; non-Legacy master values remain ignored. Nine executable
+WASM tests link actual counter/status parser and verify precedence, bots,
+empty input and retained safety clamps. All pass; all WASM targets succeed,
+ui exports checked. Live browser replay remains pending.
+
+Browser refresh cache lifecycle: full refresh/source change now zeroes stored
+human counts, matching original reset of g_dat_003e9078. Centralized all local
+status cache resets, including timestamps, pending/known flags, population
+contributions and NxAC unknown sentinel. WASM fixture dirties and verifies every
+server slot after reset; comparator/transitivity checks still pass. All three
+WASM targets succeed, ui exports checked. This tests local cache state, not
+engine request cancellation or live asynchronous refresh parity.
+
+Browser population comparator: original UI_ServersSort column 2 always chooses
+UI_ServersQsortCompare_bis (stored counts). Removed mixed known/unknown engine
+comparison from SORT_CLIENTS: unknown entries use zero, never stale prior-refresh
+counts. Other sort keys retain engine comparison. WASM fixture executes actual
+comparator, checks 32 directional comparisons, transitivity across mixed known
+states, and delegation for host sorting. All pass; all WASM targets build, ui
+exports validate. Unknown-zero policy is explicit; live async browser replay
+and exact original cache-initialization parity remain pending.
+
+Executable description-layout coverage: test_nitmod_description_wasm.c links
+actual ui_nitmod_description.c with fixed glyph metrics/draw capture. Checks
+three alignments, supplied offsets, blank lines, literal/single/double-star
+handling, CR normalization, empty text, zero width and a 2500-byte word split
+into bounded 1023/1023/454 chunks. All pass in WASM/Node. This turn adds runtime
+coverage, no new production feature. Not an original-binary or pixel replay;
+known layout differences documented below remain open.
+
+Objectives text now uses bounded shared UI_DrawDescriptionText instead of a
+second unbounded 1024-byte wrapping loop. Original UI_DrawMissionBriefingObjectives
+reference: mapname lookup, nullable objectives, newline/tab boundaries, supplied
+text offsets, alignment and height+5 leading. Uses stars=0 (literal asterisks).
+Shared renderer safely splits oversized words and measures current line width
+rather than the original lagging width; these are deliberate safety/layout
+differences, not exact pixel parity. Source routing regression passes; all WASM
+targets build and ui exports validate. Live text comparison remains pending.
+
+Campaign map-shot follow-up corrects previous empty-slot early return: original
+UI_OwnerDraw cases 263..268/LAB_000303f0 draw unknownmap for a NULL slot then
+apply the same progress lock overlay as successful images. Slots past mapCount
+now safely resolve to NULL without suppressing the image; invalid fixed-array
+indices/counts remain rejected. Unified image/overlay drawing removes duplicate
+branches. Source regression extended and passed; all WASM targets succeed.
+This supersedes the prior empty-slot behavior; live visual comparison pending.
+
+Campaign preview selection consolidated across name, shot, cinematic and map
+shot. Original reset-to-zero for invalid selection with existing catalog is
+retained; empty/oversized catalogs and index==count are now safely rejected or
+normalized before access. Map-shot slot and mapCount bounds added. These are
+deliberate safety differences, not new original features. Four-route source
+regression passes; WASM ui rebuilt/export checked, all three targets succeed.
+Live campaign preview parity remains pending; no pak or engine edits.
+
+UI server filter: accepted keys now directly reset filter index to zero and
+rebuild display list, matching original UI_OwnerDrawHandleKey case 0xde.
+For valid state the previous single-entry cycling was equivalent; direct reset
+also avoids integer overflow. Fixed index==count acceptance in filter drawing
+and width calculation (safety difference). Original-source/reset/bounds checks
+pass; WASM ui rebuilt/export checked and all targets succeed. Live UI testing
+remains pending; no pak or engine changes.
+
+UI ownerdraw key dispatch aligned for IDs 237,239,241,243: original
+UI_OwnerDrawHandleKey has no cases for these (default returns 0). Removed
+ET opponent/bot/red-blue/selected-player handler calls, retaining false return.
+Team-slot handlers remain intentionally active despite draw no-ops, as original
+explicitly handles 210..219. Source regression verifies original case inventory
+and production routing. WASM ui rebuilt/export checked; all targets succeed.
+Interactive keyboard/mouse replay remains pending; no pak/engine edits.
+
+UI visibility: removed inherited ET leader/not-leader filtering. Original
+UI_OwnerDrawVisible in ui_ui_misc.c never tests bits 1 or 2; production now
+consumes them without changing visibility. This also eliminates selected-team
+array access from this path. Other visibility rules remain unchanged. Source
+regression verifies original tested masks and retained production rules.
+WASM ui rebuilt/export validated; all three targets succeed. Interactive
+menu comparison remains pending; no engine/pak changes.
+
+UI ownerdraw no-op group aligned with original ui_ui_draw.c cases: 202,204,
+210..219,236,239,243,256 (16 IDs). Removed inherited ET draw calls for player
+model, clan logo, team slots, map selection captions, bot name and selected
+player. Their input handlers/utilities are not removed; active team names,
+map preview, MOTD and crosshair remain. Regression compares original empty
+case group, original pak menudef IDs (read-only) and production dispatch.
+All 16 checks pass; WASM ui rebuilt/export checked, all targets succeed.
+This is source-reference parity evidence, not live menu/render replay.
+
+UI clan cinematic ownerdraw aligned: original UI_OwnerDraw case 0xfb (251)
+belongs to the no-op group in ui_ui_draw.c. Removed inherited ET playback
+call and unused UI_DrawClanCinematic implementation; retained movie/map
+preview dispatch and stop-handle support. Source regression compares original
+no-op case and production routing. WASM ui rebuilt/export checked; all three
+targets succeed. This is source-reference evidence, not live menu replay.
+
+UI cinematic stop audit: original UI_StopCinematic (ui_ui_misc.c) uses direct
+negative sentinel comparisons, and stops/resets map, network and clan handles.
+Replaced abs(handle) with direct comparisons (avoids INT_MIN overflow), bounded
+map index/count before mapList access and team count before name lookup. Valid
+handle stop/reset behavior unchanged; invalid data guards are deliberate safety
+differences from original. Source regression checks dispatch, bounds ordering
+and all resets; WASM ui rebuilt/export checked, all three targets succeed.
+No claim of live cinematic playback or original runtime parity testing.
+
+UI find-player result ceiling aligned with original UI_BuildFindPlayerList
+(ui_ui_misc.c LAB_0002a128): total rows < 0xf before insertion means 14
+matches plus progress row, not 15 matches. Existing duplicate-address and
+bounds protections retained. Updated broad search fixture expectation; new
+standalone WASM fixture executes actual ui_nitmod_search.c for 0..40 servers
+and verifies limit, status row, completion and cleared request slots (41 cases
+passed). LAN/status responses are stubs, not live/original runtime replay.
+All three WASM targets build; ui side-module framing/exports checked.
+
+Brass dispatch follow-up: removed the local-client restriction for Nitmod
+(original protocol or gamename nitmod), following original
+CG_MachineGunEjectBrass at cgame_client.c:25457. Tag positions now populated
+per entity are consumed for remote players too. Snapshot PERS_HWEAPON_USE gate
+and MG42 exclusion retained; native AA exclusion intentionally retained as an
+ET adapter difference. Non-Nitmod gamenames retain local-only dispatch.
+Predicted event and hand render paths both use cg.predictedPlayerEntity.
+WASM helper tests: 40 dispatch combinations and 16 tag combinations pass;
+ownership source check passes; all three WASM build targets succeed. These
+are fixture checks, not original runtime replay; live remote brass QA pending.
+
+Brass tag producer follow-up: CG_AddPlayerWeapon now populates each rendered
+entity's brass origin, including world/third-person weapons. First-person uses
+tag_brass/tag_brass2 from ammo sequence; world view uses tag_weapon/tag_weapon2
+from entity akimboFire (second tag when false). Reference cgame_ents.c
+LAB_000dc221, LAB_000dba73, LAB_000dba7d, LAB_000da5f1; tmp_b3 is ps != NULL
+on surviving render paths. Added 16-case executable WASM tag-helper fixture;
+ownership source checks pass and all three WASM targets build successfully.
+New-style brass dispatch still retains the existing local-player gate; do not
+claim complete remote ejection parity. Live tag/render comparison pending.
+
+Brass origin ownership: replaced global ejectBrassCasingOrigin with typed
+centity nitmodBrassOrigin in existing tag producer and new-style brass consumer.
+Original cgame_ents.c stores tag result in entity words 0x1d6..0x1d8;
+CG_MachineGunEjectBrassNew reads entity +0x758..0x760. Source regression checks
+both endpoints and removal of global. This does not yet change legacy routing
+to new-style ejection or third-person tag selection; those need separate parity
+work. Runtime renderer comparison remains pending. No engine/pak edits.
+
+CG_FireWeapon underhand suppression now includes bomb, poison bomb and poison
+mine alongside the existing eight weapons. Reference cgame_weapons.c original
+branch after LAB_000de0ae: wire IDs 4,9,15,21,25,26,28,48..51 and positive pitch.
+Typed helper preserves position after muzzle/recoil bookkeeping and before
+firing sound/brass. Executable WASM helper fixture covers all 54 native weapon
+IDs at five pitches (270 cases). All three WASM targets build successfully;
+cgame side-module exports validated. Live effects comparison remains pending;
+this fixture is not an original-binary replay. No pak or engine changes.
+
+Weapon command/recoil audit: direct weapon command bank routing matches checked
+original paths. Added executable WASM fixture linking actual cg_weapons.c recoil
+function; 864 native weapon/seed cases verify pitch/yaw/roll, unchanged recoilPitch,
+unsupported weapon no-op and exact rand consumption. Reference original
+cgame_weapons.c CG_WeaponFireRecoil. No production discrepancy found here;
+fixture is deterministic translated-behavior coverage, not original runtime replay.
+
+CG_WeaponBank_f empty-bank sentinel now terminates Nitmod scan with WP_NONE,
+matching original cgame_weapons.c bank loop at LAB_000d8eed/000d8aef (candidate
+zero then first-entry zero). Other gamenames retain ET selection behavior.
+Source routing test passes; cgame WASM rebuilt/export checked, all targets pass.
+CG_LastWeaponUsed_f checked branches already agree; no extra mutation there.
+Live empty-bank behavior remains pending; source regression is not replay parity.
+
+Nitmod weapalt command now matches original CG_AltWeapon_f: prints obsolete
+notice directing users to +attack2 and returns without ET local weapon swap.
+Enabled for original protocol and reconstructed gamename=nitmod; other gamenames
+retain ET route. Original hash/string and source routing test pass. cgame WASM
+rebuilt/export validated; all build targets succeed. This does not change or
+claim new verification of the separate +attack2 usercmd path. No pak/engine edits.
+
+CG_OutOfAmmoChange dispatch/CG_FinishWeaponChange audited against original
+cgame_client.c:25853 and 27861: KEEP/NEXT/select-only/finish dispatch, binocular
+gate, equal-weapon early return, alternate switch sounds and scoped switchback
+exclusions match checked paths. New source regression pins this wiring; not an
+engine sound/zoom integration test. No production modification warranted by this
+audit. Remaining original-server/local live transitions still need verification.
+
+Ammo selection special-case audit: original pliers keep, detonator reserve keep,
+four explosive->pliers branches, satchel select-only, mortar/MG42 unset select-only
+match current code. Added 144 production-function WASM cases across original and
+reconstructed Nitmod activation, force, availability and detonator reserve;
+all pass alongside 72 grenade cases. Selection availability is stubbed; this
+does not verify final engine-side transition effects. No production edit needed
+for these audited branches. All build targets already up to date.
+
+Forced poison-bomb ammo selection now shares smoke-bomb Luger-then-Colt
+preference, matching original CG_OutOfAmmoChange wire50/28 branch in
+cgame_client.c:28065. Bomb wire48 has no such special case and remains on bank
+selection. Production decision-function WASM fixture passes 72 combinations of
+protocol, grenade type, available pistols and force. Selection/engine services
+are stubbed, so live behavior is still pending. All WASM targets build and cgame
+exports validate; no pak/engine changes.
+
+CG_NitmodAmmoSelection now activates for reconstructed gamename=nitmod as well
+as original protocol. Existing normalized-ID decisions (mine->pliers,
+satchel->detonator, bank scan) were previously unreachable on localhost.
+Decision semantics unchanged; other gamenames retain native path. Source
+activation checks pass and all WASM targets succeed (cgame rebuilt/export checked).
+Live localhost selection still pending. Magazine-bar coordinates reviewed against
+original cgame_ui.c:6084/6248; no unsubstantiated rendering change made.
+
+Ammo HUD routes aligned with original cgame_ui.c:5970 switch: knife clip count
+only with Light Weapons bit32; poison syringe clip-only; poison mine uses the
+same team remaining-slot counter as landmine; bomb/poison bomb hide counts.
+Native client skill adapter remains in NITMOD_ClientSkillUnlocked; original
+protocol reads independent masks. Source routing regression passes, cgame WASM
+rebuilt/export-checked and all targets succeed. Visual/live validation pending;
+source assertions are not rendered parity tests. No pak/engine changes.
+
+Knife magic-ammo refill now follows original BG_AddMagicAmmo: clip storage,
+capacity one without Light Weapons reward32, configured maxammo with reward,
+ownership granted on actual refill even if previously absent. Probe leaves clip
+and ownership unchanged; reserve unchanged throughout. 2560 mask/count/clip
+production WASM cases pass, including over-capacity and no-ownership cases.
+Existing fixtures now fill the knife clip when isolating other weapons; all pass.
+All three WASM builds/export checks pass. HUD and live original-server/local
+throw/pickup verification remain open; no pak/engine changes.
+
+Knife spawn now selects configured defaultStartingClip only with Light Weapons
+reward32, otherwise one, reserve zero. Reference SetWolfSpawnWeapons_part_5
+client+0xee0 bit32 and ammoTableMP+88. Shared static knife table corrected to
+original maxammo8/maxclip8/startReserve0/startClip4; scripts may still override.
+Source wiring and WASM table assertions pass with existing ammo fixtures; all
+three module builds/exports pass. Knife pack refill/HUD and live spawn/pickup
+tests remain open. This supersedes the prior audit's default/spawn findings.
+
+Knife pickup and PM_NitmodThrowKnife now consistently use ammoclip, matching
+original Pickup_Weapon client+0x294. Add_Ammo has an explicit knife clip path
+with original Light Weapons bit32 capacity selection and ownership grant.
+Spawn keeps its existing quantity one but moves it from reserve to clip; full
+original starting/reward quantity semantics remain OPEN, as do magic refill,
+HUD count display and legacy static table defaults. Source regression checks
+pass and all WASM targets build; no live throw/pickup parity claim yet.
+
+Knife layout audit found an unresolved reserve/clip mismatch across pickup,
+throw and spawn; see reference/knife-ammunition-layout.md. Both hash-pinned
+original module tables confirm maxammo/maxclip8, initial reserve0/clip4.
+No production change or new build in this audit; prior claims of full thrown
+knife pickup parity are not justified until the storage paths are reconciled.
+
+Adrenaline refill now uses explicit options in shared BG_AddMagicAmmoOptions and
+BG_CanItemBeGrabbedOptions, supplied by server g_adrenaline in both eligibility
+and credit. Original weapon43 branch: option2 disables, option4 caps at one,
+otherwise weapon maxammo plus First Aid reward bit4 bonus; owned weapon required.
+Legacy wrappers retain disabled refill until callers supply synchronized options.
+8192 production WASM option/mask/ownership/count cases pass with prior fixtures.
+Client item prediction remains disabled, live pickup parity and remaining
+knife/class-grenade behavior remain open. No pak/engine modifications.
+
+Poison syringe magic-ammo refill ported: owned weapon only, clip += pack count,
+clamped to weapon maxammo, no First Aid bonus and no reserve mutation. Zero-count
+probe reports missing capacity without adding ammo. Reference: original
+BG_AddMagicAmmo weapon47 branch, ammoTableMP+3384 (47*72). Production WASM test
+adds 816 ownership/count/capacity cases including overfull clips and custom
+limits; existing tests pass. All three modules build/export-check successfully.
+Live pickup parity remains pending. Adrenaline refill still needs its options
+contract; client prediction investigation is not concluded. No pak/engine edits.
+
+Server Touch_Item eligibility now passes the same session reward masks as the
+subsequent ammo credit, via BG_CanItemBeGrabbedRewards. Legacy callers retain
+their wrapper. Production WASM tests add 384 probe/credit/full-capacity sequences
+with independent heavy levels and masks; all pass. Corrected obsolete claim
+that zero-clip probes never mutate state (helmet flag does change).
+CG_TouchItem currently returns immediately, disabling item prediction; no
+unverified enablement or dead-path client patch made. Live parity remains open.
+
+Explicit ammo reward capacity now covers pistol/SMG/rifle/scoped, syringe and
+adrenaline, rifle grenades and hand grenade branches in addition to heavy guns.
+Original reference: BG_MaxAmmoForWeapon in sorted nitmod_bg.c:4945; native enums
+used, independent masks bit2/4/32 preserved. Server Add_Ammo (except knife) and
+BG_AddMagicAmmoRewards reloadable-weapon loop use the helper. No global mask
+state or new engine imports. 28672 helper mask cases pass alongside prior WASM
+fixtures; all three builds/export checks pass. This does NOT complete client
+prediction, class grenade count, knife clip/reserve mapping or adrenaline refill.
+Live and original-module replay parity remain open. No pak/engine edits.
+
+Server AddMagicAmmo now supplies authoritative session reward masks through
+BG_AddMagicAmmoRewards. Heavy capacities and syringe +2 use bits32/4, independent
+of numeric level. Legacy BG_AddMagicAmmo remains a level-based wrapper for
+unmigrated callers; grenade/other weapon rewards and client prediction are OPEN.
+WASM production pickup fixture adds 1536 independent level/mask/probe cases for
+flame and syringe, all passing alongside existing tests. No engine/pak changes.
+
+Add_Ammo heavy capacity now overrides the legacy level result using authoritative
+sess.nitmodSkillMasks[SK_HEAVY_WEAPONS] bit32. The isolated typed helper covers
+flame/MG42/mortar carried and set variants; other weapons retain their route.
+WASM fixture checks 1152 mask/table/weapon combinations plus prior 492 cases.
+All build targets pass (qagame rebuilt). This closes only Add_Ammo's heavy mask
+gap: BG_AddMagicAmmo, prediction and other capacity consumers still use level
+adapters and require further integration. No full cross-module parity claim.
+
+Heavy ammo capacity branches restored in shared BG_MaxAmmoForWeapon: flame +50,
+mobile MG42 (carried/set) +maxclip, mortar (carried/set) +2. Panzer remains base.
+Original nitmod_bg.c:4945 tests heavy reward bit32; current shared numeric API
+adapts this via level>=5. Independent reward-mask equivalence remains OPEN.
+Removed obsolete commented ET heavy bonus block. Production WASM tests cover
+108 heavy custom-table/level combinations plus prior 384 cases; all pass.
+All three WASM modules build/export-check successfully. Live pickup/reload and
+custom script synchronization still need verification. No pak/engine changes.
+
+BG_MaxAmmoForWeapon: scoped Garand/K43/FG42 now accepts the Light Weapons
+bonus as well as Covert Ops; adrenaline shares the syringe First Aid bonus.
+Hand grenade maxammo no longer gains the ET engineer +4: original cases 4/9
+only add one for First Aid when engineer reward is absent. Class grenade counts
+remain in their separate helper. Reference: sorted nitmod_bg.c:4945, original
+cases 39/40/41, 43, 4/9. Existing numeric-level adapters remain; independent
+reward-mask parity is NOT claimed. Production WASM fixture passes 216 maxammo
+combinations plus 168 pickup/probe cases; all three module builds/exports pass.
+Knife and adrenaline refill branches still require reward/config integration;
+live verification remains open. No engine/pak changes.
+
+Magic ammo now restores EF_HEADSHOT (helmet) before ammo checks and counts that
+as success, matching original BG_AddMagicAmmo entry (playerState+0x68 bit0x1000).
+This includes the zero-clip probe side effect observed in the reference; it is
+not claimed to be a pure query. Shared production-code WASM fixture checks full
+ammo + missing helmet, unchanged other flags/ammo, and subsequent rejection for
+all 168 existing cases. All three WASM builds and export checks pass. Live helmet
+render/pickup interaction remains pending; no pak or engine edits.
+
+BG_AddMagicAmmo syringe capacity now uses the weapon table maxammo plus the
+existing First Aid bonus instead of fixed 10/12. Original BG_AddMagicAmmo reads
+ammoTableMP+792 (11*72, maxammo) and adds two for First Aid reward bit4.
+The current numeric skill adapter is retained: independent reward-mask parity
+and the remaining magic-ammo branches are still OPEN. WASM fixture executes
+production bg_misc.c: 168 custom-limit/level/amount combinations, probe without
+mutation and full-capacity rejection. All three WASM builds/export checks pass.
+Live custom-script synchronization and pickup testing remain pending.
+
+Huge Ammo Pack is now appended to the shared item table without shifting native
+indices. Original qagame/cgame item 34 uses weapon_magicammo3, WP_AMMO, quantity
+50 and the same model placeholders as Mega Ammo Pack (verified in both hashed
+ELFs). Client wire item 34 now resolves to that distinct item. Manual and limbo
+ammo selection gives Signals bit32 precedence over bit2; count/density still
+uses bit2, as in Weapon_MagicAmmo_Ext. Pickup sound uses the existing native
+file-path convention. All three WASM modules build and export checks pass;
+original item reference test passes. Live pickup/render parity and charge tables
+remain pending; this does not claim full ammo pickup parity.
+
+Ammo pack normal/mega selection and count/density now read Signals reward bit 2
+for manual throws and limbo drops, rather than inferring the reward from level.
+Reference: original Weapon_MagicAmmo_Ext, client+0xedc, count = bit2 ? 2 : 1.
+Original bit32 selects Huge Ammo Pack, but this item is absent from the current
+shared item table: that selection remains OPEN pending item/protocol mapping.
+Charge cost tables remain OPEN; their existing level-based route is unchanged.
+All three WASM targets build successfully; live pickup/reward testing pending.
+
+FirstAidUnlocks now reads the authoritative sess.nitmodSkillMasks instead of
+synthesizing bits from numeric levels. G_SetPlayerSkill maintains this mask,
+including session initialization. Consumers (adrenaline, poison cure, optional
+regeneration) retain their bit tests. WASM abilities fixture tests all 64 masks
+against six independent numeric levels plus existing adrenaline eligibility.
+All WASM build targets pass; live session/skill-update behavior remains pending.
+
+Mine snapshot Battle Sense grant now reads sess.nitmodSkillMasks bit 4 instead
+of numeric skill >=4. Original callback reads client+0xed0 &0x10; g_stats already
+maintains independent masks through progress.unlocked. Production callback
+WASM test covers 2048 PVS/armed/spotted/team/level/mask combinations including
+level-mask disagreement. All WASM targets pass. Spectator branch parity and live
+skill-update/snapshot replay remain open; PVS still precedes every grant.
+
+Mine snapshot callback now applies original outer trap_InPVS(viewer,mine)
+before skill/unarmed/spotted/team grants. Indices/client pointer validated first.
+Original sorted nitmod_weapons.c G_LandmineSnapshotCallback is the reference.
+WASM production callback covers 32 visibility combinations plus invalid inputs.
+Original skill-mask and spectator branch differences remain explicitly open;
+no spectator visibility expansion made. All WASM targets pass, live PVS pending.
+
+Post-pliers mine audit: prime uses common contact policy; poison trigger already
+schedules gas explosion separately; registry cleanup includes both mine types.
+Existing mine-contact fixture run under WASM (without q_math, since it supplies
+its own VectorLengthSquared). No production changes in this audit. Snapshot
+visibility and live arm/trigger/defuse sequence still require original comparison.
+
+Poison-mine pliers integration fixed: producer uses MOD_POISON_GAS_MINE but
+engineer branch accepted only MOD_LANDMINE. Both now enter the existing mine
+arming/defusing path. All three ammo refunds retain the actual mine weapon,
+saved before entity freeing. Source wiring regression and WASM build pass;
+this is a typed integration fix, not original engineer disassembly parity.
+Live poison-mine arm/defuse, charge refunds and owner-transfer parity remain open.
+
+Native mine owner hints wired: qagame initializes landmine/poison-mine clientNum
+to thrower; cgame native scan uses clientNum/teamNum, original scan retains
+otherEntityNum/otherEntityNum2. Hint presentation accepts both layouts while
+armed/team/trace gates remain unchanged. WASM scan test covers distinct owner
+fields, enemy rejection and unarmed rejection; all WASM targets pass. Native
+servers need the matching updated qagame. Rendering/snapshot visibility policy
+was not changed; live mine hint and ownership-transfer checks remain pending.
+
+Dynamite hint production draw now tested under WASM alongside scanning: both
+layouts, owner text, full/half fuse bars, centered anchor restoration, armed
+one-shot consumption, unarmed no-bar and one-second expiration. Trace/render
+sinks remain stubs, so no live visual parity claim. Entity call site confirmed
+unconditional for dynamite. No production modification in this verification.
+
+Dynamite crosshair hints enabled for reconstructed Nitmod: qagame sets clientNum
+to the thrower; cgame privately normalizes native time fuse to the hint's time2.
+Original time2 remains untouched. Team/trace/distance gates retained. Production
+scan WASM fixture verifies layout gates, owner retention and nonmutating fuse
+normalization. cgame/qagame rebuilt/export-checked; UI current. Live rendered
+bar and network spawn-to-hint replay remain pending. Older native servers lacking
+owner metadata require updated qagame; no original-server wire change.
+
+Production G_NITMOD_HealthTimer now exercised under WASM: 72 rate/health-limit
+cases with multi-tick residuals, war/medic gates preserving residual time,
+overhealth decay and the corrected DM sixth-reward route. Effective-max-health
+and unlock readers are stubs. No additional production change in this audit;
+all build targets current. Live regeneration replay remains pending.
+
+Regeneration eligibility corrected: in Deathmatch without DMOptions bit 1,
+g_medics bit 4 plus sixth First Aid reward still permits regeneration.
+Original sorted ClientTimerActions LAB_0004e400 jumps to LAB_0004e399 (reward
+check), not directly to decay. Typed pure predicate now preserves that route.
+WASM tests cover 32768 eligibility combinations; actual health/rate/war gates
+unchanged, full gameplay replay pending. Legacy orders/voiceOrders strings are
+absent from the original UI binary, so they are not counted as Nitmod recovery.
+
+Legacy UI orders/voiceOrders/voiceOrdersTeam now share a bounded team-selection
+reader, rejecting negative/nonfinite/out-of-range cvar input before integer cast
+or roster indexing. Count remains the broadcast sentinel; valid fractional input
+retains truncation. WASM helper tests cover team counts 0..64 and invalid values.
+This is safety work, not a newly recovered original action; legacy command-format
+handling is unchanged and still requires separate audit.
+
+Campaign setup/play actions moved from unchecked UI_RunMenuScript branches into
+the typed menu-action dispatcher. Preserves existing progress-to-cvar and quoted
+spmap commands; validates campaign/map bounds, progress, pointers and map tokens
+before access. Production-action WASM test covers setup, unlocked/locked maps,
+invalid selection and missing map record; all WASM build targets pass.
+This is migration/hardening of existing actions, not newly recovered functionality
+or an original-binary runtime parity claim. Interactive campaign launch pending.
+
+UI campaign visibility verified under WASM using the production helper:
+392 selected-map/progress combinations, six existence flags and invalid
+catalog/NaN inputs pass. Cvar input is a stub, not an interactive menu replay.
+No production change or newly ported feature in this audit; all targets current.
+
+Poison scheduler now has direct production-function WASM coverage: 48 combinations
+of default/custom interval and damage, stacks and attacker identity. Verifies
+strict nextTick < time boundary, one tick per call, rescheduling and spectator
+cleanup. Overrides and G_Damage use sinks; this is not full gameplay replay.
+All WASM build targets current. No production code change in this verification.
+
+Poison tick interval now consumes cached poison.weap spread when nonzero.
+Original ClientThink reads BG_Weapons+81960: 47*0x6b0+0x5d8; original parser
+stores spread at +0x5d8. Zero retains g_poison-selected 50/1500 ms defaults.
+Typed integer getter avoids float spread conversion. WASM getter test checks
+overrides, zero and unavailable records; scheduler/browser replay still pending.
+No protocol change or pak edits.
+
+Poison attack now checks ps.powerups[PW_INVULNERABLE], the field populated by
+NITMOD_SetSpawnProtection, instead of the unused client invulnerabilityTime.
+Original Weapon_Poison compares client+0x154 expiry >= level time. Standalone
+WASM attack tests cover expiry before/at/after current time, independence from
+the legacy field, miss, invalid target, dead target and absent client without
+sound/stack side effects. Existing muzzle/team/timing tests and all WASM build
+targets pass. Live spawn/revive protection replay remains pending.
+
+Poison muzzle posture branch completed: original Weapon_Poison tests eFlags
+0x10 (EF_CROUCHING), not EF_PRONE. Living crouched attacker with pitch >30
+uses height 30; other living attackers use viewheight; health <=0 uses 25.
+ELF branches 0xf3590..0xf35c8, 0xf3770 and 0xf3820 agree with sorted reference.
+Production attack WASM fixture adds 29.99/30/30.01 across standing/crouched/prone,
+and health -1/0, checking trace origin and length. Existing lean/team/timer
+tests and all WASM build targets pass. Supersedes unresolved posture note below;
+live hitbox comparison remains open, and no movement-delay cvar was touched.
+
+Poison syringe muzzle no longer uses the rounded ET activation origin.
+Original Weapon_Poison retains trBase fractions and applies lateral lean plus
+vertical -abs(lean/3.5); typed attack now does the same. WASM production attack
+fixture checks left/zero/right lean, fractional origin and 64-unit trace.
+Special original posture flag/height branch remains unresolved; this is partial
+muzzle parity, not complete Weapon_Poison parity. Existing team/timer tests and
+all WASM build targets pass. Live trace comparison remains pending.
+
+Poison syringe team restriction corrected from any nonzero friendly-fire value
+and LMS exemption to bit 0 and Deathmatch exemption. Direct original ELF
+Weapon_Poison disassembly: 0xf36b4 testb $1; 0xf3736 compares gametype to 8;
+otherwise OnSameTeam rejects. Production WASM attack test passes 112 combinations
+of gameplay modes 2..8, friendly-fire masks 0..7 and team relationship, checking
+sound and poison-state side effects. Existing timer/attribution tests pass;
+all WASM targets build. This affects reconstructed qagame only, no wire change.
+
+Poison syringe repeated-hit timing aligned with original Weapon_Poison
+(sorted nitmod_weapons.c: first infection initializes client+0x53a0;
+already-poisoned branch changes attacker+0x5300 and stack count+0x5304 only).
+Reconstructed attack no longer overwrites nitmodPoisonNextTick on repeat hits.
+Production WASM attack test covers first infection, attribution transfer,
+unchanged scheduled tick, cure and reinfection; trace/sound are stubs.
+All WASM build targets pass. Camera-bit audit also confirms original medic
+regeneration tests 0x200001; that poison exclusion was deliberately retained.
+No client/UI wire change; live damage-timing comparison remains pending.
+
+qagame camera-freeze integration corrected: ClientThink now requires the
+cameraPortal as well as EF_VIEWING_CAMERA before discarding input/freezing.
+The shared bit alone is also NITMOD_EF_POISONED, set by the reconstructed poison
+producer. Cmd_StartCamera creates the portal before setting the flag; StopCamera
+clears it. Standalone production-helper WASM test covers all flag/portal pairs
+and null client. This is a typed integration correction, not a disassembly
+parity claim for ClientThink. Live poison/movement/camera regression is pending;
+other legacy camera-bit consumers and poison visual gates still need audit.
+
+UI player-action WASM runtime coverage now executes all 21 recovered vote,
+referee, RCON and ignore commands: 210 cases for selected-player identity,
+quoted colored names, invalid roster indices/counts, unsafe names and missing
+termination. Existing binary-reference test verifies original action strings.
+No production behavior changed in this audit; this adds executable evidence
+for existing port code, not 21 newly ported features. All build targets current.
+Server execution and live menu interaction are not exercised by these sinks.
+
+UI map/campaign vote, referee and rcon actions now check fixed array capacity
+as well as reported counts, and reject unsafe unquoted metadata tokens. Valid
+command formatting is unchanged; this is hardening of the recovered actions,
+not a newly recovered gameplay feature. Production-action WASM test covers
+five valid map/campaign commands, malformed identifiers and oversized/negative
+selections. Original UI action reference test and all WASM build targets pass.
+Console/cvar sinks are stubs; live menu-to-server execution remains unverified.
+
+Crosshair health now consumes the existing negotiated CLASS_HEALTH/nch path
+on reconstructed servers, instead of always using ET defaults. Original
+configstring 39 is read only on the original layout; native class overrides
+come from nch. Nonpositive helper results preserve the existing calculation.
+Standalone WASM helper test covers all five classes, capability combinations,
+overrides, medic/skill bonuses and invalid inputs with protocol stubs. Test
+snapshot is static to avoid exceeding the standalone default WASM stack.
+All three WASM build targets pass; browser health-bar comparison remains open.
+
+Crosshair player name/class/rank presentation now also accepts the reconstructed
+Nitmod server layout for ordinary identified players. Native health calculation
+and original-only disguise decoding remain separate; ET presentation is retained
+for native disguises. Extended production-helper WASM test checks both Nitmod
+gates, player text/icon coordinates, invalid clients and native disguise rejection.
+This verifies rendering calls with stubs, not visual parity in the browser.
+
+Crosshair entity labels and tank health bars now use Nitmod presentation for
+both server layouts, rather than falling back to ET rendering on localhost.
+Three entity-label call sites use gamename predicate; entity-type selection
+still uses original/native layout distinction. Draw helpers accept both Nitmod
+layouts. Standalone production-helper WASM test verifies label coordinates,
+health clamping, centered-anchor scope/restoration and invalid inputs using
+renderer/predicate sinks. cgame rebuild/export check passes; no ui/qagame change.
+Actual wide-screen rendering and entity/name synchronization need live checks.
+
+Score receiver runtime verification added: production static CG_ParseScore
+executed under WASM for both framing layouts, negotiated/unnegotiated KD and
+same/reassigned clients. Confirms retention/clear, original flags, native team
+totals, sc1 append and atomic rejection of malformed tail, invalid client and
+short packet. Supersedes previous source-only retention verification. Protocol
+predicates/arguments are stubs, not live negotiation. No production change in
+this audit; sender and KD-parser tests remain separate from browser E2E.
+
+KD receiver isolated as NITMOD_KDCommand, retaining original positional mapping
+(transmitted client token ignored), transactional parsing and append cursor.
+Direct production-parser WASM test passes reordered client mapping, malformed
+append then retry, overflow append/count and unknown commands. Score refresh
+now retains same-player KD for negotiated reconstructed servers as for original
+servers; reassigned rows still clear. Preservation gate source-checked only,
+not runtime-tested here. cgame rebuild/export check passes; ui/qagame unchanged.
+No live server/browser end-to-end parity claim.
+
+Full-update ordering aligned: score pages -> team scores -> KD pages -> team
+info, matching original fu dispatch ordering. Supersedes the ordering caveat
+below, but reconstructed packet framing remains intentionally distinct.
+Production WASM sender test now checks this order, reverse sorted clients,
+POW filtering and INT_MAX/INT_MIN KD values spanning two KD packets (54 rows).
+Existing 0..64-player and capacity cases still pass. qagame rebuild/export
+check passes; ui/cgame unchanged. Receiver/browser end-to-end replay pending.
+
+Immediate fu refresh implemented in qagame ClientCommand, following original
+nitmod_client.c fu branch: score refresh plus both team-info senders. Existing
+G_SendScore supplies negotiated KD and team scores. cgame score-key request
+uses fu only with SCORE_KD capability; legacy/original non-negotiating servers
+retain score request. Demo/multiview guards remain. WASM production handler
+fixture passes 40 score/KD rows plus ordered Axis/Allies updates; source wiring
+check passes. All three modules rebuild/export-check successfully with existing
+warnings. Reconstructed wire framing and team-score/KD ordering remain distinct
+from original; no claim of original-client support on reconstructed server or
+browser end-to-end parity. Teaminfo still suppresses unchanged cached data.
+
+Reconstructed qagame now sends kd0/kd1 after score pages, gated by new
+NITMOD_FEATURE_SCORE_KD bit 14 advertised by both sides. Existing cgame
+receiver consumes these triples in score order. Sender records exactly the
+rows accepted into sc0/sc1, preventing drift from POW filtering or packet
+capacity. Typed sess.kills/deaths feed triples; original G_SendKD_Add uses
+client/kills/deaths order. Byte-bounded KD packets retain current protocol
+score framing, not original packet boundaries. WASM sender fixture checks
+40 matching KD rows and unsupported clients receive no KD. All three WASM
+modules rebuild/export-check successfully; existing format warnings remain.
+Original fu command and end-to-end browser KD validation remain open.
+
+G_SendScore packet continuation fixed: unappended row retries same index;
+appended row at count limit advances to next index. Previous i-- duplicated
+rows and omitted tail players. Original sorted G_SendScore uses first-unsent
+index; retained this layout's 32-row limit and sc0 team-score header (original
+uses different framing). Production WASM test covers 0..64 clients plus a
+40-client byte-capacity split with exact-once delivery. qagame rebuild/export
+check passes. Two-packet capacity remains finite; this does not port original
+score flags/KD or the missing fu command and does not claim browser parity.
+
+TeamplayInfoMessage aligned with original sorted nitmod_unknown.c: refresh
+coordinates directly in sender, include POW-marked team members, skip bot
+recipients while keeping them in the roster. Preserve reconstructed five-field
+wire format and matching cgame decoder; original six-field XYZ remains separate.
+Entry capacity now reserves NUL. Production-function WASM fixture passes exact
+packet, fractional XY truncation, health clamp/limbo, POW inclusion, bot recipient
+exclusion and unchanged-message suppression. qagame relink/export check passes;
+cgame/ui unchanged. Full original XYZ transport and browser checks not claimed.
+
+Wounded/medic name queue and draw gates now accept both Nitmod layouts via
+gamename, not just original configstring numbering. Consumers already use
+typed team/class/health data; no wire decoder changed. Null entity rejected
+before dereference as hardening. 600 standalone production-queue WASM cases
+cover medic/dead-player roles, teams, range endpoints and mod eligibility;
+predicate is stubbed there. Full-source fixture expanded to et260 layout but
+not executed this pass. cgame relink/export checks pass. Live visibility,
+health synchronization and rendering on localhost remain to be verified.
+
+Missile-camera selection now accepts reconstructed Nitmod servers as well as
+original-layout servers: use gamename predicate, not original-CS-layout predicate.
+Tracking consumes native weapon enums and entity clientNum; qagame already sends
+simple.missileCams from g_missileCams. Original weapon-mask/owner logic retained.
+Production tracking TU WASM test passes 192 mod/mask/weapon/owner combinations
+and null/no-snapshot/non-missile checks. Three Python wiring checks run directly
+(pytest unavailable). cgame relink/export check passes; ui/qagame build-current.
+This closes a client protocol gate, not full localhost camera rendering parity;
+renderer restoration and real qagame projectile ownership still need live checks.
+
+cgame hit samples now register in CG_RegisterSounds, matching original
+cgs+131996..132008: head.wav, nit/hs.wav, body.wav, team.wav. Snapshot and
+explicit event consumers retain separate samples; neither loads assets during
+playback. Removed duplicate event-time cg_hitSounds registration (main cvar
+table already owns it). Invalid explicit-event handles are suppressed as safety
+hardening. Production-function WASM test passes four-path registration order,
+repeated head/team events, cvar, invalid client/type and failed-load checks.
+Full event/snapshot fixtures adjusted for eager loading but not executed here.
+cgame build/export check passes; ui/qagame unchanged. Live audio still pending.
+
+cgame PM sound registration moved from event handling to CG_RegisterSounds,
+matching original eager asset loading (sorted cgame_client.c CG_RegisterSounds,
+cgs+69656). Events only use the registered handle and retain local-recipient,
+live cg_pmSounds, channel 3 and volume 255 behavior. Invalid sound handles are
+suppressed as hardening. Standalone production-function WASM test covers loading,
+repeated events, disabled cvar, other recipient and missing asset. Full-source
+event fixture updated but not executed here. cgame rebuild/export check passes;
+ui/qagame build-current. Browser audio verification remains open.
+
+UI system staging audited against UI_RunMenuScript ELF branches 0x25926
+(get), 0x2607d (reset), 0x26223 (apply). Original 0x26741..0x26759
+confirms zero-rate substitution 5000/30/1; apply clears staged fields afterward.
+Existing production implementation retained. New standalone WASM test executes
+126 get/apply/reset combinations over 21 settings, zero/nonzero rate and NaN
+in each numeric field. NaN atomic rejection is port hardening, not original
+parity. Engine cvar IO is stubbed; this is not browser menu verification.
+
+GlobalAccum error-path parity: missing index/command, range and unknown-command
+diagnostics now identify globalaccum, and operand validation precedes dispatch
+as in original sorted G_ScriptAction_GlobalAccum (Ghidra 0xc2450). Local/global
+range diagnostics both report 9, not 10. Nine production-function WASM error
+cases capture G_Error with setjmp, including unknown commands with/without
+operands; existing command/trigger tests also pass. Negative-index rejection
+remains deliberate safety hardening. qagame rebuilt/export-checked; cgame/ui
+build-current. No new UI or cgame behavior was changed in this step.
+
+Clamp helpers corrected in cgame and qagame through shared nitmod_clamp.h.
+Original cgame ELF 0xdb4a0 and qagame 0x103280 explicitly set x87 RC=0x0c00
+before FISTP: truncate toward zero, not the former half-away rounding.
+Both bounds are evaluated sequentially, including reversed bounds; float
+helper follows the same order (cgame ELF 0xdb460). Double comparisons retain
+the original exact integer comparison precision. Out-of-range conversion
+returns INT_MIN, matching masked x87 integer-indefinite rather than invoking
+undefined WASM conversion. Null-pointer tolerance remains deliberate hardening.
+Standalone production-helper WASM cases pass; cgame/qagame relink and export
+checks pass, ui remains build-current. No browser replay or UI feature claimed.
+
+Accumulator command regression coverage expanded: production local/global actions
+now execute 38 set/inc/random/bit/comparison/wait cases at slot 9, plus four
+trigger fanout/caller-change cases under WASM. Both use the target-name hash,
+unlike the separately verified original cvar trigger's event-name hash.
+Reference: sorted nitmod_script.c G_ScriptAction_GlobalAccum trigger branch;
+no new gameplay implementation change was needed for these tested paths.
+Engine event/lookup operations remain test sinks, not original runtime parity.
+
+Global accumulator capacity fixed: level.globalAccumBuffer used eight slots
+while GlobalAccum accepted ten. Storage now uses G_MAX_SCRIPT_ACCUM_BUFFERS
+(10), matching original 0..9. Local/global print guards also accept ten;
+separate bot accumulator capacity is unchanged. Negative local/global action
+indices now rejected as safety hardening. Production WASM test verifies slot
+9 writes in both stores and both print commands accepting index 9. Print-error
+diagnostics now report the correct upper bound 9. Engine output is a test sink;
+this is not a browser replay or complete script-system parity claim.
+
+Production G_FreeEntity now exercised by standalone WASM test: deletion
+notifications/callback precede clearing; flag and dynamite objective clear
+while spawnCount/freetime survive; neverFree retains state after callback and
+unlink. Engine/bot notifications are test sinks. Passes with two pre-existing
+g_utils array-address warnings. No production change needed. This covers
+freeing, not full engineer defuse/explosion timing or original engine replay.
+
+Dynamite count consumer ported: scan non-client entity slots for etpro_misc_1
+bit 1 and matching nitmodDynamiteObjective. Replaces proximity-based bot count.
+Original post-store numeric-targetname comparison confirmed at ELF
+0xb1ec2..0xb1f1f and retained, including abort-on-unequal. Production-function
+WASM test covers two charges, wrong target, absent flag, client exclusion and
+both continuation outcomes. WASM build/export checks pass. Live planting,
+defuse/explosion/reuse parity still pending; no end-to-end parity claim.
+
+Dynamite association state introduced as server-only nitmodDynamiteObjective.
+Primary objective planting records hit->s.number after etpro_misc_1 bit 1,
+matching inspected original planting sequence. Constructible path leaves it
+unchanged as original; G_InitGentity resets it and G_FreeEntity's existing
+whole-entity memset clears it. Association consumer/counting and original
+post-count comparison remain pending. Source lifecycle wiring test added;
+not a gameplay parity claim. No network/shared entity-prefix change.
+
+Dynamite-count investigation: flag maps to etpro_misc_1 bit 1, but original
+also stores an objective entity number absent from the current planting path.
+Current spatial BotGetTargetDynamite counting is not equivalent. Recovery
+findings and required lifecycle/test work recorded in
+reference/dynamite-count-recovery.md. No production change or completed
+dynamite-count parity claimed for this investigation.
+
+Local accum set_to_dynamitecount target lookup now matches original ELF
+0xb1e34/0xb1e48: BG_StringHashValue followed by G_FindByTargetnameFast.
+Counting still uses the existing BotGetTargetDynamite and is NOT claimed
+original-parity: original scans an entity flag and target association directly,
+and its apparent subsequent compare needs further verification. No change to
+those unverified semantics. Existing production-script WASM regression passes;
+the dynamite branch remains an aborting test sink, not covered by that test.
+
+Resolved local accum index ambiguity by disassembly: ELF 0xb1f3f computes
+entity + index*4, then 0xb1f47/0xb1f65 read/write at +0x3d4. Ghidra's apparent
+slot-zero inc was misleading; existing selected-buffer behavior is correct.
+Local inc now uses unsigned 32-bit addition before signed storage. Extended
+production-function WASM test checks both overflow directions at buffer 3
+and preservation of buffers 0/2. Unexercised dynamite lookup sinks abort.
+
+Global accum inc now performs unsigned 32-bit addition before signed storage,
+matching original G_ScriptAction_GlobalAccum arithmetic without signed-add UB.
+Production-function WASM tests cover INT_MAX + 1, INT_MIN - 1, neighboring
+buffer preservation and wait_while_equal. Test and qagame build/export checks
+pass. Local accum arithmetic is unchanged: its decompiled inc branch appears
+to use slot zero, requiring direct disassembly before deciding index parity.
+
+Executable WASM coverage added for production G_ScriptAction_Cvar and parser:
+set/inc/random/bitset/bitreset writeback, bit comparisons, wait, unmatched and
+matched triggers, ordered two-recipient fanout and deferred caller termination.
+Engine cvars/hash lookup/event delivery are test sinks, not an engine replay.
+Inc now uses unsigned addition before signed output to match original 32-bit
+wrap without signed-add UB; INT_MAX -> INT_MIN test passes. Source checks and
+WASM qagame build pass. No cgame/ui or pak mutation in this step.
+
+Cvar trigger_if_equal now uses original hash lookup. Important original quirk:
+the SECOND parsed token is hashed, not the first target-name token. Verified
+in ELF: second COM_ParseExt result saved in EDI at 0xb5988, supplied to
+BG_StringHashValue at 0xb59a7/0xb59ac and lookup at 0xb59e0. Port hashes `name`
+and keeps ordered fanout/deferred caller termination. Accum paths unchanged.
+Reference-byte/source wiring checks added; full script runtime comparison
+remains pending. This behavior intentionally preserves the original quirk.
+
+Script cvar writeback restored for set/random/bitset/bitreset. Previously these
+only modified a local value. Original G_ScriptAction_Cvar writes `%i` through
+trap_Cvar_Set after modifying cases; comparisons do not write. Inc remains
+plus one (original case 0x9a), not the supplied operand. All four cvar bit
+operations now use the same low-five-bit mask as accum. Source wiring test
+covers five write paths; mask WASM tests and qagame build pass. Full engine
+cvar-store/script execution remains to be tested.
+
+Script accum bit operations: local/global bitset, bitreset, abort_if_bitset
+and abort_if_not_bitset now share an unsigned 32-bit mask using low five
+index bits, matching original nitmod_script.c shift semantics. Avoids signed
+shift UB at bit 31 and out-of-width inputs without changing buffer layouts.
+Standalone WASM test executes 257 shift cases plus integer endpoints; passes.
+qagame WASM build/export validation passes. Full script execution tests were
+not run this turn; cvar script bit operations remain separately unaudited.
+
+UI_Update behavior audit against original ui_ui_misc.c / ELF 0x20cf0:
+existing settings implementation matches the inspected rate thresholds,
+color-depth/stencil branches, LOD, preset and name actions. Added standalone
+Emscripten/Node execution of production UI_Update with cvar/command sinks
+stubbed. Boundary rates 3999/4000/4999/5000/25000, 16/32-bit depth behavior,
+LOD 2, valid/invalid presets and name copy pass. No production change in
+this audit; this is not full menu/browser parity or full UI_Update coverage.
+
+UI registration audit: read original ELF cvarTable at 0x57d40, size 0x1068,
+20-byte entries. No additional missing UI cvar names found in the UI sources.
+Added executable Python reference comparison for all 18 vote_allow registration
+rows, checking names, defaults and CVAR_ARCHIVE (including the original duplicate
+kick row). This is registration coverage, not proof of each cvar's behavior.
+No production change needed in this audit; no additional UI feature claimed.
+
+Location debug localhost follow-up: CG_NitmodAddLocationMarkers and
+CG_NitmodQueueLocationName now use the gamename-based Nitmod predicate,
+consistent with the already shared draw pass and asset loading. No entity
+wire fields are used for these file-based points. Executable WASM tests cover
+marker/label dispatch, far/behind/PVS rejection and disabled/no-snapshot
+conditions with renderer/label sinks stubbed. Test snapshot storage is static
+to fit the standalone 64 KiB stack. Test exits successfully; cgame WASM build
+and exports pass. Actual label projection/rendering still needs browser QA.
+
+Localhost location integration: loading location files and resolving display
+names now use the Nitmod gamename predicate (NITMOD_UsesNitmodHud), not the
+original configstring-layout predicate. Reconstructed et260-layout Nitmod
+servers therefore use the same location assets and naming policy. No wire
+indices changed. Standalone WASM test executes named/grid formatting with
+Nitmod enabled and disabled; file-loading behavior still needs a browser
+test. WASM cgame build/export verification passed. Debug location markers
+retain their existing original-layout gates and are not claimed completed.
+
+Location follow-up: standalone Emscripten/Node test now executes production
+location parser/lookup and q_shared/q_math code, with engine services stubbed.
+Covers repeated/multiword names, zero origins, invalid coordinates and short
+names. Name-plus-grid formatting corrected to `%s ^3(%s)`, verified at original
+cgame ELF 0x10d97b; test also covers formatted and grid-only output. WASM
+module build/export checks pass; this does not replace browser visual testing.
+
+Location parser parity: CG_LoadLocations consumes the remaining line as the
+name, strips quotes and repeats the preceding name for @ (literal verified
+at original cgame ELF 0x106fd7). Port now accepts unquoted multiword names
+and repeats names even after a skipped zero origin. Coordinate parsing cannot
+cross a line. Existing finite-number checks and 64-byte name limits remain
+intentional hardening. CG_GetLocationMsg also treats one-character names as
+Unknown, now matched. Added full-source test fixtures for multiword/repeated
+names; that test executable was not run this turn. WASM cgame build and export
+validation passed; live map-location verification remains pending.
+
+Voice location presentation: CG_VoiceChatLocal now uses existing
+CG_NitmodLocationText with enable bit 2 (named location, Unknown policy bit 8,
+grid suffix bit 16) instead of unconditional grid coordinates. Original
+cgame_ents.c CG_VoiceChatLocal establishes the bit policy. Team format
+`(%s^7)^3(%s)^7:^%c%s` verified directly at original ELF address 0x10d985;
+fireteam format restores the original ^7 reset after the player name.
+Source wiring regression added; live location/voice rendering remains pending.
+
+Client voice command parity: removed inherited ET260 spectator rejection
+from CG_VoiceChat_f, CG_TeamVoiceChat_f and CG_BuddyVoiceChat_f. Original
+cgame_client.c implementations only require argc == 2, copy argument 1
+with a 64-byte limit and forward the respective vsay command. Those limits
+remain unchanged; server mute/team/fireteam/ignore filtering is untouched.
+Source regression checks cover all three command bodies. Browser spectator
+voice playback against original and reconstructed servers remains pending.
+
+Custom voice text ported server-side from original ClientCommand/G_Voice:
+vsay and vsay_team read a 32-byte voice id at argument 1 and text from 2;
+vsay_buddy reads id at recipient-count + 3 and text from +4. Text longer
+than one byte goes through G_Say with the same chat mode and sets voiceonly
+to suppress the script subtitle. Plain voice and bot call interfaces remain
+unchanged via a wrapper. Invalid buddy counts above MAX_CLIENTS are rejected
+as deliberate bounds hardening. Existing cgame understands chat plus voiceonly;
+no new message type or asset change. Source tests cover parsing/wiring, not
+live playback; browser tests of custom voice text remain pending.
+
+Voice recipient ignore filtering restored in qagame G_Voice (original ELF
+0x58860): global/team and both fireteam recipient modes check the recipient's
+ignore bitset against the sender before delivery. Existing class/fireteam
+membership filtering stays intact. Explicit targeted delivery remains outside
+this filter, matching the original function. Uses typed sess.ignoreClients;
+no structure or wire-format change. Source wiring tests cover both broadcast
+branches and the targeted exception; runtime ignore/unignore test is pending.
+
+Completed the qagame voice-variant send path: original G_Voice (reference
+`qagame/sorted/nitmod_game.c`) generates one `(rand() & 0x7fff) / 32767.0f` selection;
+G_VoiceTo appends it with `%f` after the global id or
+team/buddy coordinates. Targeted and both broadcast paths now share that
+value. The client consumes this optional field independently of configstring
+layout, including reconstructed localhost servers. Legacy messages without
+the field still work. Source wiring checks and WASM build validation cover
+this change; original-server/localhost playback comparison remains pending.
+
+Original-server voice variant selector ported through CG_VoiceChat,
+CG_VoiceChatLocal and CG_GetVoiceChat. Global argument 5 / team-buddy argument
+8 now selects the same sound/sprite/text tuple as the server specifies.
+Original CG_GetVoiceChat disassembly uses truncation (x87 control word 0xc00).
+Empty variant lists, nonfinite/out-of-range selectors are rejected; rounded
+endpoint 1 is clamped to the last variant as hardening. Messages without the
+field retain local random selection. Reconstructed qagame emission was
+completed in the follow-up above; no runtime parity claim. WASM cgame
+build/export and source wiring test pass; browser voice transcripts pending.
+
+Client chat audit: normal chat/tchat formatting, team storage and 70-column
+wrapping match inspected original paths. Added byte-capacity wrapping to
+CG_AddToTeamChat because color escapes do not increment visible width and
+could overflow its 211-byte row. Reserve space for an escape and terminator;
+ordinary width wrapping remains unchanged. This is deliberate hardening,
+not original overflow parity. WASM cgame build/export check and source guard
+test pass; color-heavy browser rendering remains untested. No pak changes.
+
+Chat location/weapon fields aligned with original G_Shortcuts (ELF 0x56520):
+location uses ps.origin, and location/weapon labels each retain at most 31
+bytes before expansion. Source regressions updated. Three chat/voice varargs
+call sites now explicitly pass integer client IDs to integer formats rather
+than ptrdiff_t; wire spelling is unchanged. WASM qagame build/export check
+passes without the previous g_cmds format warnings. Runtime transcripts
+remain pending; no pak/engine edits or new cgame/ui feature claimed.
+
+Original chat name sanitation ported: G_ShortcutSanitize's literal table at
+ELF 0x2357e0 converts [a/d/h/k/l/n/r/p/s/w] to parentheses before G_Shortcuts
+copies names into 36-byte fields. Typed name substitution now performs that
+sequence for self and referenced players; [t]/unknown codes are untouched.
+Expansion remains bounded/nonrecursive. WASM qagame build/export and source
+regressions pass; runtime name/transcript parity remains unverified.
+
+Chat shortcut weapon parity: original G_Shortcuts computes [t] as clip plus
+reserve, but excludes only reserve for the knife. Removed reconstruction's
+unconditional knife zero. Added weapon-ID guard before [w] item lookup as
+hardening. WASM qagame build/export and chat shortcut source tests pass;
+existing format warnings remain. Runtime chat transcript comparison pending.
+No cgame/ui wire changes, pak or engine edits.
+
+Pickup supplier/chat attribution: original Pickup_Weapon/Health save supplier
+before IsClass/team reward gates. Moved health supplier recording before its
+Medic gate and removed team/self filters for last-ammo supplier. These typed
+fields feed g_cmds chat substitutions, not reward eligibility. Parent-client
+validation remains; absent parents leave the previous supplier unchanged.
+WASM qagame rebuild/export and pickup/reward source checks pass. Live chat
+substitution after self/enemy/same-class packs remains untested. No wire,
+pak, or engine changes.
+
+Pack reward cadence corrected for both ammo and health: original client
+field +0xff8 increments inside the g_misc bit 8/4 reward gates, before skill
+points. Moved typed PCSpecialPickedUpCount into these gates. Disabled rewards
+no longer advance the subsequent score cadence; supplies/healing remain
+outside. Earlier claims that this counter intentionally advances while
+rewards are disabled were incorrect. Distinct original statistics counters
+outside the gates are not conflated with this cadence field. WASM qagame
+build/export check passes; reward source tests now inspect brace-delimited
+blocks instead of their previous tautological offset assertion.
+
+Reachable Pickup_Weapon parity: original already-owned branch excludes wire
+23/24 (Carbine/Garand) from clip-quantity Add_Ammo; added typed exclusions,
+retaining separate reserve/alternate ammo grants. WP_AMMO now returns after
+the magic-ammo branch for Field Ops as well, matching the original early
+return instead of falling through to primary weapon acquisition. WASM
+qagame build/export and pickup source regressions pass. Gameplay pickup
+transcripts remain pending; no pak or engine changes.
+
+Pickup audit: G_CanPickupWeapon class/war allowlists match the typed
+G_NITMOD_PickupPolicy for mapped weapon IDs. Pickup_Ammo remains ET base code,
+but neither this tree nor the sorted original has a direct caller (definition
+only). Touch_Item dispatch currently handles WEAPON/HEALTH/TEAM, not AMMO.
+Do not wire this function in merely because its original implementation
+exists. Before porting it, establish an original reachable call path, map
+the +0xfe8 client cooldown field, and verify quantity/partial-respawn semantics.
+No production code or WASM artifact changed in this audit; this is not a
+completed ammo feature. Existing reported dropped-pack checks remain open.
+
+Binding layout audit correction: original Controls_GetConfig/SetConfig use
+active fields at +24/+28 (two keys, not three). Controls_SetDefaults right
+branch reads +8/+12 and left branch +16/+20. Consequently the previous raw
+table interpretation of words +4 onward as four defaults is NOT sufficient
+evidence of runtime default parity. The +attack2 MOUSE2 observation below is
+only a raw table observation, not validated default-reset behavior. Preserve
+current defaults pending analysis of the extra word and initialization path.
+Added instruction-level regression evidence; no production/binary changes
+in this audit. Original exclusion of mvactivate from the table still stands.
+
+Controls default parity: decoded all 61 records of original UI g_bindings
+(ELF 0x593e0, size 0x7a0, stride 32). Original has no mvactivate record;
+removed inherited ET260 M defaults from the retained compatibility action.
+Manual binding remains possible. Original +attack2 defaults are MOUSE2 on
+both layouts. Binary-backed binding test and WASM ui/cgame build/export
+checks pass. Controls-reset runtime testing remains pending; pak unchanged.
+
+Remaining UI configstring call-site audit: UI_BuildPlayerList uses base 689
+for both the local player and roster iteration, confirmed by original ELF
+instructions at 0x15d06 and 0x15dcb. This matches this tree's CS_PLAYERS;
+no roster remapping is needed. Remaining reads are CS_SERVERINFO (0), except
+the previously corrected voteInitToggles. Regression checks pin both original
+player-base instructions and local call sites. This audit does not add a
+feature or certify player-menu runtime parity; no production code changed.
+
+UI voteInitToggles layout parity: original UI_RunMenuScript ELF 0x2362b
+reads configstring 29, while the ET260 base defines CS_SERVERTOGGLES as 32.
+UI now follows cgame's gamename/nitmod_csLayout detection to select 29 for
+original Nitmod and 32 for reconstructed et260-layout servers. This corrects
+the warmup-damage menu initialization without changing server protocol.
+Original instruction bytes and source wiring are regression-checked. WASM
+ui rebuild/export check passes; original-server/local menu runtime comparison
+remains pending. pak and engine are unchanged.
+
+UI stability review: clientCheckVote now bounds-checks cg_ui_voteFlags before
+float-to-int conversion, consistently with other typed menu actions. Double
+comparison avoids rounding INT_MAX upward; NaN, infinities and out-of-range
+values preserve existing menu state. Valid flag handling is unchanged.
+This is defensive hardening, not an original feature/parity completion claim.
+WASM ui build/export check and original UI action source checks pass; malformed
+cvar runtime scenarios remain untested. No pak/engine changes.
+
+Intermission polling aligned with original CG_Debriefing_InfoRequests/Draw:
+list requests and visible-page tally requests now have separate entry points.
+Tally polling no longer waits for list receipt, uses the original >1000 ms
+threshold, and remains after the UI-catcher early return on mapvote page 0.
+Clock rollback recovery is retained as hardening. WASM cgame rebuild/export
+check passes; source-contract checks cover the independent polling. Delayed
+list response and page-switch browser scenarios remain untested. qagame/ui
+wire formats and pak remain unchanged.
+
+Mapvote command dispatch: G_IntermissionMapVote accepts exactly two arguments
+for single voting and three for weighted voting, independently of the menu
+flag. Reconstructed qagame now matches that dispatch instead of requiring or
+ignoring the slot based on g_mapVoteFlags. Extra arguments are rejected and
+cross-slot duplicate checks apply to the weighted form, as in the reference.
+Strict numeric/map bounds checks remain deliberate hardening. Existing cgame
+single and multi commands already use these forms. WASM qagame rebuild/export
+check and mapvote source-contract tests pass; runtime command transcripts
+against the original are still pending. No separate ui change in this step.
+
+Original-server multi-mapvote compatibility fixed: G_IntermissionMapList
+sends g_mapVoteFlags & 4 (0 or 4); CG_parseMapVoteListInfo interprets any
+nonzero mode as multi-vote. Reconstruction cgame incorrectly rejected modes
+above 1, discarding original-server multi-vote lists. Removed that limit
+while retaining integer validation; reconstructed qagame now sends the raw
+mask too. Previous reconstructed servers sending 1 remain accepted. WASM
+cgame/qagame rebuild and export checks pass, with source-contract regressions.
+Browser intermission against a multi-vote original server remains pending.
+No separate ui module feature or pak change is claimed.
+
+Mapvote history staging aligned with original BeginIntermission (Ghidra
+0x899xx) and ExitLevel: current-map play count increments during list setup;
+rejected maps age there, offered maps age at exit, eligible maps outside the
+offered prefix do not age. Removed the exit-time current-map reset to zero.
+An empty ballot now still writes history before normal nextmap rotation.
+The receiver's list format is unchanged. WASM qagame build/export checks and
+source-contract regressions pass; persistent-history browser scenarios are
+not yet validated. The capacity-limited offered prefix remains documented
+hardening rather than exact original list-size behavior.
+
+Voted-map rotation preservation implemented: ExitLevel ELF 0x7ae7a adds
+0x2b937cc to EBX (0x2a4614), resolving g_nextmap at 0x2e37de0,
+then adds 0x10 for vmCvar_t.string. The emitted command now matches the
+original `map %s;set nextmap %s` rather than dropping the rotation after a
+successful vote. Ghidra's corresponding address is 0x8ae7a; earlier 0x8ae72
+references below are Ghidra addresses, not raw ELF addresses. WASM rebuild
+and mapvote source-contract tests pass. Browser rotation testing remains
+pending. No cgame/ui wire change or pak modification is involved.
+
+Mapvote no-vote exit parity: original ExitLevel at 0x8ae72 only overrides
+nextmap for a positive winning tally. The reconstruction previously selected
+a map even with zero votes. It now writes history and returns false for that
+case, allowing g_main's existing vstr nextmap path to run. Positive-tally
+selection and cgame/ui message formats are unchanged. WASM qagame rebuild and
+side-module/export check pass, as do mapvote server/flag source checks; no-vote
+browser round-transition testing remains outstanding. Exact history timing
+still needs comparison; voted-map nextmap preservation is addressed above.
+
+WASM validation: cgame, qagame and ui rebuilt successfully with the installed
+Emscripten SDK; all three pass the side-module framing and vmMain/dllEntry/
+vmWasmAbi1 export checks. Compiler warnings remain; browser runtime parity is
+not certified. The old cache toolchain path C:/emsdk was corrected locally to
+C:/Users/micha/emsdk. No native build was run for this validation.
+Map enumeration now rejects names that cannot fit the local MAX_QPATH buffer
+before indexing its suffix with the original VFS length, avoiding an out-of-bounds
+access. A source regression check records the guard; runtime VFS fixtures remain
+pending. pak and the engine are unchanged.
+
+The mapvote ordering implementation now uses a per-map random key rather than
+sorting by vote_eligible. Original G_SortMapsByzOrder (ELF 0x76030, symbol
+size 151) compares signed record +0x94 descending; the initialization in
+sorted nitmod_unknown.c assigns rand() there, while vote_eligible is +0x90.
+Flag 8 returns equality. A typed comparator covers 1152 combinations of flags,
+equal keys and signed endpoints in an executable CTest; qagame Windows x64
+build passes. The existing stable insertion order is retained for equal keys;
+exact cross-platform rand sequences and original libc qsort tie order are not
+claimed. Server list IDs and cgame/ui wire fields remain unchanged.
+
+Mapvote reliable-command capacity is now accounted for by the shared visible
+count used for list/tally generation and eligibility accounting. Previously
+only the list sender stopped at the buffer limit, while other consumers retained
+the larger count. The cgame tally receiver clamps excess totals, so this was
+inconsistent server accounting rather than a demonstrated client crash. The
+original cgame tally contract (CG_parseMapVoteTally, 0x454e0) remains unchanged.
+This capacity guard is a documented reconstruction hardening, not a claim that
+the original server used this exact budgeting algorithm. Existing mapvote
+source-contract checks and Windows x64 qagame build pass; runtime long-name
+fixtures remain pending. No additional ui feature is claimed for this change.
+
+Mapvote history loading now follows original `G_mapvoteinfo_read` (around
+0x89400, sorted qagame/nitmod_game.c): allocate file length plus terminator,
+read the complete VFS file, close it, parse using a separate cursor and free
+the original allocation. The previous 16 KiB truncation was a reconstruction
+limitation. Allocation failure closes the file and preserves history; an empty
+file also closes correctly. Windows x64 qagame builds and existing client/server
+mapvote source-contract checks pass. Large-file runtime and allocation-failure
+fixtures remain unverified; cgame/ui wire formats are unchanged.
+
+The historical rows below are incremental evidence, not a current completion
+percentage: several earlier "not gameplay-active" entries were superseded by
+later integrations. Do not total these rows as completed/uncompleted features.
+`reference/open-port-bugs.md` still requires live verification for weapon
+pickups, poison lifecycle, HUD layout and original-server custom PK3 behavior.
+Movement delay Cvars remain explicitly deferred at the user's request.
+
+The cgame arena parser was compared with original `CG_FindArenaInfo` in
+`src_nitmod_decompiled/cgame/sorted/cgame_client.c` (routine around 0x98000).
+Timelimit and team respawn fields are parsed as integers and discarded. The
+portable implementation now uses a separate `int` instead of writing through
+an `int *` alias into a string pointer. This preserves parsing/output behavior
+without depending on the original 32-bit stack-slot reuse. Windows x64 cgame,
+qagame and ui build successfully; this is not a macOS/Android or runtime parity
+certification. No new ui/qagame gameplay behavior was activated in this review.
+
 The original i386 shared objects are retained in
 `original_nitmod_shared_objects_32bit/`; their SHA-256 values are in
 `reference/original_nitmod_i386.sha256`.

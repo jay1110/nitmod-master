@@ -60,7 +60,7 @@ static int CheckPlayerSearch(void) {
             } else UI_BuildFindPlayerList(qfalse);
             if(uiInfo.nextFindPlayerRefresh && searchLinkWrites) ++errors;
         }
-        i=mode==1 || mode==3 ? 0 : mode==2 ? !!count : count<15 ? count : 15;
+        i=mode==1 || mode==3 ? 0 : mode==2 ? !!count : count<14 ? count : 14;
         if(uiInfo.nextFindPlayerRefresh || uiInfo.numFoundPlayerServers!=i+1 ||
            uiInfo.foundPlayerServerAddresses[i][0] || searchLinkWrites!=(i ? 2 : 0)) ++errors;
         for(i=0;i<MAX_SERVERSTATUSREQUESTS;++i) if(uiInfo.pendingServerStatus.server[i].valid) ++errors;

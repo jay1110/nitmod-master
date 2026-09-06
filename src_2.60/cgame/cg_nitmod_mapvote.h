@@ -21,6 +21,7 @@ void CG_NitmodMapVoteList_f( void );
 void CG_NitmodMapVote_f( void );
 void CG_NitmodMapVoteReset( void );
 void CG_NitmodMapVoteRequest( void );
+void CG_NitmodMapVoteRequestTally( void );
 void CG_NitmodMapVoteDraw( void );
 qboolean CG_NitmodMapVoteKeyEvent( int key, qboolean down );
 

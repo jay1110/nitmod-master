@@ -1775,7 +1775,11 @@ static void CG_EntityEventForProtocol( centity_t *cent, vec3_t position, qboolea
 	es = &cent->currentState;
 	event = es->event & ~EV_EVENT_BITS;
 	wireEvent = event;
-	if(original && CG_NitmodExtendedEvent(cent, event)) return;
+	/* Prediction produces our internal knife event even on original servers.
+	 * Route that event to its existing handler without interpreting native
+	 * ET events 94..106 as original Nitmod wire events. */
+	if((original || event == EV_NITMOD_THROW_KNIFE) &&
+	   CG_NitmodExtendedEvent(cent, event)) return;
 	if(original && event == 101) {
 		CG_NitmodSpreeStart(es->effect1Time, es->effect2Time, es->effect3Time);
 		return;

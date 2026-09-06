@@ -31,7 +31,7 @@ def test_pickup_restores_exactly_one_knife_with_original_cap():
     knife = function.index("if( ent->item->giTag == WP_KNIFE )")
     general = function.index("quantity = ent->count")
     assert knife < general
-    assert "ps.ammo[ammo] > 7" in function
+    assert "ps.ammoclip[ammo] > 7" in function
     assert "Add_Ammo(other, WP_KNIFE, 1, qfalse);" in function
     assert "return -1;" in function[knife:general]
     assert "if(weapon < WP_KNIFE || weapon >= WP_NUM_WEAPONS)" in source
@@ -42,12 +42,15 @@ def test_shared_prediction_consumes_the_same_knife_ammo_slot():
     start = source.index("static qboolean PM_NitmodThrowKnife")
     end = source.index("static void PM_Weapon", start)
     function = source[start:end]
-    assert "ammo = BG_FindAmmoForWeapon(WP_KNIFE);" in function
-    assert "if(pm->ps->ammo[ammo] <= 0)" in function
-    assert "pm->ps->ammo[ammo]--;" in function
+    assert "ammo = BG_FindClipForWeapon(WP_KNIFE);" in function
+    assert "if(pm->ps->ammoclip[ammo] <= 0)" in function
+    assert "pm->ps->ammoclip[ammo]--;" in function
 
 
 if __name__ == "__main__":
+    spawn = (ROOT / "src_2.60/game/g_client.c").read_text(encoding="utf-8")
+    assert "client->sess.nitmodSkillMasks[SK_LIGHT_WEAPONS] & 32u" in spawn
+    assert "GetAmmoTableData(WP_KNIFE)->defaultStartingClip : 1" in spawn
     test_thrown_knife_is_an_immediately_active_item_pickup()
     test_pickup_restores_exactly_one_knife_with_original_cap()
     test_shared_prediction_consumes_the_same_knife_ammo_slot()

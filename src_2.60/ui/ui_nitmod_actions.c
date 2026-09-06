@@ -19,6 +19,25 @@ qboolean UI_NitmodPlayerSelectionValid(void) {
 		uiInfo.playerIndex >= 0 && uiInfo.playerIndex < uiInfo.playerCount;
 }
 
+qboolean UI_NitmodTeamSelection(int *selection) {
+	float value;
+	if(!selection || uiInfo.myTeamCount < 0 || uiInfo.myTeamCount > MAX_CLIENTS) return qfalse;
+	value = trap_Cvar_VariableValue("cg_selectedPlayer");
+	/* count denotes the whole team. Compare before the WASM integer cast. */
+	if(!(value >= 0 && value < uiInfo.myTeamCount + 1)) return qfalse;
+	*selection = (int)value;
+	return qtrue;
+}
+
+/* These identifiers are emitted unquoted by the original menu actions.
+ * Preserve valid commands, but never interpret metadata as console syntax. */
+static qboolean UI_ActionMapToken(const char *text) {
+	int i;
+	if(!UI_ActionText(text, MAX_QPATH)) return qfalse;
+	for(i = 0; text[i]; ++i) if((unsigned char)text[i] <= 32) return qfalse;
+	return qtrue;
+}
+
 qboolean UI_NitmodRedirectAddress(const char *text, char *out, int size) {
 	int length;
 	if(!text || !out || size <= 1) return qfalse;
@@ -70,17 +89,43 @@ qboolean UI_NitmodMenuAction(const char *name) {
 	const char *player;
 	int i;
 	if(!name) return qfalse;
+	if(!Q_stricmp(name, "setupCampaign") || !Q_stricmp(name, "playCampaign")) {
+		campaignInfo_t *campaign;
+		float selected;
+		int map, index = ui_currentCampaign.integer;
+		if(uiInfo.campaignCount <= 0 || uiInfo.campaignCount > MAX_CAMPAIGNS ||
+			index < 0 || index >= uiInfo.campaignCount) return qtrue;
+		campaign = &uiInfo.campaignList[index];
+		if(campaign->mapCount <= 0 || campaign->mapCount > MAX_MAPS_PER_CAMPAIGN ||
+			campaign->progress < 0 || campaign->progress > MAX_MAPS_PER_CAMPAIGN) return qtrue;
+		if(!Q_stricmp(name, "setupCampaign")) {
+			trap_Cvar_Set("ui_campaignmap", va("%i", campaign->progress));
+			return qtrue;
+		}
+		selected = trap_Cvar_VariableValue("ui_campaignmap");
+		if(!(selected >= 0 && selected < campaign->mapCount)) return qtrue;
+		map = (int)selected;
+		if(map > campaign->progress || !campaign->mapInfos[map] ||
+			!UI_ActionMapToken(campaign->mapInfos[map]->mapLoadName)) return qtrue;
+		Com_sprintf(command, sizeof(command), "spmap \"%s\"\n", campaign->mapInfos[map]->mapLoadName);
+		trap_Cmd_ExecuteText(EXEC_APPEND, command);
+		return qtrue;
+	}
 	if(!Q_stricmp(name, "voteMap") || !Q_stricmp(name, "refMap")) {
 		int game, index = ui_currentNetMap.integer;
 		const char *verb = !Q_stricmp(name, "voteMap") ? "callvote" : "ref";
 		if(!UI_SelectedNetGameType(&game)) return qtrue;
 		if(game == GT_WOLF_CAMPAIGN) {
-			if(index >= 0 && index < uiInfo.campaignCount)
+			if(index >= 0 && index < uiInfo.campaignCount &&
+				index < (int)(sizeof(uiInfo.campaignList) / sizeof(uiInfo.campaignList[0])) &&
+				UI_ActionMapToken(uiInfo.campaignList[index].campaignShortName))
 				Com_sprintf(command, sizeof(command), "%s campaign %s\n", verb,
 					uiInfo.campaignList[index].campaignShortName);
 			else return qtrue;
 		} else {
-			if(index >= 0 && index < uiInfo.mapCount)
+			if(index >= 0 && index < uiInfo.mapCount &&
+				index < (int)(sizeof(uiInfo.mapList) / sizeof(uiInfo.mapList[0])) &&
+				UI_ActionMapToken(uiInfo.mapList[index].mapLoadName))
 				Com_sprintf(command, sizeof(command), "%s map %s\n", verb,
 					uiInfo.mapList[index].mapLoadName);
 			else return qtrue;
@@ -90,7 +135,9 @@ qboolean UI_NitmodMenuAction(const char *name) {
 	}
 	if(!Q_stricmp(name, "rconMap")) {
 		int index = ui_currentNetMap.integer;
-		if(index >= 0 && index < uiInfo.mapCount) {
+		if(index >= 0 && index < uiInfo.mapCount &&
+			index < (int)(sizeof(uiInfo.mapList) / sizeof(uiInfo.mapList[0])) &&
+			UI_ActionMapToken(uiInfo.mapList[index].mapLoadName)) {
 			Com_sprintf(command, sizeof(command), "rcon map %s\n", uiInfo.mapList[index].mapLoadName);
 			trap_Cmd_ExecuteText(EXEC_APPEND, command);
 		}
@@ -135,7 +182,14 @@ qboolean UI_NitmodMenuAction(const char *name) {
 	}
 	if(!Q_stricmp(name, "voteInitToggles")) {
 		char info[MAX_INFO_STRING];
-		trap_GetConfigString(CS_SERVERTOGGLES, info, sizeof(info));
+		int toggles = CS_SERVERTOGGLES;
+		/* UI_RunMenuScript ELF 0x2362b reads original slot 29.
+		 * Match cgame's layout detection; reconstructed servers advertise
+		 * nitmod_csLayout=et260 and retain the ET 2.60 slot. */
+		trap_GetConfigString(CS_SERVERINFO, info, sizeof(info));
+		if(!Q_stricmp(Info_ValueForKey(info, "gamename"), "nitmod") &&
+			Q_stricmp(Info_ValueForKey(info, "nitmod_csLayout"), "et260")) toggles = 29;
+		trap_GetConfigString(toggles, info, sizeof(info));
 		trap_Cvar_Set("ui_voteWarmupDamage", va("%d", (atoi(info) & CV_SVS_WARMUPDMG) >> 2));
 		trap_GetConfigString(CS_SERVERINFO, info, sizeof(info));
 		trap_Cvar_Set("ui_voteTimelimit", va("%i", atoi(Info_ValueForKey(info, "timelimit"))));
@@ -143,7 +197,12 @@ qboolean UI_NitmodMenuAction(const char *name) {
 		return qtrue;
 	}
 	if(!Q_stricmp(name, "clientCheckVote")) {
-		int flags = (int)trap_Cvar_VariableValue("cg_ui_voteFlags");
+		float raw = trap_Cvar_VariableValue("cg_ui_voteFlags");
+		int flags;
+		/* Keep the existing menu state for non-finite/out-of-range input.
+		 * Compare in double: float(INT_MAX) rounds up to 2147483648. */
+		if(!((double)raw >= INT_MIN && (double)raw <= INT_MAX)) return qtrue;
+		flags = (int)raw;
 		trap_Cvar_SetValue("cg_ui_novote",
 			flags == VOTING_DISABLED || flags == ET_VOTING_DISABLED ? 1 : 0);
 		return qtrue;

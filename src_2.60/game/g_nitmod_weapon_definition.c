@@ -84,6 +84,14 @@ int G_NITMOD_WeaponSpreadOverride(int weapon, float *spread) {
     return 1;
 }
 
+int G_NITMOD_PoisonInterval(int fallback) {
+    /* Original BG_Weapons[47]+0x5d8 is parsed as spread, but ClientThink
+     * uses this integer as the poison tick interval, not bullet spread. */
+    if(pickupDefinitionState[WP_POISON_SYRINGE] != 1 ||
+       !weaponOptions[WP_POISON_SYRINGE].spread) return fallback;
+    return weaponOptions[WP_POISON_SYRINGE].spread;
+}
+
 float G_NITMOD_WeaponMovementScale(int weapon) {
     if(weapon<=WP_NONE || weapon>=WP_NUM_WEAPONS ||
        pickupDefinitionState[weapon]!=1) return 0.f;

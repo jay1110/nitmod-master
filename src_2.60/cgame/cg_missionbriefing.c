@@ -142,6 +142,7 @@ qboolean CG_FindCampaignInFile( char *filename, char *campaignShortName, cg_camp
 
 qboolean CG_FindArenaInfo( const char *filename, const char *mapname, arenaInfo_t *info ) {
 	int handle;
+	int ignoredInteger;
 	pc_token_t token;
 	const char* dummy;
 	qboolean found = qfalse;
@@ -215,7 +216,7 @@ qboolean CG_FindArenaInfo( const char *filename, const char *mapname, arenaInfo_
 				}
 			}
 		} else if(	!Q_stricmp( token.string, "Timelimit" ) || !Q_stricmp( token.string, "AxisRespawnTime" ) || !Q_stricmp( token.string, "AlliedRespawnTime" ) ) {
-			if( !PC_Int_Parse( handle, (int*)&dummy ) ) {
+			if( !PC_Int_Parse( handle, &ignoredInteger ) ) {
 				trap_Print( va( S_COLOR_RED "unexpected end of file inside: %s\n", filename ) );
 				trap_PC_FreeSource( handle );
 				return qfalse;

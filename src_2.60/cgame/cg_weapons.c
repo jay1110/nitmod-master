@@ -8,6 +8,8 @@
 #include "cg_local.h"
 #include <stdint.h>
 #include "cg_nitmod_ammo.h"
+#include "cg_nitmod_underhand.h"
+#include "cg_nitmod_brass.h"
 #include "cg_nitmod_weapon_pose.h"
 #include "cg_nitmod_config.h"
 #include "cg_nitmod_events.h"
@@ -15,7 +17,6 @@
 #include "../game/bg_classes.h"
 #include "../game/nitmod_weapon_paths.h"
 
-vec3_t	ejectBrassCasingOrigin;
 
 vmCvar_t cg_tracers, cg_muzzleFlash;
 
@@ -206,7 +207,7 @@ void CG_MachineGunEjectBrassNew( centity_t *cent ) {
 
 	AnglesToAxis( cent->lerpAngles, v );
 
-	VectorCopy (ejectBrassCasingOrigin, re->origin);
+	VectorCopy (cent->nitmodBrassOrigin, re->origin);
 
 	VectorCopy( re->origin, le->pos.trBase );
 
@@ -270,7 +271,9 @@ void CG_MachineGunEjectBrass( centity_t *cent ) {
 		return;
 	}
 
-	if (!(cg.snap->ps.persistant[PERS_HWEAPON_USE]) && (cent->currentState.clientNum == cg.snap->ps.clientNum) && (!(cent->currentState.eFlags & EF_MG42_ACTIVE || cent->currentState.eFlags & EF_AAGUN_ACTIVE))) {
+	if (CG_NitmodUseTagBrass(NITMOD_UsesOriginalProtocol() || NITMOD_UsesNitmodHud(),
+		cent->currentState.clientNum == cg.snap->ps.clientNum,
+		cg.snap->ps.persistant[PERS_HWEAPON_USE], cent->currentState.eFlags)) {
 		CG_MachineGunEjectBrassNew (cent);
 		return;
 	}
@@ -2538,15 +2541,12 @@ void CG_AddPlayerWeapon( refEntity_t *parent, playerState_t *ps, centity_t *cent
 	//%	if( weaponNum == WP_KNIFE )
 	//%		trap_R_AddLightToScene( gun.origin, 512, 1.5, 1.0, 1.0, 1.0, 0, 0 );
 
-	if( isPlayer ) {
-		refEntity_t	brass;
-
-		if( BG_IsAkimboWeapon( weaponNum ) && akimboFire ) {
-			CG_PositionRotatedEntityOnTag( &brass, parent, "tag_brass2" );
-		} else {
-			CG_PositionRotatedEntityOnTag( &brass, parent, "tag_brass" );
-		}
-		VectorCopy (brass.origin, ejectBrassCasingOrigin);
+	{
+		refEntity_t brass = {0};
+		CG_PositionRotatedEntityOnTag( &brass, parent,
+			CG_NitmodBrassTag(ps != NULL && !cg.renderingThirdPerson,
+				BG_IsAkimboWeapon(weaponNum), akimboFire, cent->akimboFire) );
+		VectorCopy (brass.origin, cent->nitmodBrassOrigin);
 	}
 
 	memset( &barrel, 0, sizeof( barrel ) );
@@ -3653,6 +3653,13 @@ void CG_AltWeapon_f(void)
 {
 	int original, num;
 
+	/* Original Nitmod routes alternate attacks through usercmd +attack2.
+	 * The obsolete console command must not perform ET's local swap. */
+	if(NITMOD_UsesOriginalProtocol() || NITMOD_UsesNitmodHud()) {
+		CG_Printf("weapAlt is obsolete, please use +attack2.\n");
+		return;
+	}
+
 	if ( !cg.snap ) {
 		return;
 	}
@@ -4366,6 +4373,9 @@ void CG_WeaponBank_f(void) {
 
 	for(i = 0; i < MAX_WEAPS_IN_BANK_MP; i++) {
 		num = getNextWeapInBank(bank, cycle+i);
+		/* Original bank scan accepts the empty-bank sentinel after its
+		 * wrap-to-first lookup; do not treat it as another unavailable gun. */
+		if(num == WP_NONE && (NITMOD_UsesOriginalProtocol() || NITMOD_UsesNitmodHud())) break;
 
 		if(CG_WeaponSelectable(num)) {
 			break;
@@ -4941,17 +4951,8 @@ void CG_FireWeapon(centity_t *cent, int dispatchEvent) {
 			return;
 		}
 	}
-	else if (	ent->weapon == WP_GRENADE_LAUNCHER || 
-				ent->weapon == WP_GRENADE_PINEAPPLE ||
-				ent->weapon == WP_DYNAMITE ||
-				ent->weapon == WP_SMOKE_MARKER
-				|| ent->weapon == WP_LANDMINE
-				|| ent->weapon == WP_SATCHEL
-				|| ent->weapon == WP_TRIPMINE
-				|| ent->weapon == WP_SMOKE_BOMB
-				) { // JPW NERVE
-		if(ent->apos.trBase[0] > 0)	// underhand
-			return;
+	else if (CG_NitmodSuppressUnderhandEffects(ent->weapon, ent->apos.trBase[0])) {
+		return;
 	}
 
 	if( ent->weapon == WP_GPG40 ) {

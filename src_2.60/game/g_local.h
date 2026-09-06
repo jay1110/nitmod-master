@@ -489,6 +489,9 @@ struct gentity_s {
 
 	//bani
 	int	etpro_misc_1;
+	/* Original gentity+0x500: primary objective number for planted dynamite.
+	 * Server-only; zero initialized, constructible planting leaves it alone. */
+	int nitmodDynamiteObjective;
 	/* Nitmod original cached classname hash; not part of engine shared prefix. */
 	int nitmodClassnameHash;
 	int nitmodTargetHash;
@@ -1063,7 +1066,7 @@ typedef struct {
 	qboolean	initStaticEnts;
 	qboolean	initSeekCoverChains;
 	char		*botScriptBuffer;
-	int			globalAccumBuffer[MAX_SCRIPT_ACCUM_BUFFERS];
+	int			globalAccumBuffer[G_MAX_SCRIPT_ACCUM_BUFFERS];
 
 	int			soldierChargeTime[2];
 	int			medicChargeTime[2];
@@ -1195,6 +1198,8 @@ void G_ParseField( const char *key, const char *value, gentity_t *ent );
 // g_cmds.c
 //
 void Cmd_Score_f (gentity_t *ent);
+void Cmd_FullUpdate_f(gentity_t *ent);
+void TeamplayInfoMessage(team_t team);
 void StopFollowing( gentity_t *ent );
 //void BroadcastTeamChange( gclient_t *client, int oldTeam );
 void G_TeamDataForString( const char* teamstr, int clientNum, team_t* team, spectatorState_t* sState, int* specClient );
@@ -2315,6 +2320,7 @@ extern vmCvar_t g_damageweapons;
 extern vmCvar_t g_poison;
 qboolean G_NITMOD_PoisonAttack( gentity_t *attacker );
 void G_NITMOD_RunPoison( gentity_t *victim );
+qboolean G_NITMOD_IsViewingCamera(const gclient_t *client);
 void G_NITMOD_ClearPoison( gentity_t *victim );
 void G_NITMOD_CurePoisonFromHealth( gentity_t *victim, gentity_t *provider, qboolean cabinet );
 extern vmCvar_t n_preciseLandmineTrigger;
@@ -2498,7 +2504,7 @@ void G_teamready_cmd(gentity_t *ent, unsigned int dwCommand, qboolean fDump);
 void G_weaponRankings_cmd(gentity_t *ent, unsigned int dwCommand, qboolean state);
 void G_weaponStats_cmd(gentity_t *ent, unsigned int dwCommand, qboolean fDump);
 void G_weaponStatsLeaders_cmd(gentity_t* ent, qboolean doTop, qboolean doWindow);
-void G_VoiceTo( gentity_t *ent, gentity_t *other, int mode, const char *id, qboolean voiceonly );
+void G_VoiceTo( gentity_t *ent, gentity_t *other, int mode, const char *id, qboolean voiceonly, float selection );
 
 
 

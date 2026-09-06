@@ -260,7 +260,7 @@ int NITMOD_ItemFromWire(int item) {
 		"weapon_grenadepineapple", "weapon_grenadesmoke", "weapon_smoketrail", "weapon_medic_heal",
 		"weapon_dynamite", "weapon_flamethrower", "weapon_class_special", "weapon_arty",
 		"weapon_medic_syringe", "weapon_poison_syringe", "weapon_medic_adrenaline", "weapon_magicammo",
-		"weapon_magicammo2", "weapon_magicammo2", "weapon_binoculars", "weapon_kar43",
+		"weapon_magicammo2", "weapon_magicammo3", "weapon_binoculars", "weapon_kar43",
 		"weapon_kar43_scope", "weapon_kar98Rifle", "weapon_gpg40", "weapon_gpg40_allied",
 		"weapon_M1CarbineRifle", "weapon_garandRifle", "weapon_garandRifleScope", "weapon_fg42",
 		"weapon_fg42scope", "weapon_mortar", "weapon_mortar_set", "weapon_landmine", "weapon_poison_landmine",
@@ -381,10 +381,15 @@ void NITMOD_ReadNKey(void) {
 	static qboolean warned;
 	fileHandle_t file = 0;
 	char encoded[44], guid[33];
+	const char *failure = "file unavailable in game filesystem";
 	int length;
 	trap_Cvar_Set("n_guid", "");
 	length = trap_FS_FOpenFile("nkey.dat", &file, FS_READ);
-	if(file && length == sizeof(encoded)) {
+	/* Original decode64 stops at '='. A valid 32-byte identity occupies the
+	 * first 44 encoded bytes; existing files may have trailing data. Read
+	 * only that prefix, retain strict decoding, and never rewrite the file. */
+	if(file && length >= sizeof(encoded)) {
+		failure = "base64/key checksum validation failed";
 		trap_FS_Read(encoded, sizeof(encoded), file);
 		trap_FS_FCloseFile(file);
 		if(NITMOD_DecodeNKey(encoded, sizeof(encoded), guid)) {
@@ -392,13 +397,14 @@ void NITMOD_ReadNKey(void) {
 			return;
 		}
 	} else if(file) {
+		failure = "file too short (need at least 44 encoded bytes)";
 		trap_FS_FCloseFile(file);
 	} else if(length < 0 && NITMOD_GenerateMissingNKey(guid)) {
 		trap_Cvar_Set("n_guid", guid);
 		return;
 	}
 	if(!warned) {
-		CG_Printf("^3Nitmod: nkey.dat could not be loaded or created; no GUID supplied. Existing files are preserved.\n");
+		CG_Printf("^3Nitmod: nkey.dat: %s; FS_READ length=%d. No GUID supplied; existing files preserved.\n", failure, length);
 		warned = qtrue;
 	}
 }
@@ -652,7 +658,7 @@ qboolean NITMOD_DisplayCommand(const char *command) {
 		NITMOD_UpdateClientSkillThresholds(info);
 		return qtrue;
 	}
-	int kind, count, start, i, kills[MAX_CLIENTS], deaths[MAX_CLIENTS];
+	int kind, i;
 	if(!strcmp(command, "cvs")) {
 		char name[MAX_CVAR_VALUE_STRING], value[MAX_CVAR_VALUE_STRING];
 		int request;
@@ -712,7 +718,13 @@ qboolean NITMOD_DisplayCommand(const char *command) {
 		}
 		return qtrue;
 	}
-	if(strcmp(command, "kd0") && strcmp(command, "kd1")) return qfalse;
+	return NITMOD_KDCommand(command);
+}
+
+/* Keep positional K/D decoding independent of unrelated display commands. */
+qboolean NITMOD_KDCommand(const char *command) {
+	int count, start, i, kills[MAX_CLIENTS], deaths[MAX_CLIENTS];
+	if(!command || (strcmp(command, "kd0") && strcmp(command, "kd1"))) return qfalse;
 	start = !strcmp(command, "kd0") ? 0 : nitmodKDCursor;
 	if(!NITMOD_ParseProtocolInteger(CG_Argv(1), &count) || count < 0 || count > MAX_CLIENTS ||
 		start < 0 || start > cg.numScores || count > cg.numScores - start ||
@@ -779,15 +791,17 @@ void NITMOD_ShoveSoundCommand(void) {
 		NITMOD_ShoveSound(entityNum);
 }
 
+void NITMOD_RegisterPrivateMessageSound(void) {
+	nitmodPrivateMessageSound = trap_S_RegisterSound("sound/nit/pm.wav", qfalse);
+}
+
 void NITMOD_PrivateMessageSound(int clientNum) {
 	if(clientNum != cg.clientNum || clientNum < 0 || clientNum >= MAX_CLIENTS) return;
 	trap_Cvar_Update(&cg_pmSounds);
 	if(!cg_pmSounds.integer) return;
-	if(!nitmodPrivateMessageSound)
-		nitmodPrivateMessageSound = trap_S_RegisterSound("sound/nit/pm.wav", qfalse);
+	if(nitmodPrivateMessageSound <= 0) return;
 	trap_S_StartSoundVControl(NULL, clientNum, CHAN_VOICE, nitmodPrivateMessageSound, 255);
 }
-static qboolean nitmodHitSoundsRegistered;
 qboolean NITMOD_UsesOriginalProtocol(void) {
 	const char *info = CG_ConfigString(CS_SERVERINFO);
 	return !Q_stricmp(Info_ValueForKey(info, "gamename"), "nitmod") &&
@@ -835,7 +849,13 @@ int NITMOD_TagConnectBase(void) {
 static sfxHandle_t nitmodHeadHitSound;
 static sfxHandle_t nitmodTeamHitSound;
 static sfxHandle_t nitmodSnapshotHeadSound, nitmodSnapshotBodySound;
-static qboolean nitmodSnapshotSoundsRegistered;
+void NITMOD_RegisterHitSounds(void) {
+    /* Original CG_RegisterSounds, cgs fields 131996..132008. */
+    nitmodSnapshotHeadSound = trap_S_RegisterSound("sound/hitsounds/head.wav", qfalse);
+    nitmodHeadHitSound = trap_S_RegisterSound("sound/nit/hs.wav", qfalse);
+    nitmodSnapshotBodySound = trap_S_RegisterSound("sound/hitsounds/body.wav", qfalse);
+    nitmodTeamHitSound = trap_S_RegisterSound("sound/hitsounds/team.wav", qfalse);
+}
 
 /* Original CG_CheckLocalSounds: body first, then head, once per snapshot
  * counter increase (not once per bullet/count delta). Keep separate from
@@ -852,11 +872,6 @@ void NITMOD_SnapshotHitSounds(const playerState_t *oldState, const playerState_t
     body = newValues[NITMOD_WIRE_PERS_BODYHITS] > oldValues[NITMOD_WIRE_PERS_BODYHITS];
     head = newValues[NITMOD_WIRE_PERS_HITS] > oldValues[NITMOD_WIRE_PERS_HITS];
     if(!body && !head) return;
-    if(!nitmodSnapshotSoundsRegistered) {
-        nitmodSnapshotBodySound = trap_S_RegisterSound("sound/hitsounds/body.wav", qfalse);
-        nitmodSnapshotHeadSound = trap_S_RegisterSound("sound/hitsounds/head.wav", qfalse);
-        nitmodSnapshotSoundsRegistered = qtrue;
-    }
     if(body && nitmodSnapshotBodySound > 0)
         trap_S_StartSound(NULL, newState->clientNum, CHAN_VOICE, nitmodSnapshotBodySound);
     if(head && nitmodSnapshotHeadSound > 0)
@@ -881,10 +896,8 @@ void NITMOD_ClearConfigStrings( void ) {
 	memset( nitmodClassMaxHealth, 0, sizeof( nitmodClassMaxHealth ) );
 	nitmodForcedCvarCount = 0;
 	memset(nitmodForcedCvars, 0, sizeof(nitmodForcedCvars));
-	nitmodHitSoundsRegistered = qfalse;
 	nitmodHeadHitSound = nitmodTeamHitSound = 0;
 	nitmodSnapshotHeadSound = nitmodSnapshotBodySound = 0;
-	nitmodSnapshotSoundsRegistered = qfalse;
 	nitmodBanner[0] = 0;
 	nitmodBannerTime = nitmodKDCursor = 0;
 	nitmodPrivateMessageSound = 0;
@@ -1173,19 +1186,15 @@ void NITMOD_SpreeEventCommand( void ) {
 
 static void NITMOD_PlayHitSound(int hitType, int channel) {
 	if(hitType != NITMOD_HIT_SOUND_TEAM && hitType != NITMOD_HIT_SOUND_HEAD) return;
-	if( !nitmodHitSoundsRegistered ) {
-		trap_Cvar_Register( &nitmodHitSounds, "cg_hitSounds", "1", CVAR_ARCHIVE );
-		nitmodHeadHitSound = trap_S_RegisterSound( "sound/nit/hs.wav", qfalse );
-		nitmodTeamHitSound = trap_S_RegisterSound( "sound/hitsounds/team.wav", qfalse );
-		nitmodHitSoundsRegistered = qtrue;
-	}
 	trap_Cvar_Update( &nitmodHitSounds );
 	if( !nitmodHitSounds.integer ) {
 		return;
 	}
 	if( hitType == NITMOD_HIT_SOUND_TEAM ) {
+		if(nitmodTeamHitSound <= 0) return;
 		trap_S_StartSound( NULL, cg.snap ? cg.snap->ps.clientNum : -1, channel, nitmodTeamHitSound );
 	} else if( hitType == NITMOD_HIT_SOUND_HEAD ) {
+		if(nitmodHeadHitSound <= 0) return;
 		trap_S_StartSound( NULL, cg.snap ? cg.snap->ps.clientNum : -1, channel, nitmodHeadHitSound );
 	}
 }

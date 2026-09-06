@@ -47,7 +47,8 @@ static void CG_ParseScore( team_t team ) {
 		clientInfo_t *client = &cgs.clientinfo[values[i][0]];
 		/* Do not transfer the old occupant's K/D when this row is reassigned.
 		 * Unchanged rows retain their counters until the next kd packet. */
-		if(!NITMOD_UsesOriginalProtocol() || score->client != values[i][0])
+		if((!NITMOD_UsesOriginalProtocol() && !NITMOD_ServerSupports(NITMOD_FEATURE_SCORE_KD)) ||
+		   score->client != values[i][0])
 			score->kills = score->deaths = 0;
 		score->client = values[i][0]; score->score = values[i][1];
 		score->ping = values[i][2]; score->time = values[i][3];
@@ -743,7 +744,11 @@ void CG_AddToTeamChat( const char *str, int clientnum ) {
 
 	ls = NULL;
 	while (*str) {
-		if (len > TEAMCHAT_WIDTH - 1) {
+		/* Color escapes consume bytes without advancing visible width.
+		 * Reserve a complete escape and the terminator before writing. */
+		if (len > TEAMCHAT_WIDTH - 1 ||
+			p - cgs.teamChatMsgs[cgs.teamChatPos % chatHeight] >=
+			(int)sizeof(cgs.teamChatMsgs[0]) - 3) {
 			if (ls) {
 				str -= (p - ls);
 				str++;
@@ -1233,12 +1238,16 @@ int CG_HeadModelVoiceChats( char *filename ) {
 CG_GetVoiceChat
 =================
 */
-int CG_GetVoiceChat( voiceChatList_t *voiceChatList, const char *id, sfxHandle_t *snd, qhandle_t *sprite, char **chat) {
+int CG_GetVoiceChat( voiceChatList_t *voiceChatList, const char *id, sfxHandle_t *snd, qhandle_t *sprite, char **chat, float selection) {
 	int i, rnd;
 
 	for ( i = 0; i < voiceChatList->numVoiceChats; i++ ) {
 		if ( !Q_stricmp( id, voiceChatList->voiceChats[i].id ) ) {
-			rnd = random() * voiceChatList->voiceChats[i].numSounds;
+			if( voiceChatList->voiceChats[i].numSounds <= 0 ||
+				!(selection >= 0.0f && selection <= 1.0f) ) return qfalse;
+			rnd = selection * voiceChatList->voiceChats[i].numSounds;
+			/* Endpoint rounding must not index past the variant arrays. */
+			if( rnd >= voiceChatList->voiceChats[i].numSounds ) rnd = voiceChatList->voiceChats[i].numSounds - 1;
 			*snd = voiceChatList->voiceChats[i].sounds[rnd];
 			*sprite = voiceChatList->voiceChats[i].sprite[rnd];
 			*chat = voiceChatList->voiceChats[i].chats[rnd];
@@ -1355,14 +1364,15 @@ void CG_AddBufferedVoiceChat( bufferedVoiceChat_t *vchat ) {
 CG_VoiceChatLocal
 =================
 */
-void CG_VoiceChatLocal( int mode, qboolean voiceOnly, int clientNum, int color, const char *cmd, vec3_t origin ) {
+void CG_VoiceChatLocal( int mode, qboolean voiceOnly, int clientNum, int color, const char *cmd, vec3_t origin, float selection ) {
 	char *chat;
 	voiceChatList_t *voiceChatList;
 	clientInfo_t *ci;
 	sfxHandle_t snd;
 	qhandle_t	sprite;
 	bufferedVoiceChat_t vchat;
-	const char *loc = " ";			// NERVE - SMF
+	char location[MAX_SAY_TEXT];
+	const char *loc = " ";
 
 /*	// NERVE - SMF - don't do this in wolfMP
 	// if we are going into the intermission, don't start any voices
@@ -1380,7 +1390,7 @@ void CG_VoiceChatLocal( int mode, qboolean voiceOnly, int clientNum, int color, 
 
 	voiceChatList = CG_VoiceChatListForClient( clientNum );
 
-	if ( CG_GetVoiceChat( voiceChatList, cmd, &snd, &sprite, &chat ) ) {
+	if ( CG_GetVoiceChat( voiceChatList, cmd, &snd, &sprite, &chat, selection ) ) {
 		//
 		if ( mode == SAY_TEAM || !cg_teamChatsOnly.integer ) {
 			vchat.clientNum = clientNum;
@@ -1391,18 +1401,15 @@ void CG_VoiceChatLocal( int mode, qboolean voiceOnly, int clientNum, int color, 
 			Q_strncpyz(vchat.cmd, cmd, sizeof(vchat.cmd));
 
 			if( mode != SAY_ALL ) {
-				// NERVE - SMF - get location
-				loc = BG_GetLocationString( origin );
-				if( !loc || !*loc ) {
-					loc = " ";
-				}
+				CG_NitmodLocationText(location, sizeof(location), origin, 2);
+				loc = location;
 			}
 
 			if( mode == SAY_TEAM ) {
-				Com_sprintf(vchat.message, sizeof(vchat.message), "(%s)%c%c(%s): %c%c%s", 
-					ci->name, Q_COLOR_ESCAPE, COLOR_YELLOW, loc, Q_COLOR_ESCAPE, color, CG_TranslateString( chat ) );
+				Com_sprintf(vchat.message, sizeof(vchat.message), "(%s^7)^3(%s)^7:^%c%s",
+					ci->name, loc, color, CG_TranslateString( chat ) );
 			} else if( mode == SAY_BUDDY ) {
-				Com_sprintf(vchat.message, sizeof(vchat.message), "<%s>%c%c<%s>: %c%c%s",
+				Com_sprintf(vchat.message, sizeof(vchat.message), "<%s^7>%c%c<%s>: %c%c%s",
 					ci->name, Q_COLOR_ESCAPE, COLOR_YELLOW, loc, Q_COLOR_ESCAPE, color, CG_TranslateString( chat ) );
 			} else {
 				Com_sprintf(vchat.message, sizeof(vchat.message), "%s%c%c: %c%c%s", 
@@ -1447,7 +1454,12 @@ void CG_VoiceChat( int mode ) {
 		}
 	}
 
-	CG_VoiceChatLocal( mode, voiceOnly, clientNum, color, cmd, origin );
+	/* Original CG_VoiceChat: variant selector follows id for global chat,
+	 * or the three coordinates for team/fireteam chat. Legacy messages
+	 * without that field retain local selection. */
+	CG_VoiceChatLocal( mode, voiceOnly, clientNum, color, cmd, origin,
+		trap_Argc() > (mode == SAY_ALL ? 5 : 8) ?
+		(float)atof(CG_Argv(mode == SAY_ALL ? 5 : 8)) : random() );
 }
 // -NERVE - SMF
 

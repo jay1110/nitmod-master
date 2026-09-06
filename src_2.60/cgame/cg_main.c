@@ -1115,6 +1115,9 @@ static void CG_RegisterSounds( void ) {
 	const char	*soundName;
 	bg_speaker_t *speaker;
 
+	NITMOD_RegisterPrivateMessageSound();
+	NITMOD_RegisterHitSounds();
+
 	// NERVE - SMF - voice commands
 	CG_LoadVoiceChats();
 

@@ -9,6 +9,7 @@
 #include "../game/g_local.h"
 #include "g_nitmod_config.h"
 #include "g_nitmod_legacy_cvars.h"
+#include "nitmod_script_bits.h"
 #include "../game/q_shared.h"
 
 /*
@@ -1955,8 +1956,8 @@ qboolean G_ScriptAction_Accum( gentity_t *ent, char *params )
 	}
 
 	bufferIndex = atoi(token);
-	if (bufferIndex >= G_MAX_SCRIPT_ACCUM_BUFFERS) {
-		G_Error( "G_Scripting: accum buffer is outside range (0 - %i)\n", G_MAX_SCRIPT_ACCUM_BUFFERS );
+	if (bufferIndex < 0 || bufferIndex >= G_MAX_SCRIPT_ACCUM_BUFFERS) {
+		G_Error( "G_Scripting: accum buffer is outside range (0 - %i)\n", G_MAX_SCRIPT_ACCUM_BUFFERS - 1 );
 	}
 
 	token = COM_ParseExt( &pString, qfalse );
@@ -1971,7 +1972,8 @@ qboolean G_ScriptAction_Accum( gentity_t *ent, char *params )
 		if (!token[0]) {
 			G_Error( "Scripting: accum %s requires a parameter\n", lastToken );
 		}
-		ent->scriptAccumBuffer[bufferIndex] += atoi(token);
+		ent->scriptAccumBuffer[bufferIndex] = (int)(
+			(unsigned int)ent->scriptAccumBuffer[bufferIndex] + (unsigned int)atoi(token));
 	} else if (!Q_stricmp(lastToken, "abort_if_less_than")) {
 		if (!token[0]) {
 			G_Error( "Scripting: accum %s requires a parameter\n", lastToken );
@@ -2008,17 +2010,17 @@ qboolean G_ScriptAction_Accum( gentity_t *ent, char *params )
 		if (!token[0]) {
 			G_Error( "Scripting: accum %s requires a parameter\n", lastToken );
 		}
-		ent->scriptAccumBuffer[bufferIndex] |= (1<<atoi(token));
+		ent->scriptAccumBuffer[bufferIndex] |= NITMOD_ScriptBitMask(atoi(token));
 	} else if (!Q_stricmp(lastToken, "bitreset")) {
 		if (!token[0]) {
 			G_Error( "Scripting: accum %s requires a parameter\n", lastToken );
 		}
-		ent->scriptAccumBuffer[bufferIndex] &= ~(1<<atoi(token));
+		ent->scriptAccumBuffer[bufferIndex] &= ~NITMOD_ScriptBitMask(atoi(token));
 	} else if (!Q_stricmp(lastToken, "abort_if_bitset")) {
 		if (!token[0]) {
 			G_Error( "Scripting: accum %s requires a parameter\n", lastToken );
 		}
-		if (ent->scriptAccumBuffer[bufferIndex] & (1<<atoi(token))) {
+		if (ent->scriptAccumBuffer[bufferIndex] & NITMOD_ScriptBitMask(atoi(token))) {
 			// abort the current script
 			ent->scriptStatus.scriptStackHead = ent->scriptEvents[ent->scriptStatus.scriptEventIndex].stack.numItems;
 		}
@@ -2026,7 +2028,7 @@ qboolean G_ScriptAction_Accum( gentity_t *ent, char *params )
 		if (!token[0]) {
 			G_Error( "Scripting: accum %s requires a parameter\n", lastToken );
 		}
-		if (!(ent->scriptAccumBuffer[bufferIndex] & (1<<atoi(token)))) {
+		if (!(ent->scriptAccumBuffer[bufferIndex] & NITMOD_ScriptBitMask(atoi(token)))) {
 			// abort the current script
 			ent->scriptStatus.scriptStackHead = ent->scriptEvents[ent->scriptStatus.scriptEventIndex].stack.numItems;
 		}
@@ -2092,16 +2094,26 @@ qboolean G_ScriptAction_Accum( gentity_t *ent, char *params )
 		}
 	} else if( !Q_stricmp(lastToken, "set_to_dynamitecount") ) {
 		gentity_t* target;
+		int entityNum, count = 0;
 		if( !*token ) {
 			G_Error( "Scripting: accum %s requires a parameter\n", lastToken );
 		}
 
-		target = G_FindByTargetname( NULL, token );
+		target = G_FindByTargetnameFast( NULL, token, (int)BG_StringHashValue(token) );
 		if( !target ) {
 			G_Error( "Scripting: accum %s could not find target\n", lastToken );
 		}
 
-		ent->scriptAccumBuffer[bufferIndex] = BotGetTargetDynamite( NULL, 0, target );
+		for(entityNum = MAX_CLIENTS; entityNum < level.num_entities; ++entityNum) {
+			if((g_entities[entityNum].etpro_misc_1 & 1) &&
+				g_entities[entityNum].nitmodDynamiteObjective == target->s.number) ++count;
+		}
+		ent->scriptAccumBuffer[bufferIndex] = count;
+		/* Original ELF 0xb1ec2 falls through to the numeric comparison.
+		 * Preserve it even though token is also the targetname. */
+		if(count != atoi(token)) {
+			ent->scriptStatus.scriptStackHead = ent->scriptEvents[ent->scriptStatus.scriptEventIndex].stack.numItems;
+		}
 	} else {
 		G_Error( "Scripting: accum %s: unknown command\n", params );
 	}
@@ -2146,27 +2158,33 @@ qboolean G_ScriptAction_GlobalAccum( gentity_t *ent, char *params )
 
 	token = COM_ParseExt( &pString, qfalse );
 	if (!token[0]) {
-		G_Error( "G_Scripting: accum without a buffer index\n" );
+		G_Error( "G_Scripting: globalaccum without a buffer index\n" );
 	}
 
 	bufferIndex = atoi(token);
-	if (bufferIndex >= G_MAX_SCRIPT_ACCUM_BUFFERS) {
-		G_Error( "G_Scripting: accum buffer is outside range (0 - %i)\n", G_MAX_SCRIPT_ACCUM_BUFFERS );
+	if (bufferIndex < 0 || bufferIndex >= G_MAX_SCRIPT_ACCUM_BUFFERS) {
+		G_Error( "G_Scripting: globalaccum buffer is outside range (0 - %i)\n", G_MAX_SCRIPT_ACCUM_BUFFERS - 1 );
 	}
 
 	token = COM_ParseExt( &pString, qfalse );
 	if (!token[0]) {
-		G_Error( "G_Scripting: accum without a command\n" );
+		G_Error( "G_Scripting: globalaccum without a command\n" );
 	}
 
 	Q_strncpyz( lastToken, token, sizeof(lastToken) );
 	token = COM_ParseExt( &pString, qfalse );
+	/* Original GlobalAccum validates the operand before dispatching even an
+	 * unknown command; local Accum has a different validation sequence. */
+	if (!token[0]) {
+		G_Error( "Scripting: globalaccum %s requires a parameter\n", lastToken );
+	}
 
 	if (!Q_stricmp(lastToken, "inc")) {
 		if (!token[0]) {
 			G_Error( "Scripting: accum %s requires a parameter\n", lastToken );
 		}
-		level.globalAccumBuffer[bufferIndex] += atoi(token);
+		level.globalAccumBuffer[bufferIndex] = (int)(
+			(unsigned int)level.globalAccumBuffer[bufferIndex] + (unsigned int)atoi(token));
 	} else if (!Q_stricmp(lastToken, "abort_if_less_than")) {
 		if (!token[0]) {
 			G_Error( "Scripting: accum %s requires a parameter\n", lastToken );
@@ -2203,17 +2221,17 @@ qboolean G_ScriptAction_GlobalAccum( gentity_t *ent, char *params )
 		if (!token[0]) {
 			G_Error( "Scripting: accum %s requires a parameter\n", lastToken );
 		}
-		level.globalAccumBuffer[bufferIndex] |= (1<<atoi(token));
+		level.globalAccumBuffer[bufferIndex] |= NITMOD_ScriptBitMask(atoi(token));
 	} else if (!Q_stricmp(lastToken, "bitreset")) {
 		if (!token[0]) {
 			G_Error( "Scripting: accum %s requires a parameter\n", lastToken );
 		}
-		level.globalAccumBuffer[bufferIndex] &= ~(1<<atoi(token));
+		level.globalAccumBuffer[bufferIndex] &= ~NITMOD_ScriptBitMask(atoi(token));
 	} else if (!Q_stricmp(lastToken, "abort_if_bitset")) {
 		if (!token[0]) {
 			G_Error( "Scripting: accum %s requires a parameter\n", lastToken );
 		}
-		if (level.globalAccumBuffer[bufferIndex] & (1<<atoi(token))) {
+		if (level.globalAccumBuffer[bufferIndex] & NITMOD_ScriptBitMask(atoi(token))) {
 			// abort the current script
 			ent->scriptStatus.scriptStackHead = ent->scriptEvents[ent->scriptStatus.scriptEventIndex].stack.numItems;
 		}
@@ -2221,7 +2239,7 @@ qboolean G_ScriptAction_GlobalAccum( gentity_t *ent, char *params )
 		if (!token[0]) {
 			G_Error( "Scripting: accum %s requires a parameter\n", lastToken );
 		}
-		if (!(level.globalAccumBuffer[bufferIndex] & (1<<atoi(token)))) {
+		if (!(level.globalAccumBuffer[bufferIndex] & NITMOD_ScriptBitMask(atoi(token)))) {
 			// abort the current script
 			ent->scriptStatus.scriptStackHead = ent->scriptEvents[ent->scriptStatus.scriptEventIndex].stack.numItems;
 		}
@@ -2286,7 +2304,7 @@ qboolean G_ScriptAction_GlobalAccum( gentity_t *ent, char *params )
 			return qfalse;
 		}
 	} else {
-		G_Error( "Scripting: accum %s: unknown command\n", params );
+		G_Error( "Scripting: globalaccum %s: unknown command\n", params );
 	}
 
 	return qtrue;
@@ -3469,9 +3487,9 @@ qboolean G_ScriptAction_PrintAccum( gentity_t *ent, char *params )
 
 
 	bufferIndex = atoi(token);
-	if ((bufferIndex < 0) || (bufferIndex >= MAX_SCRIPT_ACCUM_BUFFERS) )
+	if ((bufferIndex < 0) || (bufferIndex >= G_MAX_SCRIPT_ACCUM_BUFFERS) )
 	{
-		G_Error("G_ScriptAction_PrintAccum: buffer is outside range (0 - %i)", MAX_SCRIPT_ACCUM_BUFFERS );
+		G_Error("G_ScriptAction_PrintAccum: buffer is outside range (0 - %i)", G_MAX_SCRIPT_ACCUM_BUFFERS - 1 );
 	}
 
 	G_Printf("(G_Script) %s: Accum[%i] = %d\n", ent->scriptName, bufferIndex, ent->scriptAccumBuffer[bufferIndex]);
@@ -3508,9 +3526,9 @@ qboolean G_ScriptAction_PrintGlobalAccum( gentity_t *ent, char *params )
 
 
 	bufferIndex = atoi(token);
-	if ((bufferIndex < 0) || (bufferIndex >= MAX_SCRIPT_ACCUM_BUFFERS) )
+	if ((bufferIndex < 0) || (bufferIndex >= G_MAX_SCRIPT_ACCUM_BUFFERS) )
 	{
-		G_Error("PrintGlobalAccum: buffer is outside range (0 - %i)", MAX_SCRIPT_ACCUM_BUFFERS );
+		G_Error("PrintGlobalAccum: buffer is outside range (0 - %i)", G_MAX_SCRIPT_ACCUM_BUFFERS - 1 );
 	}
 
 	G_Printf("(G_Script) GlobalAccum[%i] = %d\n", bufferIndex, level.globalAccumBuffer[bufferIndex]);
@@ -4058,7 +4076,7 @@ qboolean G_ScriptAction_Cvar( gentity_t *ent, char *params )
 		if (!token[0]) {
 			G_Error( "G_Scripting: cvar %s requires a parameter\n", lastToken );
 		}
-		trap_Cvar_Set( cvarName, va("%i", cvarValue+1) );
+		trap_Cvar_Set( cvarName, va("%i", (int)((unsigned int)cvarValue + 1u)) );
 	} else if (!Q_stricmp(lastToken, "abort_if_less_than")) {
 		if (!token[0]) {
 			G_Error( "G_Scripting: cvar %s requires a parameter\n", lastToken );
@@ -4095,17 +4113,19 @@ qboolean G_ScriptAction_Cvar( gentity_t *ent, char *params )
 		if (!token[0]) {
 			G_Error( "G_Scripting: cvar %s requires a parameter\n", lastToken );
 		}
-		cvarValue |= (1<<atoi(token));
+		cvarValue |= NITMOD_ScriptBitMask(atoi(token));
+		trap_Cvar_Set(cvarName, va("%i", cvarValue));
 	} else if (!Q_stricmp(lastToken, "bitreset")) {
 		if (!token[0]) {
 			G_Error( "G_Scripting: cvar %s requires a parameter\n", lastToken );
 		}
-		cvarValue &= ~(1<<atoi(token));
+		cvarValue &= ~NITMOD_ScriptBitMask(atoi(token));
+		trap_Cvar_Set(cvarName, va("%i", cvarValue));
 	} else if (!Q_stricmp(lastToken, "abort_if_bitset")) {
 		if (!token[0]) {
 			G_Error( "G_Scripting: cvar %s requires a parameter\n", lastToken );
 		}
-		if (cvarValue & (1<<atoi(token))) {
+		if (cvarValue & NITMOD_ScriptBitMask(atoi(token))) {
 			// abort the current script
 			ent->scriptStatus.scriptStackHead = ent->scriptEvents[ent->scriptStatus.scriptEventIndex].stack.numItems;
 		}
@@ -4113,7 +4133,7 @@ qboolean G_ScriptAction_Cvar( gentity_t *ent, char *params )
 		if (!token[0]) {
 			G_Error( "G_Scripting: cvar %s requires a parameter\n", lastToken );
 		}
-		if (!(cvarValue & (1<<atoi(token)))) {
+		if (!(cvarValue & NITMOD_ScriptBitMask(atoi(token)))) {
 			// abort the current script
 			ent->scriptStatus.scriptStackHead = ent->scriptEvents[ent->scriptStatus.scriptEventIndex].stack.numItems;
 		}
@@ -4122,18 +4142,20 @@ qboolean G_ScriptAction_Cvar( gentity_t *ent, char *params )
 			G_Error( "G_Scripting: cvar %s requires a parameter\n", lastToken );
 		}
 		cvarValue = atoi(token);
+		trap_Cvar_Set(cvarName, va("%i", cvarValue));
 	} else if (!Q_stricmp(lastToken, "random")) {
 		if (!token[0]) {
 			G_Error( "G_Scripting: cvar %s requires a parameter\n", lastToken );
 		}
 		cvarValue = rand() % atoi(token);
+		trap_Cvar_Set(cvarName, va("%i", cvarValue));
 	} else if (!Q_stricmp(lastToken, "trigger_if_equal")) {
 		if (!token[0]) {
 			G_Error( "G_Scripting: cvar %s requires a parameter\n", lastToken );
 		}
 		if (cvarValue == atoi(token)) {
 			gentity_t* trent;
-			int oldId;
+			int oldId, scriptNameHash;
 //			qboolean loop = qfalse;
 
 			token = COM_ParseExt( &pString, qfalse );
@@ -4152,7 +4174,10 @@ qboolean G_ScriptAction_Cvar( gentity_t *ent, char *params )
 			found = qfalse;
 			// for all entities/bots with this scriptName
 			trent = NULL;
-			while ((trent = G_Find( trent, FOFS(scriptName), lastToken ))) {
+			/* Original Cvar path hashes the second token (ELF 0xb59ac),
+			 * unlike the accum paths. Preserve that observable quirk. */
+			scriptNameHash = (int)BG_StringHashValue(name);
+			while ((trent = G_NITMOD_FindByScriptNameHash( trent, scriptNameHash ))) {
 				found = qtrue;
 				oldId = trent->scriptStatus.scriptId;
 				G_Script_ScriptEvent( trent, "trigger", name );

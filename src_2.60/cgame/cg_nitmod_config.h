@@ -122,4 +122,7 @@ void NITMOD_ApplyForcedCvars(void);
 void NITMOD_RestoreForcedCvars(void);
 void CG_AddToTeamChat(const char *str, int clientnum);
 void NITMOD_PrivateMessageSound(int clientNum);
+void NITMOD_RegisterPrivateMessageSound(void);
+void NITMOD_RegisterHitSounds(void);
+qboolean NITMOD_KDCommand(const char *command);
 #endif

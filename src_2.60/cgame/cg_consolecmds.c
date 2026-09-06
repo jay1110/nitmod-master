@@ -184,7 +184,8 @@ void CG_ScoresDown_f( void ) {
 		cg.scoresRequestTime = cg.time;
 
 		// OSP - we get periodic score updates if we are merging clients
-		if(!cg.demoPlayback && cg.mvTotalClients < 1) trap_SendClientCommand( "score" );
+		if(!cg.demoPlayback && cg.mvTotalClients < 1)
+			trap_SendClientCommand(NITMOD_ServerSupports(NITMOD_FEATURE_SCORE_KD) ? "fu" : "score");
 
 		// leave the current scores up if they were already
 		// displayed, but if this is the first hit, clear them out
@@ -507,15 +508,6 @@ static void CG_VoiceChat_f( void ) {
 	if ( trap_Argc() != 2 )
 		return;
 
-	// NERVE - SMF - don't let spectators voice chat
-	// NOTE - This cg.snap will be the person you are following, but its just for intermission test
-	if ( cg.snap && ( cg.snap->ps.pm_type != PM_INTERMISSION ) ) {
-		if ( cgs.clientinfo[cg.clientNum].team == TEAM_SPECTATOR || cgs.clientinfo[cg.clientNum].team == TEAM_FREE ) {
-			CG_Printf ( CG_TranslateString( "Can't voice chat as a spectator.\n" ) );
-			return;
-		}
-	}
-
 	trap_Argv( 1, chatCmd, 64 );
 
 	trap_SendConsoleCommand( va( "cmd vsay %s\n", chatCmd ) );
@@ -528,15 +520,6 @@ static void CG_TeamVoiceChat_f( void ) {
 		return;
 	}
 
-	// NERVE - SMF - don't let spectators voice chat
-	// NOTE - This cg.snap will be the person you are following, but its just for intermission test
-	if ( cg.snap && ( cg.snap->ps.pm_type != PM_INTERMISSION ) ) {
-		if ( cgs.clientinfo[cg.clientNum].team == TEAM_SPECTATOR || cgs.clientinfo[cg.clientNum].team == TEAM_FREE ) {
-			CG_Printf ( CG_TranslateString( "Can't team voice chat as a spectator.\n" ) );
-			return;
-		}
-	}
-
 	trap_Argv( 1, chatCmd, 64 );
 
 	trap_SendConsoleCommand( va( "cmd vsay_team %s\n", chatCmd ) );
@@ -547,15 +530,6 @@ static void CG_BuddyVoiceChat_f( void ) {
 
 	if( trap_Argc() != 2 ) {
 		return;
-	}
-
-	// NERVE - SMF - don't let spectators voice chat
-	// NOTE - This cg.snap will be the person you are following, but its just for intermission test
-	if ( cg.snap && ( cg.snap->ps.pm_type != PM_INTERMISSION ) ) {
-		if ( cgs.clientinfo[cg.clientNum].team == TEAM_SPECTATOR || cgs.clientinfo[cg.clientNum].team == TEAM_FREE ) {
-			CG_Printf ( CG_TranslateString( "Can't buddy voice chat as a spectator.\n" ) );
-			return;
-		}
 	}
 
 	trap_Argv( 1, chatCmd, 64 );

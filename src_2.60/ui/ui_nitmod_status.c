@@ -88,15 +88,6 @@ static void UI_SortServerStatusInfo(serverStatusInfo_t *info) {
             key = info->lines[index][0]; value = info->lines[index][3];
             info->lines[index][0] = *names[i][1] ? (char *)names[i][1] : info->lines[j][0];
             info->lines[index][3] = info->lines[j][3];
-			if(!Q_stricmp(names[i][0], "g_gametype")) {
-				int gametype;
-				if(NITMOD_ParseProtocolInteger(info->lines[index][3], &gametype) &&
-				   gametype >= 0 && gametype < GT_MAX_GAME_TYPE) {
-					Com_sprintf(info->gameTypeName, sizeof(info->gameTypeName), "%s (%d)",
-						BG_NitmodGametypeName(gametype, qfalse), gametype);
-					info->lines[index][3] = info->gameTypeName;
-				}
-			}
             if(j != index) { info->lines[j][0] = key; info->lines[j][3] = value; }
             ++index;
         }

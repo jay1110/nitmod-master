@@ -6,6 +6,10 @@ LOCAL = (ROOT / "src_2.60/game/g_local.h").read_text(encoding="utf-8")
 
 
 def test_drop_reserve_and_pickup_mask_consumers():
+    pickup = ITEMS.split("int Pickup_Weapon(", 1)[1]
+    magic = pickup.split("/* Original Pickup_Weapon handles thrown knives", 1)[0]
+    assert magic.rstrip().endswith("return RESPAWN_SP;\n\t}")
+    assert "quantity && ent->item->giTag != WP_CARBINE && ent->item->giTag != WP_GARAND" in pickup
     assert "int nitmodDropAmmo;" in LOCAL
     assert "ent2->nitmodDropAmmo = client->ps.ammo" in ITEMS
     assert "client->ps.ammo[BG_FindAmmoForWeapon(weapon)] = 0;" in ITEMS

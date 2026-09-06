@@ -1588,6 +1588,8 @@ int BG_AkimboSidearm( int weaponNum );
 qboolean BG_CanUseWeapon(int classNum, int teamNum, weapon_t weapon);
 
 qboolean	BG_CanItemBeGrabbed( const entityState_t *ent, const playerState_t *ps, int *skill, int teamNum );
+qboolean BG_CanItemBeGrabbedRewards( const entityState_t *ent, const playerState_t *ps, int *skill, int teamNum, const unsigned int *rewards );
+qboolean BG_CanItemBeGrabbedOptions( const entityState_t *ent, const playerState_t *ps, int *skill, int teamNum, const unsigned int *rewards, unsigned int adrenalineOptions );
 int BG_EffectiveMaxHealth(const playerState_t *ps);
 
 
@@ -1683,6 +1685,11 @@ qboolean	BG_WeaponInWolfMP( int weapon );
 qboolean	BG_PlayerTouchesItem( playerState_t *ps, entityState_t *item, int atTime );
 qboolean	BG_PlayerSeesItem	( playerState_t *ps, entityState_t *item, int atTime );
 qboolean	BG_AddMagicAmmo ( playerState_t *ps, int *skill, int teamNum, int numOfClips );
+int BG_NitmodGrenadesForClass(int cls, const unsigned int *rewards, int war);
+qboolean BG_AddMagicAmmoWar(playerState_t *ps, int *skill, int teamNum, int count, const unsigned int *rewards, unsigned int adrenalineOptions, int war);
+qboolean BG_CanItemBeGrabbedWar(const entityState_t *ent, const playerState_t *ps, int *skill, int teamNum, const unsigned int *rewards, unsigned int adrenalineOptions, int war);
+qboolean BG_AddMagicAmmoRewards( playerState_t *ps, int *skill, int teamNum, int numOfClips, const unsigned int *rewards );
+qboolean BG_AddMagicAmmoOptions( playerState_t *ps, int *skill, int teamNum, int numOfClips, const unsigned int *rewards, unsigned int adrenalineOptions );
 
 #define	OVERCLIP		1.001
 

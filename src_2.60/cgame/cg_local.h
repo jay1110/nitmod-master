@@ -282,6 +282,7 @@ typedef struct centity_s {
 	int				soundTime;		// ydnar: so looping sounds can start when triggered
 
 	playerEntity_t	pe;
+	vec3_t nitmodBrassOrigin; /* Original centity +0x758: weapon tag origin. */
 	struct { int time, direction; float amount; } nitmodLean;
 
 //	int				errorTime;		// decay the error from this time

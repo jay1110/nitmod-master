@@ -6,6 +6,19 @@ root = Path(__file__).resolve().parents[1]
 binary = (root / 'original_nitmod_shared_objects_32bit/ui.mp.i386.so').read_bytes()
 source = (root / 'src_2.60/ui/ui_nitmod_actions.c').read_text()
 rows = re.findall(r'\{ "(\w+)", "([\w ]+)" \}', source)
+# Original UI_RunMenuScript's immediate configstring index is 29.
+assert binary[0x2362b:0x23632] == bytes.fromhex('c7 04 24 1d 00 00 00')
+# Both local-player lookup and roster traversal use CS_PLAYERS=689.
+# These are ELF file offsets in the supplied unmodified UI reference.
+assert binary[0x15d06:0x15d0b] == bytes.fromhex('05 b1 02 00 00')
+assert binary[0x15dcb:0x15dd1] == bytes.fromhex('8d 85 b1 02 00 00')
+toggle_init = source.split('if(!Q_stricmp(name, "voteInitToggles")) {')[1].split('if(!Q_stricmp(name, "clientCheckVote"))')[0]
+assert 'int toggles = CS_SERVERTOGGLES;' in toggle_init
+assert '"nitmod_csLayout"), "et260")) toggles = 29;' in toggle_init
+assert 'trap_GetConfigString(toggles, info, sizeof(info));' in toggle_init
+vote_check = source.split('if(!Q_stricmp(name, "clientCheckVote")) {')[1].split('for(i = 0;')[0]
+assert vote_check.index('(double)raw <= INT_MAX') < vote_check.index('flags = (int)raw')
+assert 'flags == VOTING_DISABLED || flags == ET_VOTING_DISABLED' in vote_check
 assert len(rows) == 21
 for name, command in rows:
     assert name.encode() + b'\0' in binary, name
@@ -23,6 +36,8 @@ print('24 menu-action names/formats match original UI; runtime tests check dispa
 # Roster inputs are remote-controlled. These are wiring checks, not a UI replay.
 main = (root / 'src_2.60/ui/ui_main.c').read_text()
 roster = main.split('static void UI_BuildPlayerList()', 1)[1].split('static void UI_DrawSelectedPlayer', 1)[0]
+assert 'trap_GetConfigString( CS_PLAYERS + cs.clientNum' in roster
+assert 'trap_GetConfigString( CS_PLAYERS + n' in roster
 assert 'if( count > MAX_CLIENTS ) count = MAX_CLIENTS;' in roster
 assert 'if( count < 0 ) count = 0;' in roster
 assert 'cs.clientNum >= 0 && cs.clientNum < MAX_CLIENTS' in roster

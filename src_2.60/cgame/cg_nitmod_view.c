@@ -19,7 +19,9 @@ void CG_NitmodMissileCameraTrack(centity_t *cent) {
 	const entityState_t *state;
 	int option;
 
-	if(!cent || !cg.snap || !NITMOD_UsesOriginalProtocol()) return;
+	/* Snapshots already contain native weapon IDs here. Camera policy is
+	 * shared by original and reconstructed Nitmod configstring layouts. */
+	if(!cent || !cg.snap || !NITMOD_UsesNitmodHud()) return;
 	state = &cent->currentState;
 	if(state->eType != ET_MISSILE || state->clientNum != cg.snap->ps.clientNum) return;
 

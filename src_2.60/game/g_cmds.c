@@ -17,6 +17,7 @@ Sends current scoreboard information
 ==================
 */
 void G_SendScore( gentity_t *ent ) {
+	int kdClients[MAX_CLIENTS], kdCount = 0;
 	char		entry[128];
 	int			i;
 	gclient_t	*cl;
@@ -94,14 +95,16 @@ void G_SendScore( gentity_t *ent ) {
 			}
 
 			if(size + strlen(entry) > 1000) {
-				i--; // we need to redo this client in the next buffer (if we can)
+				/* This row has not been appended: retry this index. */
 				break;
 			}
 			size += strlen(entry);
 
 			Q_strcat(buffer, 1024, entry);
+			kdClients[kdCount++] = level.sortedClients[i];
 			if( ++count >= 32 ) {
-				i--; // we need to redo this client in the next buffer (if we can)
+				/* This row was appended: continue with the next client. */
+				i++;
 				break;
 			}
 		}
@@ -111,8 +114,26 @@ void G_SendScore( gentity_t *ent ) {
 		}
 	}
 
-	/* Nitmod clients use this compact score update for the TDM presentation. */
+	/* Original full refresh publishes team scores before the K/D pages. */
 	nitmod_TeamScores();
+	/* KD receiver uses score order, not the transmitted client field. Build
+	 * from precisely the accepted rows, including POW/capacity filtering. */
+	if(G_NITMOD_ClientSupports(ent - g_entities, NITMOD_FEATURE_SCORE_KD)) {
+		int first = 0, part;
+		for(part = 0; part < 2 && (first < kdCount || part == 0); ++part) {
+			int n = 0;
+			buffer[0] = '\0';
+			while(first + n < kdCount) {
+				int slot = kdClients[first + n];
+				Com_sprintf(entry, sizeof(entry), " %i %i %i", slot,
+					level.clients[slot].sess.kills, level.clients[slot].sess.deaths);
+				if(strlen(buffer) + strlen(entry) > 980) break;
+				Q_strcat(buffer, sizeof(buffer), entry); ++n;
+			}
+			trap_SendServerCommand(ent - g_entities, va("kd%i %i%s", part, n, buffer));
+			first += n;
+		}
+	}
 }
 
 /*
@@ -125,6 +146,15 @@ Request current scoreboard information
 void Cmd_Score_f( gentity_t *ent ) {
 	ent->client->wantsscore = qtrue;
 //	G_SendScore( ent );
+}
+
+/* Original ClientCommand "fu": immediate scoreboard, team scores, K/D and
+ * both team-info updates. G_SendScore owns negotiated score extensions here. */
+void Cmd_FullUpdate_f(gentity_t *ent) {
+	if(!ent || !ent->client) return;
+	G_SendScore(ent);
+	TeamplayInfoMessage(TEAM_AXIS);
+	TeamplayInfoMessage(TEAM_ALLIES);
 }
 
 /*
@@ -1515,12 +1545,32 @@ void G_SayTo( gentity_t *ent, gentity_t *other, int mode, int color, const char 
 			}
 		}
 
-		trap_SendServerCommand( other-g_entities, va("%s \"%s%c%c%s\" %i %i", mode == SAY_TEAM || mode == SAY_BUDDY ? "tchat" : "chat", name, Q_COLOR_ESCAPE, color, message, ent-g_entities, localize ));
+		trap_SendServerCommand( other-g_entities, va("%s \"%s%c%c%s\" %i %i", mode == SAY_TEAM || mode == SAY_BUDDY ? "tchat" : "chat", name, Q_COLOR_ESCAPE, color, message, (int)(ent-g_entities), localize ));
 	}
+}
+
+/* Original G_ShortcutSanitize changes ten known bracket codes in names;
+ * G_Shortcuts copies the resulting name into a 36-byte field. */
+static const char *G_NITMOD_ShortcutName( const char *name ) {
+	static char clean[150];
+	int i;
+	Q_strncpyz(clean, name, sizeof(clean));
+	for( i = 0; clean[i]; ++i ) {
+		if( clean[i] == '[' && clean[i + 1] && clean[i + 2] == ']' &&
+			strchr("adhklnrpsw", clean[i + 1]) ) {
+			clean[i] = '(';
+			clean[i + 2] = ')';
+			i += 2;
+		}
+	}
+	/* Sanitize before shortening, as in the original two-copy sequence. */
+	clean[35] = '\0';
+	return clean;
 }
 
 static const char *G_NITMOD_ShortcutValue( gentity_t *ent, char code )
 {
+	static char label[32];
 	gitem_t *item;
 	int weapon;
 	int ammo;
@@ -1539,19 +1589,25 @@ static const char *G_NITMOD_ShortcutValue( gentity_t *ent, char code )
 			clientNum = -1;
 		}
 		break;
-	case 'l': return BG_GetLocationString(ent->r.currentOrigin);
-	case 'n': return ent->client->pers.netname;
+	case 'l':
+		/* G_Shortcuts uses playerState origin and a 32-byte location field. */
+		Q_strncpyz(label, BG_GetLocationString(ent->client->ps.origin), sizeof(label));
+		return label;
+	case 'n': return G_NITMOD_ShortcutName(ent->client->pers.netname);
 	case 's': return va("%i", ent->health < 0 ? 0 : ent->health);
 	case 'w':
 		weapon = ent->client->ps.weapon;
+		if( weapon <= WP_NONE || weapon >= WP_NUM_WEAPONS ) return "Nothing";
 		item = BG_FindItemForWeapon(weapon);
-		return item && item->pickup_name ? item->pickup_name : "Nothing";
+		Q_strncpyz(label, item && item->pickup_name ? item->pickup_name : "Nothing", sizeof(label));
+		return label;
 	case 't':
 		weapon = ent->client->ps.weapon;
-		if( weapon == WP_KNIFE || weapon <= WP_NONE || weapon >= WP_NUM_WEAPONS ) {
+		if( weapon <= WP_NONE || weapon >= WP_NUM_WEAPONS ) {
 			return "0";
 		}
-		ammo = ent->client->ps.ammo[BG_FindAmmoForWeapon(weapon)] +
+		/* Original G_Shortcuts excludes knife reserve, not its clip. */
+		ammo = (weapon == WP_KNIFE ? 0 : ent->client->ps.ammo[BG_FindAmmoForWeapon(weapon)]) +
 			ent->client->ps.ammoclip[BG_FindClipForWeapon(weapon)];
 		return va("%i", ammo);
 	default: return NULL;
@@ -1560,7 +1616,7 @@ static const char *G_NITMOD_ShortcutValue( gentity_t *ent, char code )
 	if( clientNum >= 0 && clientNum < level.maxclients &&
 		g_entities[clientNum].inuse && g_entities[clientNum].client &&
 		g_entities[clientNum].client->pers.connected == CON_CONNECTED ) {
-		return g_entities[clientNum].client->pers.netname;
+		return G_NITMOD_ShortcutName(g_entities[clientNum].client->pers.netname);
 	}
 	return "*unknown*";
 }
@@ -1750,7 +1806,7 @@ void Cmd_Say_f( gentity_t *ent, int mode, qboolean arg0 )
 extern void BotRecordVoiceChat( int client, int destclient, const char *id, int mode, qboolean noResponse );
 
 // NERVE - SMF
-void G_VoiceTo( gentity_t *ent, gentity_t *other, int mode, const char *id, qboolean voiceonly ) {
+void G_VoiceTo( gentity_t *ent, gentity_t *other, int mode, const char *id, qboolean voiceonly, float selection ) {
 	int color;
 	char *cmd;
 
@@ -1809,14 +1865,16 @@ void G_VoiceTo( gentity_t *ent, gentity_t *other, int mode, const char *id, qboo
 	}
 
 	if( mode == SAY_TEAM || mode == SAY_BUDDY ) {
-		CPx( other-g_entities, va("%s %d %d %d %s %i %i %i", cmd, voiceonly, ent - g_entities, color, id, (int)ent->s.pos.trBase[0], (int)ent->s.pos.trBase[1], (int)ent->s.pos.trBase[2] ));
+		CPx( other-g_entities, va("%s %d %d %d %s %i %i %i %f", cmd, voiceonly, (int)(ent - g_entities), color, id, (int)ent->s.pos.trBase[0], (int)ent->s.pos.trBase[1], (int)ent->s.pos.trBase[2], selection ));
 	} else {
-		CPx( other-g_entities, va("%s %d %d %d %s", cmd, voiceonly, ent - g_entities, color, id ));
+		CPx( other-g_entities, va("%s %d %d %d %s %f", cmd, voiceonly, (int)(ent - g_entities), color, id, selection ));
 	}
 }
 
-void G_Voice( gentity_t *ent, gentity_t *target, int mode, const char *id, qboolean voiceonly ) {
+static void G_VoiceWithText( gentity_t *ent, gentity_t *target, int mode, const char *id, const char *text, qboolean voiceonly ) {
 	int			j;
+	/* Original G_Voice: one variant for the entire recipient set. */
+	float selection = random();
 
 	// DHM - Nerve :: Don't allow excessive spamming of voice chats
 	ent->voiceChatSquelch -= (level.time - ent->voiceChatPreviousTime);
@@ -1836,6 +1894,12 @@ void G_Voice( gentity_t *ent, gentity_t *target, int mode, const char *id, qbool
 	else
 		return;
 	// dhm
+	/* Original Nitmod sends custom text through normal chat, then suppresses
+	 * the voice script's default subtitle. One-character text is ignored. */
+	if( text && strlen(text) > 1 ) {
+		G_Say(ent, target, mode, text);
+		voiceonly = qtrue;
+	}
 
 	// OSP - Charge for the lame spam!
 	/*if(mode == SAY_ALL && (!Q_stricmp(id, "DynamiteDefused") || !Q_stricmp(id, "DynamitePlanted"))) {
@@ -1843,7 +1907,7 @@ void G_Voice( gentity_t *ent, gentity_t *target, int mode, const char *id, qbool
 	}*/
 
 	if ( target ) {
-		G_VoiceTo( ent, target, mode, id, voiceonly );
+		G_VoiceTo( ent, target, mode, id, voiceonly, selection );
 		return;
 	}
 
@@ -1897,13 +1961,19 @@ void G_Voice( gentity_t *ent, gentity_t *target, int mode, const char *id, qbool
 				}
 			}
 
-			G_VoiceTo(ent, &g_entities[level.sortedClients[j]], mode, id, voiceonly);
+			if( !COM_BitCheck( level.clients[level.sortedClients[j]].sess.ignoreClients,
+				ent - g_entities ) ) {
+				G_VoiceTo(ent, &g_entities[level.sortedClients[j]], mode, id, voiceonly, selection);
+			}
 		}
 	} else {
 
 		// send it to all the apropriate clients
 		for( j = 0; j < level.numConnectedClients; j++ ) {
-			G_VoiceTo(ent, &g_entities[level.sortedClients[j]], mode, id, voiceonly);
+			if( !COM_BitCheck( level.clients[level.sortedClients[j]].sess.ignoreClients,
+				ent - g_entities ) ) {
+				G_VoiceTo(ent, &g_entities[level.sortedClients[j]], mode, id, voiceonly, selection);
+			}
 		}
 	}
 }
@@ -1913,7 +1983,12 @@ void G_Voice( gentity_t *ent, gentity_t *target, int mode, const char *id, qbool
 Cmd_Voice_f
 ==================
 */
+void G_Voice( gentity_t *ent, gentity_t *target, int mode, const char *id, qboolean voiceonly ) {
+	G_VoiceWithText(ent, target, mode, id, "", voiceonly);
+}
+
 static void Cmd_Voice_f( gentity_t *ent, int mode, qboolean arg0, qboolean voiceonly ) {
+	char id[32];
 	if( G_NITMOD_ClientIsFlooding(ent) ) {
 		trap_SendServerCommand(ent - g_entities,
 			"print \"Flood protection: wait before sending another message.\\n\"");
@@ -1923,7 +1998,8 @@ static void Cmd_Voice_f( gentity_t *ent, int mode, qboolean arg0, qboolean voice
 		if(trap_Argc() < 2 && !arg0) {
 			return;
 		}
-		G_Voice(ent, NULL, mode, ConcatArgs(((arg0) ? 0 : 1)), voiceonly);
+		trap_Argv(arg0 ? 0 : 1, id, sizeof(id));
+		G_VoiceWithText(ent, NULL, mode, id, ConcatArgs(arg0 ? 1 : 2), voiceonly);
 	} else {
 		char buffer[16];
 		int index;
@@ -1933,11 +2009,15 @@ static void Cmd_Voice_f( gentity_t *ent, int mode, qboolean arg0, qboolean voice
 		if( index < 0 ) {
 			index = 0;
 		}
+		if( index > MAX_CLIENTS ) {
+			return;
+		}
 
 		if( trap_Argc() < 3 + index && !arg0 ) {
 			return;
 		}
-		G_Voice(ent, NULL, mode, ConcatArgs(((arg0) ? 2 + index : 3 + index)), voiceonly);
+		trap_Argv(arg0 ? 2 + index : 3 + index, id, sizeof(id));
+		G_VoiceWithText(ent, NULL, mode, id, ConcatArgs(arg0 ? 3 + index : 4 + index), voiceonly);
 	}
 }
 
@@ -3998,6 +4078,9 @@ void ClientCommand( int clientNum ) {
 		if( !G_NITMOD_ClientMuted(ent)) {
 			Cmd_Voice_f( ent, SAY_BUDDY, qfalse, qfalse );
 		}
+		return;
+	} else if (Q_stricmp (cmd, "fu") == 0) {
+		Cmd_FullUpdate_f(ent);
 		return;
 	} else if (Q_stricmp (cmd, "score") == 0) {
 		Cmd_Score_f (ent);

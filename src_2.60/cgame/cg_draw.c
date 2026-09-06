@@ -2010,6 +2010,7 @@ static void CG_DrawCrosshairNames( void ) {
 
 	qboolean hitClient = qfalse;
 	qboolean original = NITMOD_UsesOriginalProtocol(), disguised = qfalse;
+	qboolean nitmodHud = NITMOD_UsesNitmodHud();
 	if(!cg.snap || cg.snap->ps.clientNum < 0 || cg.snap->ps.clientNum >= MAX_CLIENTS ||
 	   (original && cgs.gametype == 8)) return;
 
@@ -2052,7 +2053,7 @@ static void CG_DrawCrosshairNames( void ) {
 				if( !*s ) {
 					return;
 				}
-				if(original) {
+				if(nitmodHud) {
 					CG_NitmodDrawCrosshairLabel(s, color);
 					CG_NitmodDrawCrosshairHealth(playerHealth, maxHealth, color);
 					return;
@@ -2062,7 +2063,7 @@ static void CG_DrawCrosshairNames( void ) {
 				CG_DrawSmallStringColor( 320 - w / 2, 170, s, color );
 			} else if( cg_entities[cg.crosshairClientNum].currentState.eType == (original ? 33 : ET_CONSTRUCTIBLE_MARKER) ) {
 				s = CG_NitmodCrosshairEntityName(cg.crosshairClientNum, qtrue);
-				if(original) { CG_NitmodDrawCrosshairLabel(s, color); return; }
+				if(nitmodHud) { CG_NitmodDrawCrosshairLabel(s, color); return; }
 				if( *s ) {
 					w = CG_DrawStrlen( s ) * SMALLCHAR_WIDTH;
 					CG_DrawSmallStringColor( 320 - w / 2, 170, s, color );
@@ -2079,7 +2080,7 @@ static void CG_DrawCrosshairNames( void ) {
 			if( cgs.clientinfo[cg.snap->ps.clientNum].team != TEAM_SPECTATOR &&
 				CG_NitmodCanIdentifyDisguise(cg.snap->ps.clientNum) ) {
 				s = CG_TranslateString( "Disguised Enemy!" );
-				if(original) { CG_NitmodDrawCrosshairLabel(s, color); return; }
+				if(nitmodHud) { CG_NitmodDrawCrosshairLabel(s, color); return; }
 				w = CG_DrawStrlen( s ) * SMALLCHAR_WIDTH;
 				CG_DrawSmallStringColor( 320 - w / 2, 170, s, color );
 				return;
@@ -2138,7 +2139,7 @@ static void CG_DrawCrosshairNames( void ) {
 	// we only want to see players on our team
 	if ( !isTank &&	!( cgs.clientinfo[cg.snap->ps.clientNum].team != TEAM_SPECTATOR && cgs.clientinfo[ cg.crosshairClientNum ].team != cgs.clientinfo[cg.snap->ps.clientNum].team ) ) {
 		drawStuff = qtrue;
-		if(!original) {
+		if(!nitmodHud) {
 
 		// determine player class
 		playerClass = BG_ClassLetterForNumber( cg_entities[ cg.crosshairClientNum ].currentState.teamNum );
@@ -2191,8 +2192,12 @@ static void CG_DrawCrosshairNames( void ) {
 		}
 	}
 
-	if(original) {
-		if(!isTank) maxHealth = CG_NitmodCrosshairMaxHealth(cg.crosshairClientNum);
+	/* Native disguise encoding still uses its own presentation above. */
+	if(original || (nitmodHud && !disguised && !isTank && drawStuff)) {
+		if(!isTank && (original || NITMOD_ServerSupports(NITMOD_FEATURE_CLASS_HEALTH))) {
+			int nitmodMaxHealth = CG_NitmodCrosshairMaxHealth(cg.crosshairClientNum);
+			if(nitmodMaxHealth > 0) maxHealth = nitmodMaxHealth;
+		}
 		CG_NitmodDrawCrosshairPlayer(cg.crosshairClientNum, disguised, playerHealth, maxHealth, color);
 		return;
 	}
@@ -3882,9 +3887,14 @@ static int CG_PlayerAmmoValue( int *ammo, int *clips, int *akimboammo ) {
 		return weap;
 
 	switch(weap) {		// some weapons don't draw ammo count text
+		case WP_KNIFE:
+			if(!NITMOD_ClientSkillUnlocked(ps->clientNum, SK_LIGHT_WEAPONS, 5)) return weap;
+			skipammo = qtrue;
+			break;
 		case WP_AMMO:
 		case WP_MEDKIT:
-		case WP_KNIFE:
+		case WP_BOMB:
+		case WP_POISON_BOMB:
 		case WP_PLIERS:
 		case WP_SMOKE_MARKER:
 		case WP_DYNAMITE:
@@ -3896,6 +3906,8 @@ static int CG_PlayerAmmoValue( int *ammo, int *clips, int *akimboammo ) {
 
 		case WP_LANDMINE:
 		case WP_TRIPMINE:
+		case WP_POISON_MINE:
+		case WP_POISON_SYRINGE:
 		case WP_MEDIC_SYRINGE:
 		case WP_MEDIC_ADRENALINE:
 		case WP_GRENADE_LAUNCHER:
@@ -3927,7 +3939,7 @@ static int CG_PlayerAmmoValue( int *ammo, int *clips, int *akimboammo ) {
 		*akimboammo = -1;
 	}
 
-	if( weap == WP_LANDMINE ) {
+	if( weap == WP_LANDMINE || weap == WP_POISON_MINE ) {
 		if( !cgs.gameManager ) {
 			*ammo = 0;
 		} else {

@@ -66,7 +66,7 @@ static qboolean CG_NitmodQueueWorldName(int key, const char *text, const vec3_t 
 }
 
 qboolean CG_NitmodQueueLocationName(int index, const char *text, const vec3_t origin) {
-    if(!NITMOD_UsesOriginalProtocol() || !cg.snap || !cg_draw2D.integer ||
+    if(!NITMOD_UsesNitmodHud() || !cg.snap || !cg_draw2D.integer ||
        !(cg_locations.integer & 512) || index < 0 || index >= NITMOD_MAX_LOCATIONS) return qfalse;
     return CG_NitmodQueueWorldName(MAX_CLIENTS + index, text, origin);
 }
@@ -192,14 +192,16 @@ void CG_NitmodNamesReset(void) {
 }
 
 qboolean CG_NitmodQueueWoundedName(const centity_t *cent) {
-    const entityState_t *es = &cent->currentState;
+	const entityState_t *es;
     const clientInfo_t *ci;
     vec3_t position, delta, forward, right, up;
     float depth, distance, width, height;
-    int client = es->clientNum;
+    int client;
     qboolean medic;
     woundedName_t *entry;
-    if(!NITMOD_UsesOriginalProtocol() || !cg.snap || !cg.refdef_current ||
+    if(!cent) return qfalse;
+    es = &cent->currentState; client = es->clientNum;
+    if(!NITMOD_UsesNitmodHud() || !cg.snap || !cg.refdef_current ||
        !cg_draw2D.integer || !cg_woundedNames.integer || cg.demoPlayback ||
        client < 0 || client >= MAX_CLIENTS || es->number != client ||
        client == cg.snap->ps.clientNum || nameCount >= 32) return qfalse;
@@ -243,7 +245,7 @@ void CG_NitmodDrawWoundedNames(void) {
     nitmodHudAnchor_t previous;
     nameCount = 0;
     if(!cg.refdef_current || !cg_draw2D.integer || !cg_woundedNames.integer || cg.demoPlayback ||
-       !NITMOD_UsesOriginalProtocol()) return;
+       !NITMOD_UsesNitmodHud()) return;
     previous = CG_NitmodHudAnchor(NITMOD_HUD_CENTER);
     for(i = 0; i < count; ++i) {
         trace_t trace;
