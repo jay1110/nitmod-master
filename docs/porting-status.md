@@ -1,5 +1,30 @@
 # Nitmod reconstruction status
 
+## Review 2026-09-06
+
+Continuation worktree verified against the available source state: clean initial
+Git status in this checkout and the origin checkout, all three original modules
+present and SHA256 matching reference/original_nitmod_i386.sha256. Fresh local
+Emscripten configuration and all three WASM module builds passed, including
+vmMain/dllEntry/vmWasmAbi1 post-link checks. Existing compiler warnings remain.
+
+Spawn reward verification now independently varies Light Weapons, First Aid
+ammo/syringe, Engineering and Covert reward gates. Unlike the previous common
+mask fixture, this detects wrong-skill reads and doubled OR bonuses. It also
+preserves nonzero starting inventories and compares the entire gclient_t after
+each call; irrelevant mask bits and negative/extreme war values are covered.
+155,520 actual AddExtraSpawnAmmo WASM cases pass against the recovered switch
+in sorted/nitmod_unknown.c. No production behavior changed in this block.
+
+Reproduce the cohesive spawn adapter suite with an activated Emscripten SDK:
+`python tools/run_wasm_spawn_checks.py`. All four fixtures pass: spawn rewards,
+25,600 health cases, 480 secondary correction plus 81,920 fallback cases, and
+3,240 actual secondary grant cases. These use engine boundary stubs; they are
+not complete ClientSpawn execution, original-binary replay or browser parity.
+User-confirmed knife throw/tripmine functionality supersedes older open entries.
+The real uploaded nkey import retest remains pending. No pak, engine, original
+module or external Omni-bot changes were made.
+
 ## Review 2026-09-05
 
 User confirmed tripmine and knife throw working. Uploaded nkey screenshot
