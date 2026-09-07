@@ -89,8 +89,17 @@ Desktop.ini
 !.env.example
 
 # Intentionally tracked: .github/, src_2.60/ (including Lua/SQLite sources),
-# companion/, tests/, tools/, build instructions and source license notices.
+# required build/runtime tools, build instructions and source license notices.
 
 # Mod assets take precedence over generic artifact patterns.
 !/pak/
 !/pak/**
+
+# Local verification/reconstruction tooling is not part of the mod distribution.
+/tests/
+/companion/
+/tools/*
+!/tools/cmake/
+!/tools/run_wasm_build.py
+!/tools/verify_wasm_module.py
+!/tools/nitmod_global_stats_bridge.py

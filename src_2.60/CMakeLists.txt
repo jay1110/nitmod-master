@@ -1,6 +1,11 @@
 cmake_minimum_required(VERSION 3.20)
 project(nitmod_260 C CXX)
 
+# Local parity fixtures are intentionally excluded from the distribution.
+option(BUILD_TESTING "Build local Nitmod verification fixtures" OFF)
+if(BUILD_TESTING AND NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/../tests/test_original_charge_dispatch.c")
+    message(FATAL_ERROR "BUILD_TESTING requires the local tests/ fixtures; use -DBUILD_TESTING=OFF for a source-only checkout.")
+endif()
 include(CTest)
 
 # This is intentionally separate from the historical SCons build.  It builds
