@@ -781,7 +781,7 @@ void SP_misc_cabinet_supply( gentity_t* self ) {
 	 * linked or exposed to clients. Trigger-based ammo/health entities remain
 	 * independent and retain their map-defined behavior. */
 	if( g_gametype.integer == GT_WOLF_DM &&
-		(G_NITMOD_LegacyCvarInteger("g_DMOptions", 0) & 128) ) {
+		(g_DMOptions.integer & 128) ) {
 		G_FreeEntity(self);
 		return;
 	}

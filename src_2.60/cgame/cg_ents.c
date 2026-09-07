@@ -869,7 +869,7 @@ static void CG_Bomb( centity_t *cent ) {
 	memset(&ent, 0, sizeof(ent));
 
 	s1 = &cent->currentState;
-	if(NITMOD_UsesOriginalProtocol()) {
+	if(NITMOD_UsesNitmodHud()) {
 		presentation = CG_NitmodTripminePresentation(s1, beamColor);
 		if(!presentation) return;
 	}
@@ -1006,7 +1006,6 @@ void CG_Missile( centity_t *cent ) {
 	   cg.clientNum < 0 || cg.clientNum >= MAX_CLIENTS ||
 	   cg.snap->ps.clientNum < 0 || cg.snap->ps.clientNum >= MAX_CLIENTS) return;
 	weapon = &cg_weapons[s1->weapon];
-	CG_NitmodMissileCameraTrack(cent);
 
 	// calculate the axis
 	VectorCopy( s1->angles, cent->lerpAngles);
@@ -1169,6 +1168,7 @@ void CG_Missile( centity_t *cent ) {
 	}
 
 	if(!CG_NitmodMissileAxis(cent, ent.axis, cg.time, NITMOD_UsesOriginalProtocol())) return;
+	CG_NitmodMissileCameraTrack(cent, ent.axis);
 
 	// Rafael
 	// Added this since it may be a propExlosion
@@ -2428,7 +2428,7 @@ qboolean CG_AddLinkedEntity( centity_t *cent, qboolean ignoreframe, int atTime )
 		return qtrue;
 	}
 
-	if (!ignoreframe && (cent->processedFrame == cg.clientFrame) && cg.mvTotalClients < 2) {
+	if (!ignoreframe && (cent->processedFrame == cg.clientFrame) && cg.mvTotalClients < 2 && !CG_NitmodRenderingMissileCamera()) {
 		// already processed this frame
 		return qtrue;
 	}
@@ -2579,7 +2579,7 @@ qboolean CG_AddEntityToTag( centity_t *cent ) {
 		return qfalse;
 	}
 
-	if (cent->processedFrame == cg.clientFrame && cg.mvTotalClients < 2) {
+	if (cent->processedFrame == cg.clientFrame && cg.mvTotalClients < 2 && !CG_NitmodRenderingMissileCamera()) {
 		// already processed this frame
 		return qtrue;
 	}
@@ -2648,7 +2648,7 @@ CG_AddPacketEntities
 */
 
 qboolean CG_AddCEntity_Filter( centity_t* cent ) {
-	if(cent->processedFrame == cg.clientFrame && cg.mvTotalClients < 2) {
+	if(cent->processedFrame == cg.clientFrame && cg.mvTotalClients < 2 && !CG_NitmodRenderingMissileCamera()) {
 		return qtrue;
 	}
 
@@ -2665,6 +2665,7 @@ qboolean CG_AddCEntity_Filter( centity_t* cent ) {
 }
 
 void CG_AddPacketEntities( void ) {
+	byte earlyAdded[MAX_GENTITIES] = {0};
 	int					num;
 	playerState_t		*ps;
 	//int					clcount;
@@ -2706,6 +2707,7 @@ void CG_AddPacketEntities( void ) {
 	// generate and add the entity from the playerstate
 	ps = &cg.predictedPlayerState;
 	BG_PlayerStateToEntityState( ps, &cg.predictedPlayerEntity.currentState, qfalse );
+	cg.predictedPlayerEntity.currentState.time2 = cg_entities[ps->clientNum].currentState.time2;
 	if(NITMOD_UsesOriginalProtocol())
 		BG_NITMOD_CopyLeanState(ps, &cg.predictedPlayerEntity.currentState);
 	CG_AddCEntity( &cg.predictedPlayerEntity );
@@ -2722,12 +2724,16 @@ void CG_AddPacketEntities( void ) {
 		for (num = 0; num < cg.nextSnap->numEntities; ++num) {
 			if (CG_NitmodTransitionEarlyEntity(num)) {
 				CG_AddCEntity(&cg_entities[cg.nextSnap->entities[num].number]);
+				earlyAdded[cg.nextSnap->entities[num].number] = 1;
 			}
 		}
 	}
 
 	// Gordon: changing to a single loop, child will request that their parents are added first anyway
 	for ( num = 0; num < cg.snap->numEntities ; num++ ) {
+		/* A secondary camera bypasses main-view processedFrame checks,
+		 * but early-transition entities still belong to this scene once. */
+		if(earlyAdded[cg.snap->entities[num].number]) continue;
 		CG_AddCEntity_Filter( &cg_entities[ cg.snap->entities[ num ].number ] );
 	}
 

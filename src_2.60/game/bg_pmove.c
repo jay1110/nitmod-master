@@ -3162,36 +3162,59 @@ qboolean PM_NitmodAuthoritativeWeapon(const pmove_t *move) {
 	return move->ps->weapon == WP_KNIFE && (move->cmd.wbuttons & WBUTTON_ATTACK2);
 }
 
+/* Original PM_Weapon: charge 50..500 ms, latch release in holdable[1],
+ * then use the 50-ms fire delay. The game handler consumes the charge value. */
 static qboolean PM_NitmodThrowKnife(void) {
 	int ammo;
 
-	if(!pm || !pm->ps || !pm->nitmodAuthoritativeWeapons || pm->ps->weapon != WP_KNIFE)
+	if(!pm->nitmodAuthoritativeWeapons || pm->ps->weapon != WP_KNIFE)
 		return qfalse;
-	if(!(pm->cmd.wbuttons & WBUTTON_ATTACK2)) {
-		if(pm->ps->weaponstate == WEAPON_FIRING &&
-		   (pm->ps->weapAnim & ~ANIM_TOGGLEBIT) == WEAP_ATTACK2) {
-			pm->ps->weaponstate = WEAPON_READY;
-			pm->ps->weaponTime = 0;
-			PM_ContinueWeaponAnim(PM_IdleAnimForWeapon(WP_KNIFE));
-			return qtrue;
-		}
-		return qfalse;
-	}
 	ammo = BG_FindClipForWeapon(WP_KNIFE);
-	if(pm->ps->ammoclip[ammo] <= 0) {
-		/* Consume the button while selected so an empty throw cannot fall
-		 * through into the ordinary stabbing/fire path. */
+	if(pm->ps->weaponstate != WEAPON_FIRINGALT) {
+		if(!(pm->cmd.wbuttons & WBUTTON_ATTACK2) || !(pm->nitmodWeaponFlags & 32) ||
+		   pm->ps->ammoclip[ammo] < 2 || pm->ps->leanf != 0 ||
+		   (pm->ps->eFlags & EF_PRONE_MOVING) || pm->ps->weaponTime > 0 ||
+		   pm->ps->weaponDelay > 0 || pm->cmd.weapon != WP_KNIFE ||
+		   (pm->ps->weaponstate != WEAPON_READY && pm->ps->weaponstate != WEAPON_FIRING))
+			return qfalse;
+		pm->ps->grenadeTimeLeft = 50;
+		pm->ps->holdable[1] = 0;
+		pm->ps->weaponstate = WEAPON_FIRINGALT;
+		pm->ps->weaponDelay = GetAmmoTableData(WP_KNIFE)->fireDelayTime;
+		PM_StartWeaponAnim(WEAP_ATTACK2);
+		BG_AnimScriptEvent(pm->ps, pm->character->animModelInfo,
+			(pm->ps->eFlags & EF_PRONE) ? ANIM_ET_FIREWEAPON3PRONE : ANIM_ET_FIREWEAPON3,
+			qfalse, qtrue);
 		return qtrue;
 	}
-	/* Edge-gate the held button: remain in WEAPON_FIRING until it is released. */
-	if(pm->ps->weaponstate != WEAPON_FIRING) {
-		pm->ps->ammoclip[ammo]--;
-		PM_StartWeaponAnim(WEAP_ATTACK2);
-		PM_AddEvent(EV_NITMOD_THROW_KNIFE);
-		pm->ps->weaponstate = WEAPON_FIRING;
-		pm->ps->weaponTime = GetAmmoTableData(WP_KNIFE)->nextShotTime;
-		pm->ps->lastFireTime = pm->cmd.serverTime;
+
+	pm->ps->grenadeTimeLeft += pml.msec;
+	if(pm->ps->grenadeTimeLeft > 500) pm->ps->grenadeTimeLeft = 500;
+	if(pm->ps->holdable[1]) {
+		pm->cmd.buttons &= ~BUTTON_ATTACK;
+		pm->cmd.wbuttons &= ~WBUTTON_ATTACK2;
 	}
+	if((pm->cmd.wbuttons & WBUTTON_ATTACK2) && !(pm->ps->eFlags & EF_PRONE_MOVING))
+		return qtrue;
+	if(pm->ps->weaponDelay == GetAmmoTableData(WP_KNIFE)->fireDelayTime) {
+		PM_StartWeaponAnim(WEAP_ATTACK_LASTSHOT);
+		BG_AnimScriptEvent(pm->ps, pm->character->animModelInfo,
+			(pm->ps->eFlags & EF_PRONE) ? ANIM_ET_FIREWEAPON2PRONE : ANIM_ET_FIREWEAPON2,
+			qfalse, qtrue);
+		pm->ps->holdable[1] = 1;
+	}
+	pm->ps->weaponDelay -= pml.msec;
+	if(pm->ps->weaponDelay > 0) return qtrue;
+	pm->ps->weaponDelay = 0;
+	if(pm->ps->ammoclip[ammo] <= 0) return qtrue;
+	pm->ps->ammoclip[ammo]--;
+	PM_AddEvent(EV_NITMOD_THROW_KNIFE);
+	pm->ps->lastFireTime = pm->cmd.serverTime;
+	pm->ps->weaponTime = NITMOD_AddWeaponTime32(pm->ps->weaponTime,
+		GetAmmoTableData(WP_KNIFE)->nextShotTime);
+	pm->ps->weaponstate = WEAPON_DROPPING;
+	pm->ps->nextWeapon = pm->cmd.weapon;
+	pm->ps->holdable[1] = 0;
 	return qtrue;
 }
 
@@ -3205,7 +3228,6 @@ static void PM_Weapon( void ) {
 #ifdef DO_WEAPON_DBG
 	static int weaponstate_last = -1;
 #endif
-	if(PM_NitmodThrowKnife()) return;
 
 	// don't allow attack until all buttons are up
 	if ( pm->ps->pm_flags & PMF_RESPAWNED ) {
@@ -3348,6 +3370,8 @@ static void PM_Weapon( void ) {
 		}
 		return;
 	}
+
+	if(PM_NitmodThrowKnife()) return;
 
 	pm->watertype = 0;
 
@@ -3678,7 +3702,10 @@ static void PM_Weapon( void ) {
 			return;
 	}
 
-/*	if( pm->ps->weapon == WP_TRIPMINE ) {
+	/* Original PM_Weapon, ELF 0x2c97f..0x2cb7f: reject placement before
+	 * firing/animation events unless both traces hit usable world surfaces. */
+	if(pm->ps->weapon == WP_TRIPMINE &&
+	   ((pm->cmd.buttons & BUTTON_ATTACK) || delayedFire)) {
 		trace_t trace;
 		vec3_t start, end, forward;
 
@@ -3695,7 +3722,7 @@ static void PM_Weapon( void ) {
 			return; // didnt hit a nearby wall
 		}
 
-		if(trace.surfaceFlags & SURF_NOIMPACT) {
+		if(trace.surfaceFlags & (SURF_SKY | SURF_NOIMPACT)) {
 			return;
 		}
 
@@ -3712,14 +3739,14 @@ static void PM_Weapon( void ) {
 			return; // gap to opposite wall was too big
 		}
 
-		if(trace.surfaceFlags & SURF_NOIMPACT) {
+		if(trace.surfaceFlags & (SURF_SKY | SURF_NOIMPACT)) {
 			return;
 		}
 
 		if(trace.entityNum != ENTITYNUM_WORLD) {
 			return; // hit a player, door, etc
 		}
-	}*/
+	}
 
 	// check for fire
 	// if not on fire button and there's not a delayed shot this frame...
@@ -5273,6 +5300,59 @@ static void PM_NITMOD_TogglePlayDead( void ) {
 		ANIM_ET_DEATH, qfalse, qtrue );
 }
 
+/* Original PmoveSingle 0x305ac..0x30710: alternate selection is an
+ * attack2 rising edge in shared movement, followed by the client-selection
+ * event and the existing drop/raise state machine. */
+static qboolean PM_NITMOD_AltTransitionLocked(int weapon) {
+ switch(weapon) {
+ case WP_GPG40: case WP_M7: case WP_SILENCER: case WP_SILENCED_COLT:
+ case WP_AKIMBO_SILENCEDCOLT: case WP_AKIMBO_SILENCEDLUGER:
+ case WP_MORTAR_SET: case WP_MOBILE_MG42_SET:
+  return qtrue;
+ default:return qfalse;
+ }
+}
+static void PM_NITMOD_AlternateWeapon(void) {
+ int weapon,alternate;
+ vec3_t eye;
+ if(!pm->nitmodAuthoritativeWeapons ||
+    (pm->ps->pm_flags&PMF_RESPAWNED) ||
+    pm->ps->persistant[PERS_TEAM]==TEAM_SPECTATOR ||
+    pm->ps->stats[STAT_HEALTH]<=0 || BG_PlayerMounted(pm->ps->eFlags) ||
+    !(pm->cmd.wbuttons&WBUTTON_ATTACK2) || (pm->oldcmd.wbuttons&WBUTTON_ATTACK2)) return;
+ weapon=pm->ps->weapon;
+ if(weapon<=WP_NONE || weapon>=WP_NUM_WEAPONS) return;
+#ifdef CGAMEDLL
+ /* Original Cgame PmoveSingle adds this client-only action before the
+  * alternate-weapon lookup can fall back to the current weapon. Qagame
+  * only receives the resulting +zoom usercmd; binoculars have no alt ID. */
+ if(weapon==WP_BINOCULARS) {
+  if(pm->ps->weaponstate==WEAPON_RELOADING || (pm->ps->eFlags&EF_SPARE0)) return;
+  if(pm->ps->eFlags&EF_ZOOMING) {
+   trap_SendConsoleCommand("-zoom\n");
+   cg.binocZoomTime=-cg.time;
+  } else if(!cg.binocZoomTime) cg.binocZoomTime=cg.time;
+  return;
+ }
+#endif
+ alternate=weapAlts[weapon];
+ if(alternate<=WP_NONE || alternate>=WP_NUM_WEAPONS) return;
+ if(weapon==WP_MORTAR) {
+  if(!pml.groundPlane || !pm->ps->ammoclip[BG_FindClipForWeapon(WP_MORTAR)] ||
+     (pm->ps->eFlags&EF_PRONE) || pm->waterlevel==3 || VectorLengthSquared(pm->ps->velocity)!=0) return;
+  VectorCopy(pm->ps->origin,eye);eye[2]+=pm->ps->crouchViewHeight;
+  if(pm->pointcontents(eye,pm->ps->clientNum)&MASK_WATER) return;
+ } else if(weapon==WP_MOBILE_MG42 && !(pm->ps->eFlags&EF_PRONE)) return;
+ if(pm->ps->weaponstate==WEAPON_RELOADING) return;
+ if((pm->ps->weaponstate==WEAPON_RAISING || pm->ps->weaponstate==WEAPON_DROPPING) &&
+    (PM_NITMOD_AltTransitionLocked(weapon) || PM_NITMOD_AltTransitionLocked(alternate))) return;
+ if(!COM_BitCheck(pm->ps->weapons,alternate)) return;
+ if(alternate!=WP_PLIERS && !pm->ps->ammo[BG_FindAmmoForWeapon(alternate)] &&
+    !pm->ps->ammoclip[BG_FindClipForWeapon(alternate)]) return;
+ BG_AddPredictableEventToPlayerstate(EV_NITMOD_ALTWEAPON,alternate,pm->ps);
+ PM_BeginWeaponChange(weapon,alternate,qfalse);
+}
+
 void PmoveSingle (pmove_t *pmove) {
 	// RF, update conditional values for anim system
 	BG_AnimUpdatePlayerStateConditions( pmove );
@@ -5591,6 +5671,7 @@ void PmoveSingle (pmove_t *pmove) {
 	PM_SetWaterLevel();
 
 	// weapons
+	PM_NITMOD_AlternateWeapon();
 	PM_Weapon();
 
 	// footstep events / legs animations

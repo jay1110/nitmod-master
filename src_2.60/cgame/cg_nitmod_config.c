@@ -14,6 +14,7 @@
 
 static char nitmodConfigStrings[NITMOD_MAX_CONFIGSTRINGS][NITMOD_CONFIGSTRING_CHARS];
 static unsigned int nitmodServerCapabilities;
+static char nitmodWeaponScriptsDir[256];
 static qboolean nitmodPackBypass, nitmodPackSettingsReady;
 static nitmodSimpleConfig_t nitmodSimpleConfig;
 static nitmodGameState_t nitmodGameState;
@@ -225,12 +226,19 @@ const char *NITMOD_PlayerConfigString(int clientNum) {
 int NITMOD_PredictedEventId(int event) {
 	int id = event & ~EV_EVENT_BITS;
 	int mapped = CG_NitmodEventDispatch(id);
+	if(id == 97) return EV_NITMOD_ALTWEAPON | (event & EV_EVENT_BITS);
 	return mapped >= 0 ? mapped | (event & EV_EVENT_BITS) : event;
 }
 void NITMOD_NormalizePredictedEvents(playerState_t *state) {
 	int i;
 	if(!NITMOD_UsesOriginalProtocol()) return;
-	for(i = 0; i < MAX_EVENTS; ++i) state->events[i] = NITMOD_PredictedEventId(state->events[i]);
+	for(i = 0; i < MAX_EVENTS; ++i) {
+		/* Original event 97 carries a wire weapon. Translate its parameter
+		 * exactly once when converting the ring to native prediction events. */
+		if((state->events[i] & ~EV_EVENT_BITS) == 97)
+			state->eventParms[i] = NITMOD_WeaponFromWire(state->eventParms[i]);
+		state->events[i] = NITMOD_PredictedEventId(state->events[i]);
+	}
 }
 
 /* Original CG_AddEntity/CG_CheckEvents: no spotlight, waypoint, bot-goal
@@ -280,7 +288,7 @@ void NITMOD_TranslateSnapshotWeapons(snapshot_t *snapshot) {
 	int owned[MAX_WEAPONS / 32], i, target;
     memcpy(powerups,ps->powerups,sizeof(powerups));
     memset(ps->powerups,0,sizeof(ps->powerups));
-    for(i=0;i<13;++i) ps->powerups[nitmodPowerupIds[i]]=powerups[i];
+    for(i=0;i<NITMOD_POWERUP_COUNT;++i) ps->powerups[nitmodPowerupIds[i]]=powerups[i];
 	memcpy(ammo, ps->ammo, sizeof(ammo));
 	memcpy(clip, ps->ammoclip, sizeof(clip));
 	memcpy(heat, ps->weapHeat, sizeof(heat));
@@ -419,11 +427,15 @@ void NITMOD_ParseClientExtras(const char *info, clientInfo_t *client) {
     int value, values[SK_NUM_SKILLS] = {0}, count = 0;
     if(!client) return;
     client->nitmodTV = client->nitmodShoutcaster = qfalse;
-    if(!info || !NITMOD_UsesOriginalProtocol()) return;
-    if(NITMOD_ParseProtocolSigned(Info_ValueForKey(info, "sc"), &value))
-        client->nitmodShoutcaster = value != 0;
-    if(NITMOD_ParseProtocolSigned(Info_ValueForKey(info, "tv"), &value))
-        client->nitmodTV = value != 0;
+    if(!info || !NITMOD_UsesNitmodHud()) return;
+    if(NITMOD_UsesOriginalProtocol()) {
+        if(NITMOD_ParseProtocolSigned(Info_ValueForKey(info, "sc"), &value))
+            client->nitmodShoutcaster = value != 0;
+        if(NITMOD_ParseProtocolSigned(Info_ValueForKey(info, "tv"), &value))
+            client->nitmodTV = value != 0;
+    }
+    /* Both Nitmod layouts publish reward bits in xp. Native ET's displayed
+     * skill level is capped at four and cannot represent throwing knives. */
     memset(client->nitmodSkillMasks, 0, sizeof(client->nitmodSkillMasks));
     cursor = Info_ValueForKey(info, "xp");
     while(*cursor) {
@@ -455,7 +467,7 @@ qboolean NITMOD_UpdateClientSkillThresholds(const char *info) {
 }
 int NITMOD_ClientSkillNextThreshold(int skill, int level) {
 	if(skill < 0 || skill >= SK_NUM_SKILLS || level < 0) return -1;
-	if(!NITMOD_UsesOriginalProtocol()) return level < NUM_SKILL_LEVELS - 1 ? skillLevels[level + 1] : -1;
+	if(!NITMOD_UsesNitmodHud()) return level < NUM_SKILL_LEVELS - 1 ? skillLevels[level + 1] : -1;
 	if(level >= 5) return -1;
 	if(!clientSkillThresholdsReady) {
 		NITMOD_DefaultSkillThresholds(&clientSkillThresholds);
@@ -471,7 +483,7 @@ unsigned int NITMOD_NewSkillUnlocks(int oldMask, int newMask) {
 qboolean NITMOD_ClientSkillUnlocked(int client, int skill, int level) {
     if(client < 0 || client >= MAX_CLIENTS || skill < 0 || skill >= SK_NUM_SKILLS ||
        level < 0 || level >= NITMOD_SKILL_LEVEL_COUNT) return qfalse;
-    if(NITMOD_UsesOriginalProtocol())
+    if(NITMOD_UsesNitmodHud())
         return ((unsigned int)cgs.clientinfo[client].nitmodSkillMasks[skill] & (1u << level)) != 0;
     return cgs.clientinfo[client].skill[skill] >= level;
 }
@@ -633,8 +645,8 @@ void NITMOD_ApplyForcedCvars(void) {
 }
 
 qboolean NITMOD_DisplayCommand(const char *command) {
-	if(NITMOD_UsesOriginalProtocol() && !strcmp(command, "sl")) {
-		char info[256];
+	if(NITMOD_UsesNitmodHud() && !strcmp(command, "sl")) {
+		char info[MAX_INFO_STRING];
 		trap_Args(info, sizeof(info));
 		NITMOD_UpdateClientSkillThresholds(info);
 		return qtrue;
@@ -791,6 +803,28 @@ qboolean NITMOD_UsesOriginalProtocol(void) {
 qboolean NITMOD_UsesNitmodHud(void) {
 	return !Q_stricmp(Info_ValueForKey(CG_ConfigString(CS_SERVERINFO), "gamename"), "nitmod");
 }
+const char *NITMOD_WeaponScriptsDir(void) {
+	return nitmodWeaponScriptsDir;
+}
+
+/* Original CG_ParseInfo reads raw CS 36, key W (ELF 0xf5fe0).
+ * Native ET reserves 36 for intermission time, so the native layout uses 40. */
+void NITMOD_UpdateWeaponScripts(qboolean reload) {
+	char directory[sizeof(nitmodWeaponScriptsDir)];
+	const char *info;
+	int weapon, index = NITMOD_UsesOriginalProtocol() ? 36 : CS_NITMOD_INFO;
+	if(!NITMOD_UsesNitmodHud()) directory[0] = 0;
+	else {
+		/* Do not pass original 36 through the native-to-wire CS adapter. */
+		info = cgs.gameState.stringData + cgs.gameState.stringOffsets[index];
+		Q_strncpyz(directory, Info_ValueForKey(info, "W"), sizeof(directory));
+	}
+	if(!Q_stricmp(directory, nitmodWeaponScriptsDir)) return;
+	Q_strncpyz(nitmodWeaponScriptsDir, directory, sizeof(nitmodWeaponScriptsDir));
+	if(reload) for(weapon = 1; weapon < WP_NUM_WEAPONS; ++weapon)
+		if(BG_WeaponInWolfMP(weapon)) CG_RegisterWeapon(weapon, qtrue);
+}
+
 int NITMOD_CoreConfigToWire(int index) {
 	switch(index) {
 	case CS_MUSIC_QUEUE: return 25;
@@ -868,6 +902,7 @@ static qboolean NITMOD_HasArgumentCount( const char *command, int expected ) {
 }
 
 void NITMOD_ClearConfigStrings( void ) {
+	nitmodWeaponScriptsDir[0] = 0;
 	clientSkillThresholdsReady = qfalse;
 	CG_NitmodObituaryReset();
 	CG_NitmodHudReset();

@@ -10,6 +10,7 @@
 
 void G_NITMOD_ClearConfigStrings( void );
 void G_NITMOD_ResetClient( int clientNum );
+void G_NITMOD_ResetGameplayClient( int clientNum );
 void G_NITMOD_CacheClientAddress( gentity_t *ent, const char *address );
 qboolean NITMOD_ValidateNGuid( const char *nguid, char *reason, int reasonSize );
 void NITMOD_SendChunkedPrint( int clientNum, const char *text );
@@ -29,6 +30,7 @@ void NITMOD_SendWeaponLimitMessage( int clientNum, int reason );
 /* Typed subset of G_UpdateKillingSpree: enemy kills advance the actor's
  * positive streak; every five kills through 30 emits announcement type 1. */
 void NITMOD_UpdateKillSpree( gentity_t *victim, gentity_t *attacker );
+int G_NITMOD_LegacySessionCommand(int clientNum,const char *command);
 void G_NITMOD_ClientCapabilities( int clientNum, int protocolVersion, unsigned int capabilities );
 qboolean G_NITMOD_ClientSupports( int clientNum, unsigned int feature );
 const char *G_NITMOD_ConfigString( int index );

@@ -7,6 +7,7 @@
  * a reused entity slot must be removed before it acquires a new owner. */
 static nitmodEntityArray_t satchels;
 static nitmodEntityArray_t landmines;
+static nitmodEntityArray_t airstrikes;
 
 static void G_NITMOD_ArtilleryHintThink( gentity_t *hint ) {
 	int i;
@@ -120,9 +121,14 @@ void G_NITMOD_FadeSatchels( gentity_t *owner, nitmodEntityRelease_t release ) {
 	G_NITMOD_FadeOwned( &satchels, owner, release, qfalse );
 }
 
+void G_NITMOD_FadeAirstrikes( gentity_t *owner, nitmodEntityRelease_t release ) {
+	G_NITMOD_FadeOwned( &airstrikes, owner, release, qtrue );
+}
+
 void G_NITMOD_ResetEntityLists( void ) {
 	NITMOD_InitEntityArray( &satchels );
 	NITMOD_InitEntityArray( &landmines );
+	NITMOD_InitEntityArray( &airstrikes );
 }
 
 void G_NITMOD_RegisterLandmine( gentity_t *entity ) {
@@ -177,6 +183,22 @@ void G_NITMOD_UnregisterSatchel( gentity_t *entity ) {
 	if( NITMOD_RemoveEntityFromArray( &satchels, entity ) == NITMOD_ENTITY_ARRAY_INVALID ) {
 		G_Error( "Invalid satchel entity array" );
 	}
+}
+
+/* Original airstrike list contains both thrown markers and scheduled bombs.
+ * Register/free bookkeeping prevents a reused entity slot retaining ownership. */
+void G_NITMOD_RegisterAirstrike( gentity_t *entity ) {
+    nitmodEntityArrayResult_t result;
+    if( !entity ) { G_Error( "NULL airstrike entity" ); return; }
+    result = NITMOD_AddEntityToArray( &airstrikes, entity );
+    if( result == NITMOD_ENTITY_ARRAY_FULL ) G_Error( "Entity Array Overflow" );
+    else if( result == NITMOD_ENTITY_ARRAY_INVALID ) G_Error( "Invalid airstrike entity array" );
+}
+
+void G_NITMOD_UnregisterAirstrike( gentity_t *entity ) {
+    if( NITMOD_RemoveEntityFromArray( &airstrikes, entity ) == NITMOD_ENTITY_ARRAY_INVALID ) {
+        G_Error( "Invalid airstrike entity array" );
+    }
 }
 
 gentity_t *G_NITMOD_FindSatchel( const gentity_t *owner ) {

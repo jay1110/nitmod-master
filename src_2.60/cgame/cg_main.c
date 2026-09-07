@@ -1390,6 +1390,7 @@ static void CG_RegisterGraphics( void ) {
 	CG_LoadingString( " - textures" );
 	cgs.media.countryFlags = trap_R_RegisterShaderNoMip("gfx/flags/world_flags");
 	CG_NitmodRegisterPowerupMedia();
+	cgs.media.nitmodMissileCameraOverlay = trap_R_RegisterShaderNoMip("gfx/misc/overlay");
 	cgs.media.nitmodHitRegionShaders[0] = trap_R_RegisterShaderNoMip("gfx/hr/hr");
 	cgs.media.nitmodHitRegionShaders[1] = trap_R_RegisterShaderNoMip("gfx/hr/head");
 	cgs.media.nitmodHitRegionShaders[2] = trap_R_RegisterShaderNoMip("gfx/hr/rarm");
@@ -2797,6 +2798,7 @@ void CG_Init( int serverMessageNum, int serverCommandSequence, int clientNum, qb
 	cg.warmupCount = -1;
 
 	CG_ParseServerinfo();
+	NITMOD_UpdateWeaponScripts(qfalse);
 	CG_ParseWolfinfo();		// NERVE - SMF
 	CG_NitmodMapAutoexec();
 	// RegisterCvars ran before the server protocol was known.
@@ -2932,6 +2934,7 @@ void CG_Init( int serverMessageNum, int serverCommandSequence, int clientNum, qb
 	/* A Nitmod server sends extensions only after this explicit handshake. */
 	NITMOD_AdvertiseCapabilities();
 	NITMOD_BeginOriginalSession();
+	CG_NitmodMigrateAltWeaponBindings();
 
 #ifdef _DEBUG
 	DEBUG_INITPROFILE_EXEC ( "misc" )

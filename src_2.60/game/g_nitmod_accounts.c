@@ -1,4 +1,6 @@
+#include "nitmod_xp_snapshot.h"
 #include "g_local.h"
+#include "g_nitmod_restrictions.h"
 #include "g_nitmod_accounts.h"
 #include "g_nitmod_database.h"
 #include "g_nitmod_config.h"
@@ -100,7 +102,7 @@ static void RestoreXP(int n,const nitmodDatabaseAccount_t *account) {
     if(!NITMOD_XPDecode(account->user.xp,skills)) { G_LogPrintf("[SQLite] Invalid saved XP for client %d\n",n); return; }
     for(i=0;i<7;++i) { g_entities[n].client->sess.skillpoints[i]=skills[i]; total+=skills[i]; }
     g_entities[n].client->sess.startxptotal=(float)total;
-    g_entities[n].client->ps.stats[STAT_XP]=total>2147483647.0?2147483647:total<(-2147483647.0-1)?(-2147483647-1):(int)total;
+    NITMOD_SetSnapshotXP(&g_entities[n].client->ps,NITMOD_XPInteger(total));
     if((G_NITMOD_LegacyCvarInteger("g_XPDecay",0)&3)==1 && age>0)
         G_NITMOD_XPDecay(&g_entities[n],age,qtrue);
     G_CalcRank(g_entities[n].client);
@@ -124,8 +126,8 @@ int G_NITMOD_AccountResetXP(int n) {
     client=g_entities[n].client;
     memset(client->sess.skillpoints,0,sizeof(client->sess.skillpoints));
     memset(client->sess.skill,0,sizeof(client->sess.skill)); client->sess.startxptotal=0;
-    G_CalcRank(client); client->ps.stats[STAT_XP]=0; client->ps.persistant[PERS_SCORE]=0;
-    war=G_NITMOD_LegacyCvarInteger("g_war",0);
+    G_CalcRank(client); NITMOD_SetSnapshotXP(&client->ps,0); client->ps.persistant[PERS_SCORE]=0;
+    war=G_NITMOD_ConfiguredWarMode();
     if(war<1 || war>4) {
         int ammo[MAX_WEAPONS],clip[MAX_WEAPONS];
         memcpy(ammo,client->ps.ammo,sizeof(ammo)); memcpy(clip,client->ps.ammoclip,sizeof(clip));

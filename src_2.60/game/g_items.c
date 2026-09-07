@@ -405,42 +405,21 @@ qboolean AddMagicAmmo(gentity_t *receiver, int numOfClips) {
 
 weapon_t G_GetPrimaryWeaponForClient( gclient_t *client )
 {
+	/* Original ELF 0x71ca0: inventory priority is independent of class/skill.
+	 * Original weapon IDs: 5,29,33,6,30,24,23,22,31,10,3,8. */
+	static const weapon_t priority[] = {
+		WP_PANZERFAUST, WP_MOBILE_MG42, WP_MORTAR, WP_FLAMETHROWER,
+		WP_K43, WP_GARAND, WP_CARBINE, WP_KAR98, WP_FG42,
+		WP_STEN, WP_MP40, WP_THOMPSON
+	};
 	int i;
-	bg_playerclass_t *classInfo;
-
-	if( client->sess.sessionTeam != TEAM_ALLIES && client->sess.sessionTeam != TEAM_AXIS ) {
-		return WP_NONE;
+	if( !client || client->sess.sessionTeam == TEAM_SPECTATOR ) return WP_NONE;
+	for( i = 0; i < (int)(sizeof(priority) / sizeof(priority[0])); ++i ) {
+		if( COM_BitCheck(client->ps.weapons, priority[i]) ) return priority[i];
 	}
-
-	if( client->sess.skill[SK_HEAVY_WEAPONS] < 4 ) {
-		if( COM_BitCheck( client->ps.weapons, WP_THOMPSON ) )
-			return WP_THOMPSON;
-		if( COM_BitCheck( client->ps.weapons, WP_MP40 ) )
-			return WP_MP40;
-	}
-
-	classInfo = &bg_allies_playerclasses[client->sess.playerType];
-	for( i = 0; i < MAX_WEAPS_PER_CLASS; i++) {
-		if( classInfo->classWeapons[i] == WP_MP40 || classInfo->classWeapons[i] == WP_THOMPSON )
-			continue;
-
-		if( COM_BitCheck( client->ps.weapons, classInfo->classWeapons[i] ) ) {
-			return classInfo->classWeapons[i];
-		}
-	}
-
-	classInfo = &bg_axis_playerclasses[client->sess.playerType];
-	for( i = 0; i < MAX_WEAPS_PER_CLASS; i++) {
-		if( classInfo->classWeapons[i] == WP_MP40 || classInfo->classWeapons[i] == WP_THOMPSON )
-			continue;
-
-		if( COM_BitCheck( client->ps.weapons, classInfo->classWeapons[i] ) ) {
-			return classInfo->classWeapons[i];
-		}
-	}
-
 	return WP_NONE;
 }
+
 
 void G_DropWeapon( gentity_t *ent, weapon_t weapon )
 {
@@ -450,7 +429,11 @@ void G_DropWeapon( gentity_t *ent, weapon_t weapon )
 	gitem_t		*item;
 	trace_t		tr;
 
+	/* Original BG_FindItemForWeapon returns NULL immediately for WP_NONE. */
+	if( weapon == WP_NONE ) return;
 	item = BG_FindItemForWeapon( weapon );
+	/* Original G_DropWeapon returns for WP_NONE/no item (ELF 0x72c75). */
+	if(!item) return;
 	VectorCopy( client->ps.viewangles, angles );
 
 	// clamp pitch
@@ -474,6 +457,7 @@ void G_DropWeapon( gentity_t *ent, weapon_t weapon )
 	VectorCopy( tr.endpos, org );
 
 	ent2 = LaunchItem( item, org, velocity, client->ps.clientNum );
+	ent2->s.teamNum = client->sess.sessionTeam; /* Original ELF 0x72f2a..0x72f36. */
 	COM_BitClear( client->ps.weapons, weapon );
 
 	if( weapon == WP_KAR98 ) {
@@ -513,7 +497,7 @@ void G_DropWeapon( gentity_t *ent, weapon_t weapon )
 
 //	ent2->item->quantity = client->ps.ammoclip[BG_FindClipForWeapon(weapon)]; // Gordon: um, modifying an item is not a good idea
 	client->ps.ammoclip[BG_FindClipForWeapon(weapon)] = 0;
-	client->ps.ammo[BG_FindAmmoForWeapon(weapon)] = 0;
+	/* Original 0x72f55..0x72f5f clears only the clip; reserve remains owned. */
 	Bot_Event_RemoveWeapon(client->ps.clientNum, Bot_WeaponGameToBot(weapon));
 }
 
@@ -1254,16 +1238,17 @@ G_BounceItem
 
 ================
 */
-static void G_NITMOD_FlushItem( gentity_t *ent, trace_t *trace ) {
+static void G_NITMOD_FlushItem( gentity_t *ent, trace_t *trace, qboolean orientToGround ) {
 	vec3_t settled;
 	int enabled = G_NITMOD_LegacyCvarInteger("g_flushItems", 1);
 
+	VectorCopy(ent->r.currentAngles, ent->s.angles);
 	VectorCopy(trace->endpos, settled);
-	if( !enabled || !ent->item || trace->plane.normal[2] <= 0.7f ||
+	if( !enabled || !ent->item || !orientToGround || trace->plane.normal[2] <= 0.7f ||
 		(trace->plane.normal[0] == 0.f && trace->plane.normal[1] == 0.f &&
 		 trace->plane.normal[2] == 1.f) ) {
 		settled[2] += 1.f;
-		if( ent->item ) {
+		if( ent->item && orientToGround ) {
 			ent->s.angles[0] = 0.f;
 			ent->s.angles[2] = 0.f;
 		}
@@ -1278,7 +1263,7 @@ static void G_NITMOD_FlushItem( gentity_t *ent, trace_t *trace ) {
 		VectorCopy(trace->plane.normal, axis[2]);
 		ProjectPointOnPlane(axis[0], forward, axis[2]);
 		if( VectorNormalize(axis[0]) == 0.f ) {
-			AngleVectors(ent->s.angles, NULL, axis[0], NULL);
+			AngleVectors(ent->s.angles, NULL, NULL, axis[0]);
 			ProjectPointOnPlane(axis[0], axis[0], axis[2]);
 			VectorNormalize(axis[0]);
 		}
@@ -1298,7 +1283,7 @@ static void G_NITMOD_FlushItem( gentity_t *ent, trace_t *trace ) {
 	SnapVector(settled);
 	G_SetOrigin(ent, settled);
 	ent->s.groundEntityNum = trace->entityNum;
-	if( trace->entityNum != ENTITYNUM_WORLD ) ent->s.eType = ET_ITEM;
+	if( trace->entityNum != ENTITYNUM_WORLD ) ent->s.pos.trType = TR_GRAVITY_PAUSED;
 }
 
 void G_BounceItem( gentity_t *ent, trace_t *trace ) {
@@ -1315,15 +1300,31 @@ void G_BounceItem( gentity_t *ent, trace_t *trace ) {
 	// cut the velocity to keep from bouncing forever
 	VectorScale( ent->s.pos.trDelta, ent->physicsBounce, ent->s.pos.trDelta );
 
-	// check for stop
-	if ( trace->plane.normal[2] > 0 && ent->s.pos.trDelta[2] < 40 ) {
-		G_NITMOD_FlushItem(ent, trace);
+	if(ent->item && ent->item->giTag == WP_KNIFE)
+		G_AddEvent(ent, EV_GRENADE_BOUNCE, BG_FootstepForSurface(trace->surfaceFlags));
+
+	/* Original 0x75270: a knife sticks tip-first into soft surfaces. Keep
+	 * that impact angle instead of flattening the item onto the floor. */
+	if(ent->damage && ent->s.weapon == WP_KNIFE) {
+		VectorNormalize(velocity);
+		if(DotProduct(velocity, trace->plane.normal) <= -.75f &&
+		   (trace->surfaceFlags & (SURF_WOOD|SURF_GRASS|SURF_GRAVEL|SURF_SNOW))) {
+			vectoangles(velocity, ent->r.currentAngles);
+			G_NITMOD_FlushItem(ent, trace, qfalse);
+			return;
+		}
+	}
+	if(trace->plane.normal[2] > 0 && VectorLength(ent->s.pos.trDelta) < 40.f) {
+		G_NITMOD_FlushItem(ent, trace, qtrue);
 		return;
 	}
-
-	VectorAdd( ent->r.currentOrigin, trace->plane.normal, ent->r.currentOrigin);
-	VectorCopy( ent->r.currentOrigin, ent->s.pos.trBase );
+	if(ent->s.apos.trType != TR_STATIONARY) {
+		VectorScale(ent->s.apos.trDelta, ent->physicsBounce, ent->s.apos.trDelta);
+		ent->s.apos.trTime = level.time;
+	}
+	VectorCopy(ent->r.currentOrigin, ent->s.pos.trBase);
 	ent->s.pos.trTime = level.time;
+	VectorAdd(ent->r.currentOrigin, trace->plane.normal, ent->r.currentOrigin);
 }
 
 /*
@@ -1395,11 +1396,23 @@ void G_RunItem( gentity_t *ent ) {
 		}
 	}
 
-    if ( ent->s.pos.trType == TR_STATIONARY || ent->s.pos.trType == TR_GRAVITY_PAUSED) { //----(SA)
-        // check think function
-        G_RunThink( ent );
-        return; 
-    }
+	if(ent->s.pos.trType == TR_GRAVITY_PAUSED) {
+		vec3_t below;
+		VectorCopy(ent->r.currentOrigin, below); below[2] -= 8.f;
+		trap_Trace(&tr, ent->r.currentOrigin, ent->r.mins, ent->r.maxs,
+			below, ent->s.number, ent->clipmask ? ent->clipmask : MASK_SOLID);
+		if(tr.fraction > .5f && !tr.startsolid) {
+			VectorClear(ent->s.pos.trDelta);
+			ent->s.pos.trType = TR_GRAVITY;
+			ent->s.pos.trTime = level.time;
+		}
+		G_RunThink(ent);
+		return;
+	}
+	if(ent->s.pos.trType == TR_STATIONARY) {
+		G_RunThink(ent);
+		return;
+	}
 
     if ( ent->s.pos.trType == TR_LINEAR && ( !ent->clipmask && !ent->r.contents ) ) {
         // check think function
@@ -1410,14 +1423,44 @@ void G_RunItem( gentity_t *ent ) {
 	// get current position
 	BG_EvaluateTrajectory( &ent->s.pos, level.time, origin, qfalse, ent->s.effect2Time );
 
+	/* Original G_RunItem (ELF 0x75730): a thrown knife slows on entering
+	 * water and resumes ordinary gravity in air. Apply each transition once. */
+	if(ent->s.weapon == WP_KNIFE && ent->damage) {
+		trace_t liquid;
+		trap_Trace(&liquid, ent->r.currentOrigin, ent->r.mins, ent->r.maxs,
+			origin, ent->r.ownerNum, MASK_WATER);
+		if(liquid.fraction == 1.f && !liquid.startsolid &&
+		   !(trap_PointContents(ent->r.currentOrigin, -1) & MASK_WATER)) {
+			if(ent->s.pos.trType != TR_GRAVITY) {
+				VectorCopy(origin, ent->s.pos.trBase);
+				ent->s.pos.trType = TR_GRAVITY;
+				ent->s.pos.trTime = level.time;
+			}
+		} else if(ent->s.pos.trType != TR_GRAVITY_FLOAT) {
+			VectorCopy(liquid.endpos, ent->s.pos.trBase);
+			ent->s.pos.trType = TR_GRAVITY_FLOAT;
+			ent->s.pos.trTime = level.time;
+			VectorScale(ent->s.pos.trDelta, .125f, ent->s.pos.trDelta);
+			VectorScale(ent->s.apos.trDelta, .125f, ent->s.apos.trDelta);
+		}
+	}
+
 	// trace a line from the previous position to the current position
 	if ( ent->clipmask ) {
 		mask = ent->clipmask;
 	} else {
 		mask = MASK_SOLID;
 	}
-	trap_Trace( &tr, ent->r.currentOrigin, ent->r.mins, ent->r.maxs, origin, 
-		ent->r.ownerNum, mask );
+	if(ent->damage && ent->parent) {
+		qboolean linked = ent->parent->r.linked;
+		ent->parent->r.linked = qfalse;
+		trap_Trace(&tr, ent->r.currentOrigin, ent->r.mins, ent->r.maxs,
+			origin, ent->s.number, mask);
+		ent->parent->r.linked = linked;
+	} else {
+		trap_Trace(&tr, ent->r.currentOrigin, ent->r.mins, ent->r.maxs,
+			origin, ent->r.ownerNum, mask);
+	}
 
 	if (ent->isProp && ent->takedamage)
 	{
@@ -1450,5 +1493,29 @@ void G_RunItem( gentity_t *ent ) {
 		return;
 	}
 
+	/* Original 0x75ac2..0x75dc0: flying items deal speed-dependent impact
+	 * damage above 300 units/s. The item remains available for pickup. */
+	if(ent->damage && tr.entityNum >= 0 && tr.entityNum < ENTITYNUM_NONE) {
+		gentity_t *hit = &g_entities[tr.entityNum];
+		vec3_t velocity, direction;
+		float speed;
+		int hitTime = level.previousTime + (level.time-level.previousTime)*tr.fraction;
+		BG_EvaluateTrajectoryDelta(&ent->s.pos, hitTime, velocity, qfalse, ent->s.effect2Time);
+		VectorCopy(velocity, direction);
+		VectorNormalize(direction);
+		speed = VectorLength(velocity);
+		if(speed > 300.f && hit->takedamage) {
+			if((g_friendlyFire.integer & 1) || g_gametype.integer == GT_WOLF_DM ||
+			   !ent->parent || !OnSameTeam(ent->parent, hit))
+				G_Damage(hit, ent, ent->parent, direction, tr.endpos,
+					(int)((speed-300.f)/20.f + ent->damage), 0, ent->methodOfDeath);
+			if(hit->client && hit->takedamage) {
+				gentity_t *impact = G_TempEntity(tr.endpos, EV_MISSILE_HIT);
+				impact->s.otherEntityNum = hit->s.number;
+				impact->s.weapon = ent->s.weapon;
+				impact->s.clientNum = ent->r.ownerNum;
+			}
+		}
+	}
 	G_BounceItem( ent, &tr );
 }

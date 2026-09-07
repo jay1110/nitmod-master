@@ -10,9 +10,13 @@
 #include "nitmod_spree.h"
 #include "nitmod_config_store.h"
 #include "nitmod_clamp.h"
+#include "nitmod_lua_events.h"
 
 static nitmodConfigStore_t nitmodConfigStore;
 static unsigned int nitmodClientCapabilities[MAX_CLIENTS];
+/* Original local session latches are independent of native port features. */
+static qboolean nitmodLegacyHandshake[MAX_CLIENTS];
+static qboolean nitmodLegacyStateReady[MAX_CLIENTS];
 static nitmodSimpleConfig_t nitmodSimpleConfig;
 static nitmodGameState_t nitmodGameState;
 static int nitmodMapCycleCount;
@@ -47,17 +51,27 @@ static void NITMOD_SetValidationReason( char *reason, int reasonSize, const char
 void G_NITMOD_ClearConfigStrings( void ) {
 	NITMOD_ClearConfigStore( &nitmodConfigStore );
 	memset( nitmodClientCapabilities, 0, sizeof( nitmodClientCapabilities ) );
+	memset( nitmodLegacyHandshake, 0, sizeof( nitmodLegacyHandshake ) );
+	memset( nitmodLegacyStateReady, 0, sizeof( nitmodLegacyStateReady ) );
 	memset( &nitmodSimpleConfig, 0, sizeof( nitmodSimpleConfig ) );
 	memset( &nitmodGameState, 0, sizeof( nitmodGameState ) );
 	memset( nitmodKillSpree, 0, sizeof( nitmodKillSpree ) );
 	memset( nitmodBestKillSpree, 0, sizeof( nitmodBestKillSpree ) );
 }
 
-void G_NITMOD_ResetClient( int clientNum ) {
-	if ( G_NITMOD_IsValidClient( clientNum ) ) {
-		nitmodClientCapabilities[clientNum] = 0;
-		NITMOD_ResetKillSpree( &nitmodKillSpree[clientNum] );
+/* Gameplay resets happen on ClientBegin/team changes as well as reconnects.
+ * Transport negotiation belongs to the connection and survives those begins. */
+void G_NITMOD_ResetGameplayClient( int clientNum ) {
+	if( G_NITMOD_IsValidClient(clientNum) ) {
+		NITMOD_ResetKillSpree(&nitmodKillSpree[clientNum]);
 		nitmodBestKillSpree[clientNum]=0;
+	}
+}
+void G_NITMOD_ResetClient( int clientNum ) {
+	if( G_NITMOD_IsValidClient(clientNum) ) {
+		nitmodClientCapabilities[clientNum]=0;
+		nitmodLegacyHandshake[clientNum]=nitmodLegacyStateReady[clientNum]=qfalse;
+		G_NITMOD_ResetGameplayClient(clientNum);
 	}
 }
 
@@ -117,50 +131,24 @@ qboolean NITMOD_ValidateNGuid( const char *nguid, char *reason, int reasonSize )
 	return qtrue;
 }
 
-/* Port of Nitmod's large-text delivery path.  The reference split its shared
- * text buffer into server-command-sized print messages.  This typed variant
- * accepts an explicit buffer and also escapes command delimiters. */
+/* The engine's quoted command arguments preserve literal newlines and
+ * backslashes; they do not decode C-style escapes. Keep print payloads literal.
+ * Quotes cannot be escaped in this protocol, so display them as apostrophes. */
 void NITMOD_SendChunkedPrint( int clientNum, const char *text ) {
-	char command[MAX_STRING_CHARS];
-	int used = 0;
-	unsigned char character;
-
-	if( !text || !text[0] ) {
-		return;
-	}
-
-	command[used++] = 'p';
-	command[used++] = 'r';
-	command[used++] = 'i';
-	command[used++] = 'n';
-	command[used++] = 't';
-	command[used++] = ' ';
-	command[used++] = '"';
-
-	while( ( character = (unsigned char)*text++ ) != '\0' ) {
-		if( character == '\n' || character == '\r' || character == '"' || character == '\\' ) {
-			if( used + 2 >= (int)sizeof( command ) - 2 ) {
-				command[used++] = '"';
-				command[used] = '\0';
-				trap_SendServerCommand( clientNum, command );
-				used = 7;
-			}
-			command[used++] = '\\';
-			command[used++] = character == '\n' || character == '\r' ? 'n' : (char)character;
-		} else {
-			if( used + 1 >= (int)sizeof( command ) - 2 ) {
-				command[used++] = '"';
-				command[used] = '\0';
-				trap_SendServerCommand( clientNum, command );
-				used = 7;
-			}
-			command[used++] = (char)character;
-		}
-	}
-
-	command[used++] = '"';
-	command[used] = '\0';
-	trap_SendServerCommand( clientNum, command );
+    char command[MAX_STRING_CHARS];
+    int used = 7;
+    if(!text || !*text) return;
+    memcpy(command, "print \"", 7);
+    while(*text) {
+        if(used >= (int)sizeof(command) - 2) {
+            command[used++] = '"'; command[used] = 0;
+            trap_SendServerCommand(clientNum, command); used = 7;
+        }
+        command[used++] = *text == '"' ? '\'' : *text;
+        ++text;
+    }
+    command[used++] = '"'; command[used] = 0;
+    trap_SendServerCommand(clientNum, command);
 }
 
 /* Typed port of BG_BuildFilePath.  The original appends exactly one slash
@@ -229,15 +217,16 @@ void NITMOD_PlaySoundEvent( gentity_t *source, int soundIndex ) {
 	event->s.eventParm = soundIndex;
 }
 
-/* Typed port of nitmod_Sound_Global: an EV_GLOBAL_SOUND temp entity carries
- * a pre-registered sound index and is broadcast to every connected client. */
+/* Original event 103 plays at each recipient's client, without attenuation.
+ * Use the existing encoded-event envelope to keep eType within eight bits. */
 void nitmod_Sound_Global( int soundIndex ) {
 	gentity_t *event;
 
 	if( soundIndex <= 0 ) {
 		return;
 	}
-	event = G_TempEntity( vec3_origin, EV_GLOBAL_SOUND );
+	event = G_TempEntity( vec3_origin, EV_NITMOD_LUA_FIRST );
+	event->s.event = NITMOD_LuaEventEncode(103);
 	event->s.eventParm = soundIndex;
 	event->r.svFlags |= SVF_BROADCAST;
 }
@@ -343,10 +332,61 @@ qboolean G_NITMOD_ClientSupports( int clientNum, unsigned int feature ) {
 		( nitmodClientCapabilities[clientNum] & feature ) == feature;
 }
 
+/* Only recovered text protocols may use the legacy session. In particular,
+ * this never grants NITMOD_ClientSupports for native-only extensions. */
+static qboolean G_NITMOD_ReceivesOriginalState(int clientNum,unsigned int feature) {
+	if(G_NITMOD_ClientSupports(clientNum,feature)) return qtrue;
+	if(!G_NITMOD_IsValidClient(clientNum) || !g_entities[clientNum].client ||
+	   g_entities[clientNum].client->pers.connected!=CON_CONNECTED ||
+	   (g_entities[clientNum].r.svFlags&SVF_BOT) ||
+	   g_entities[clientNum].client->pers.nitmodDemoClient) return qfalse;
+	if(feature==NITMOD_FEATURE_NCS) return nitmodLegacyHandshake[clientNum];
+	return nitmodLegacyStateReady[clientNum] &&
+		(feature==NITMOD_FEATURE_SIMPLE_CS || feature==NITMOD_FEATURE_CHARGE_TIMES ||
+		 feature==NITMOD_FEATURE_TEAM_SCORES);
+}
+
+/* Original ClientCommand local exchange: imhere -> handshake, followed by
+ * rhs/handshake/getdata. No remote registration or capability attestation. */
+int G_NITMOD_LegacySessionCommand(int clientNum,const char *command) {
+	int i;
+	if(!command || (strcmp(command,"imhere") && strcmp(command,"rhs") &&
+	   strcmp(command,"handshake") && strcmp(command,"getdata"))) return 0;
+	if(!G_NITMOD_IsValidClient(clientNum) || !g_entities[clientNum].client ||
+	   g_entities[clientNum].client->pers.connected!=CON_CONNECTED ||
+	   (g_entities[clientNum].r.svFlags&SVF_BOT) ||
+	   g_entities[clientNum].client->pers.nitmodDemoClient) return 1;
+	if(!strcmp(command,"imhere")) {
+		trap_SendServerCommand(clientNum,"handshake"); return 1;
+	}
+	if(!strcmp(command,"rhs")) { nitmodLegacyHandshake[clientNum]=qfalse; return 1; }
+	if(!strcmp(command,"handshake")) {
+		if(!nitmodLegacyHandshake[clientNum]) {
+			nitmodLegacyHandshake[clientNum]=qtrue;
+			G_NITMOD_SendConfigStrings(clientNum);
+		}
+		return 1;
+	}
+	/* getdata is valid independently of the ncs handshake latch. */
+	nitmodLegacyStateReady[clientNum]=qtrue;
+	if(g_gametype.integer==GT_WOLF_TDM) {
+		for(i=0;i<MAX_CLIENTS;++i) if(nitmodLegacyStateReady[i] &&
+			G_NITMOD_ReceivesOriginalState(i,NITMOD_FEATURE_TEAM_SCORES))
+			trap_SendServerCommand(i,va("z1 %i",G_NITMOD_LegacyCvarInteger("g_TDMScore",500)));
+	}
+	nitmod_SimpleCS(clientNum);
+	nitmod_SendNCS(clientNum);
+	nitmod_SendSkillLevels(clientNum);
+	nitmod_SendChargeTimes(clientNum);
+	nitmod_TeamScores();
+	return 1;
+}
+
 void G_NITMOD_ClientCapabilities( int clientNum, int protocolVersion, unsigned int capabilities ) {
 	if ( !G_NITMOD_IsValidClient( clientNum ) ) {
 		return;
 	}
+	nitmodLegacyHandshake[clientNum] = nitmodLegacyStateReady[clientNum] = qfalse;
 	if ( protocolVersion != NITMOD_PROTOCOL_VERSION ) {
 		G_DPrintf( "Nitmod: client %i uses unsupported protocol %i\n", clientNum, protocolVersion );
 		/* Negotiation failure revokes extensions, not gameplay progress. */
@@ -427,7 +467,7 @@ void G_NITMOD_SetConfigString( int index, const char *value ) {
 	 * behavior: the duplicate is intentional and protects late capability
 	 * negotiation during the same server frame. */
 	for ( clientNum = 0; clientNum < MAX_CLIENTS; clientNum++ ) {
-		if ( G_NITMOD_ClientSupports( clientNum, NITMOD_FEATURE_NCS ) ) {
+		if ( G_NITMOD_ReceivesOriginalState( clientNum, NITMOD_FEATURE_NCS ) ) {
 			G_NITMOD_SendConfigString( clientNum, index, qtrue );
 		}
 	}
@@ -491,7 +531,7 @@ static void G_NITMOD_SendConfigString( int clientNum, int index, qboolean sendEm
 void G_NITMOD_SendConfigStrings( int clientNum ) {
 	int index;
 
-	if ( !G_NITMOD_ClientSupports( clientNum, NITMOD_FEATURE_NCS ) ) {
+	if ( !G_NITMOD_ReceivesOriginalState( clientNum, NITMOD_FEATURE_NCS ) ) {
 		return;
 	}
 
@@ -524,7 +564,7 @@ void nitrox_UpdateConfigstrings( void ) {
 			continue;
 		}
 		for ( clientNum = 0; clientNum < MAX_CLIENTS; clientNum++ ) {
-			if ( G_NITMOD_ClientSupports( clientNum, NITMOD_FEATURE_NCS ) ) {
+			if ( G_NITMOD_ReceivesOriginalState( clientNum, NITMOD_FEATURE_NCS ) ) {
 				G_NITMOD_SendConfigString( clientNum, index, qtrue );
 			}
 		}
@@ -547,7 +587,7 @@ void nitmod_SendChargeTimes( int clientNum ) {
 			int war=G_NITMOD_ConfiguredWarMode();
 			trap_SendServerCommand(i,va("npcc %i",G_NITMOD_LegacyCvarInteger("g_noCharge",0)!=0 || war==1 || war==3));
 		}
-		if( G_NITMOD_ClientSupports( i, NITMOD_FEATURE_CHARGE_TIMES ) ) {
+		if( G_NITMOD_ReceivesOriginalState( i, NITMOD_FEATURE_CHARGE_TIMES ) ) {
 			trap_SendServerCommand( i, va( "ct %i %i %i %i %i %i %i %i %i %i",
 				level.soldierChargeTime[0], level.soldierChargeTime[1],
 				level.medicChargeTime[0], level.medicChargeTime[1],
@@ -682,7 +722,7 @@ void nitmod_SimpleCS( int clientNum ) {
 	int i;
 
 	if ( clientNum >= 0 ) {
-		if ( !G_NITMOD_ClientSupports( clientNum, NITMOD_FEATURE_SIMPLE_CS ) ) {
+		if ( !G_NITMOD_ReceivesOriginalState( clientNum, NITMOD_FEATURE_SIMPLE_CS ) ) {
 			return;
 		}
 		trap_SendServerCommand( clientNum, va( "scs %i %i %i %i %i %i %i %i %i %i %i",
@@ -703,7 +743,7 @@ void nitmod_SendNCS( int clientNum ) {
 	int i;
 
 	if ( clientNum >= 0 ) {
-		if ( !G_NITMOD_ClientSupports( clientNum, NITMOD_FEATURE_SIMPLE_CS ) ) {
+		if ( !G_NITMOD_ReceivesOriginalState( clientNum, NITMOD_FEATURE_SIMPLE_CS ) ) {
 			return;
 		}
 		trap_SendServerCommand( clientNum, va( "# %i %i %i %i %i %i %i %i %i %i %i %i %i %i %.3f %i %i %i %i %i",
@@ -725,7 +765,7 @@ void nitmod_SendNCS( int clientNum ) {
 }
 
 void nitmod_SendTeamScores( int clientNum ) {
-	if ( !G_NITMOD_ClientSupports( clientNum, NITMOD_FEATURE_TEAM_SCORES ) ) {
+	if ( !G_NITMOD_ReceivesOriginalState( clientNum, NITMOD_FEATURE_TEAM_SCORES ) ) {
 		return;
 	}
 	trap_SendServerCommand( clientNum, va( "tsc %i %i",
@@ -741,7 +781,7 @@ void nitmod_SendSkillLevels( int clientNum ) {
 	char info[MAX_INFO_STRING] = "";
 	char value[MAX_CVAR_VALUE_STRING];
 	int skill;
-	if(!G_NITMOD_ClientSupports(clientNum, NITMOD_FEATURE_SIMPLE_CS)) return;
+	if(!G_NITMOD_ReceivesOriginalState(clientNum, NITMOD_FEATURE_SIMPLE_CS)) return;
 	for(skill = 0; skill < SK_NUM_SKILLS; ++skill) {
 		trap_Cvar_VariableStringBuffer(names[skill], value, sizeof(value));
 		Info_SetValueForKey(info, keys[skill], value);

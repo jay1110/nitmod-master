@@ -3,6 +3,8 @@
 //
 #include "g_local.h"
 #include "../../pak/ui/menudef.h"
+#include "g_nitmod_admin.h"
+#include "g_nitmod_legacy_cvars.h"
 
 
 void G_initMatch(void)
@@ -188,9 +190,26 @@ void G_spawnPrintf(int print_type, int print_time, gentity_t *owner)
 
 
 // Records accuracy, damage, and kill/death stats.
+/* Original G_addStats 0x824b4..0x82590: percentage uses weighted hit
+ * counts, grants immunity only through the dedicated privilege, and excludes
+ * bots and deathmatch. A hit at the configured threshold is allowed. */
+static void G_NITMOD_CheckTeamDamage(gentity_t *attacker) {
+	float total=attacker->client->sess.nitmodTotalHits;
+	float percent=total>0 ? attacker->client->sess.nitmodTeamHits/total*100.0f : 0.0f;
+	int restriction=G_NITMOD_LegacyCvarInteger("g_teamDamageRestriction",0);
+	int timeout,n=(int)(attacker-g_entities);
+	if((attacker->r.svFlags&SVF_BOT) || restriction<=0 ||
+	   G_NITMOD_AdminPrivilege(n,"immunity") || g_gametype.integer==GT_WOLF_DM ||
+	   total<G_NITMOD_LegacyCvarInteger("g_minHits",6) || percent<=restriction) return;
+	timeout=G_NITMOD_LegacyCvarInteger("g_autoTempBan",0) ?
+		G_NITMOD_LegacyCvarInteger("g_autoTempBanTime",1800) : 0;
+	trap_DropClient(n,va("Kicked for %d seconds for excessive team damage",timeout),timeout);
+}
+
 void G_addStats(gentity_t *targ, gentity_t *attacker, int dmg_ref, int mod)
 {
 	int dmg, ref;
+	qboolean sameTeam;
 
 
 	// Keep track of only active player-to-player interactions in a real game
@@ -228,14 +247,31 @@ void G_addStats(gentity_t *targ, gentity_t *attacker, int dmg_ref, int mod)
 	if(mod == MOD_TELEFRAG) dmg = 100;
 	else dmg = dmg_ref;
 
+	/* Original weighted hit totals (ELF 0x823ad..0x8242d/0x82698).
+	 * Flame ticks count 0.1, friendly mines 0.5. Ongoing poison damage
+	 * on an already-poisoned enemy does not inflate the total. */
+	sameTeam=OnSameTeam(targ,attacker);
+	if(g_gametype.integer>=GT_WOLF) {
+		float hit=mod==MOD_FLAMETHROWER ? 0.1f : 1.0f;
+		if(sameTeam) {
+			if(!(g_friendlyFire.integer&1) && g_gametype.integer!=GT_WOLF_DM) return;
+			if(mod==MOD_LANDMINE) hit=0.5f;
+			if(mod!=MOD_SYRINGE) {
+				attacker->client->sess.nitmodTeamHits+=hit;
+				attacker->client->sess.nitmodTotalHits+=hit;
+			}
+		} else if(mod!=MOD_POISON || !(targ->client->ps.eFlags&NITMOD_EF_POISONED)) {
+			attacker->client->sess.nitmodTotalHits+=hit;
+		}
+	}
 	// Player team stats
-	if(g_gametype.integer >= GT_WOLF &&
-	  targ->client->sess.sessionTeam == attacker->client->sess.sessionTeam) {
-		attacker->client->sess.team_damage += dmg;
+	if(g_gametype.integer >= GT_WOLF && sameTeam) {
+		if(mod!=MOD_SYRINGE) attacker->client->sess.team_damage += dmg;
 		if(targ->health <= 0) attacker->client->sess.team_kills++;
-#ifndef DEBUG_STATS
+		ref=G_weapStatIndex_MOD(mod);
+		if(dmg>0) attacker->client->sess.aWeaponStats[ref].hits++;
+		G_NITMOD_CheckTeamDamage(attacker);
 		return;
-#endif
 	}
 
 	// General player stats
@@ -256,6 +292,7 @@ void G_addStats(gentity_t *targ, gentity_t *attacker, int dmg_ref, int mod)
 		attacker->client->sess.aWeaponStats[ref].kills++;
 		targ->client->sess.aWeaponStats[ref].deaths++;
 	}
+	if(g_gametype.integer>=GT_WOLF) G_NITMOD_CheckTeamDamage(attacker);
 }
 
 
@@ -426,6 +463,7 @@ void G_deleteStats(int nClient)
 
 	cl->sess.damage_given = 0;
 	cl->sess.damage_received = 0;
+	cl->sess.nitmodTeamHits = cl->sess.nitmodTotalHits = 0.0f;
 	cl->sess.deaths = 0;
 	cl->sess.nitmodNewton = 0;
 	cl->sess.nitmodKillingSpree = 0;

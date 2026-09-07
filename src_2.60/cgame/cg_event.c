@@ -1,6 +1,7 @@
 // cg_event.c -- handle entity events at snapshot or playerstate transitions
 
 #include "cg_local.h"
+#include "../game/nitmod_lua_mod.h"
 #include "../game/nitmod_lua_events.h"
 #include "cg_nitmod_config.h"
 #include "cg_nitmod_hud.h"
@@ -43,7 +44,14 @@ static void CG_Obituary( entityState_t *ent ) {
 	if(mod == MOD_LANDMINE && ent->effect3Time == NITMOD_OBITUARY_POISON_GAS_MINE) mod = MOD_POISON_GAS_MINE;
 	if(mod == MOD_SYRINGE && ent->effect3Time == NITMOD_OBITUARY_POISON) mod = MOD_POISON;
 	if(mod == MOD_FALLING && ent->effect3Time == NITMOD_OBITUARY_SHOVE) mod = MOD_SHOVE;
-	if(NITMOD_UsesOriginalProtocol()) mod = CG_NitmodDeathCause(mod);
+	if(NITMOD_UsesNitmodHud()) {
+		/* Local servers keep ET's MOD enum. The common Nitmod obituary table
+		 * requires the original cause after the native private-marker decode. */
+		entityState_t original = *ent;
+		original.eventParm = NITMOD_LuaMeansOfDeath(mod);
+		CG_NitmodObituary(&original);
+		return;
+	}
 
 	if ( target < 0 || target >= MAX_CLIENTS ) {
 		CG_Error( "CG_Obituary: target out of range" );
@@ -1751,6 +1759,8 @@ static void CG_NitmodDeathEvent(const entityState_t *es, int variant) {
 }
 
 int CG_NitmodEventDispatch(int wireEvent) {
+	/* Original EV_SOUND must retain its identity in the normalized prediction ring. */
+	if(wireEvent == 100) return EV_NITMOD_SOUND;
 	static const int handlers[] = { 0,
 #define X(id, name, handler) handler,
 #include "cg_nitmod_eventmap.h"
@@ -1797,10 +1807,10 @@ static void CG_EntityEventForProtocol( centity_t *cent, vec3_t position, qboolea
         return;
     }
 	wireEvent = event;
-	/* Prediction produces our internal knife event even on original servers.
+	/* Prediction produces our internal knife and sound events on original servers.
 	 * Route that event to its existing handler without interpreting native
 	 * ET events 94..106 as original Nitmod wire events. */
-	if((original || event == EV_NITMOD_THROW_KNIFE) &&
+	if((original || event == EV_NITMOD_THROW_KNIFE || event == EV_NITMOD_ALTWEAPON || event == EV_NITMOD_SOUND) &&
 	   CG_NitmodExtendedEvent(cent, event)) return;
 	if(original && event == 101) {
 		CG_NitmodSpreeStart(es->effect1Time, es->effect2Time, es->effect3Time);
@@ -2212,6 +2222,9 @@ static void CG_EntityEventForProtocol( centity_t *cent, vec3_t position, qboolea
 			(es->weapon != WP_SATCHEL) &&
 			(es->weapon != WP_SATCHEL_DET) &&
 			(es->weapon != WP_TRIPMINE) &&
+			(es->weapon != WP_BOMB) &&
+			(es->weapon != WP_POISON_BOMB) &&
+			(es->weapon != WP_POISON_MINE) &&
 			(es->weapon != WP_SMOKE_BOMB) &&
 			(es->weapon != WP_AMMO) &&
 			(es->weapon != WP_MEDKIT))
@@ -2231,6 +2244,11 @@ static void CG_EntityEventForProtocol( centity_t *cent, vec3_t position, qboolea
 			es->weapon == WP_SATCHEL ||
 			es->weapon == WP_SATCHEL_DET ||
 			es->weapon == WP_TRIPMINE ||
+			/* Original CG_EntityEvent includes wire IDs 48..51 even with
+			 * ammunition left: the throw event must reach the switch helper. */
+			es->weapon == WP_BOMB ||
+			es->weapon == WP_POISON_BOMB ||
+			es->weapon == WP_POISON_MINE ||
 			es->weapon == WP_SMOKE_BOMB ||
 			es->weapon == WP_AMMO ||
 			es->weapon == WP_MEDKIT ) ) {

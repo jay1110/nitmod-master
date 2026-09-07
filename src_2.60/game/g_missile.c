@@ -322,6 +322,7 @@ void G_ExplodeMissile( gentity_t *ent ) {
 	etype = ent->s.eType;
 	G_NITMOD_UnregisterSatchel( ent );
 	G_NITMOD_UnregisterLandmine( ent );
+	G_NITMOD_UnregisterAirstrike( ent );
 	ent->s.eType = ET_GENERAL;
 
 	// splash damage
@@ -464,9 +465,63 @@ void G_ExplodeMissile( gentity_t *ent ) {
 G_MissileDie
 ================
 */
+/* Original G_MissileDownXPAward (ELF 0x8be10). The original jump table
+ * uses Nitmod cause numbers; these named cases retain the native ET ABI. */
+void G_MissileDownXPAward( gentity_t *attacker, int mod ) {
+    skillType_t skill;
+    const char *reason;
+
+    if( !attacker || !attacker->client ) return;
+    switch( mod ) {
+    case MOD_MACHINEGUN:
+    case MOD_BROWNING:
+    case MOD_MG42:
+    case MOD_MOBILE_MG42:
+        skill = SK_HEAVY_WEAPONS;
+        reason = "Heavy weapon missile shot";
+        break;
+    case MOD_LUGER:
+    case MOD_COLT:
+    case MOD_MP40:
+    case MOD_THOMPSON:
+    case MOD_STEN:
+    case MOD_GARAND:
+    case MOD_SILENCER:
+    case MOD_FG42:
+    case MOD_CARBINE:
+    case MOD_KAR98:
+    case MOD_SILENCED_COLT:
+    case MOD_K43:
+    case MOD_AKIMBO_COLT:
+    case MOD_AKIMBO_LUGER:
+    case MOD_AKIMBO_SILENCEDCOLT:
+    case MOD_AKIMBO_SILENCEDLUGER:
+        skill = SK_LIGHT_WEAPONS;
+        reason = "Light weapon missile shot";
+        break;
+    case MOD_FG42SCOPE:
+    case MOD_GARAND_SCOPE:
+    case MOD_K43_SCOPE:
+        skill = SK_MILITARY_INTELLIGENCE_AND_SCOPED_WEAPONS;
+        reason = "Scoped weapon missile shot";
+        break;
+    default:
+        return;
+    }
+    G_AddSkillPoints( attacker, skill, 5.0f );
+    if( g_debugSkills.integer ) {
+        G_DebugAddSkillPoints( attacker, skill, 5.0f, reason );
+    }
+}
+
 void G_MissileDie( gentity_t *self, gentity_t *inflictor, gentity_t *attacker, int damage, int mod ) {
 	if (inflictor == self)
 		return;
+	/* Original G_MissileDie (ELF 0x8b0a0) excludes only the owner,
+	 * not the owner's teammates, from the shoot-down reward. */
+	if( attacker && attacker->client && attacker->s.number != self->r.ownerNum ) {
+		G_MissileDownXPAward( attacker, mod );
+	}
 	self->takedamage	= qfalse;
 	self->think			= G_ExplodeMissile;
 	self->nextthink		= level.time + 10;
@@ -1280,6 +1335,20 @@ void G_FadeItems(gentity_t* ent, int modType) {
 	}
 }
 
+/* Original ClientDisconnect, ELF 0x4f1ee..0x4f228 and 0x4f55d..0x4f5c1. Support fire always
+ * expires with its owner; camera projectiles use the live 1/2/4 option bits. */
+void G_NITMOD_FadeDisconnectProjectiles( gentity_t *owner, int cameraOptions ) {
+    if( !owner ) return;
+    G_NITMOD_FadeAirstrikes( owner, G_FreeEntity );
+    G_FadeItems( owner, MOD_ARTY );
+    if( cameraOptions & 2 ) G_FadeItems( owner, MOD_MORTAR );
+    if( cameraOptions & 1 ) G_FadeItems( owner, MOD_PANZERFAUST );
+    if( cameraOptions & 4 ) {
+        G_FadeItems( owner, MOD_GPG40 );
+        G_FadeItems( owner, MOD_M7 );
+    }
+}
+
 int G_CountTeamLandmines ( team_t team ) {
 	return G_NITMOD_CountTeamLandmines( team, team_maxLandmines.integer );
 }
@@ -1379,46 +1448,57 @@ G_TripMineThink
 ==========
 */
 
+/* Original CheckForSmoke.part.4 used by TripMineThink. */
+static qboolean G_NITMOD_TripmineSmokeBlocks(vec3_t start, vec3_t end) {
+	gentity_t *smoke = NULL;
+	vec3_t center;
+	float radius;
+	if(DistanceSquared(start, end) < 10000.f) return qfalse;
+	while((smoke = G_FindSmokeBomb(smoke)) != NULL) {
+		if(!smoke->inuse || smoke->s.effect1Time == 16) continue;
+		VectorCopy(smoke->s.pos.trBase, center);
+		center[2] += 32.f;
+		radius = ((float)(level.time - smoke->grenadeExplodeTime) / 10000.f) * 320.f;
+		if(radius > 320.f) radius = 320.f;
+		if((double)DistanceFromLineSquared(center, start, end) < (double)radius * radius)
+			return qtrue;
+	}
+	return qfalse;
+}
+
 void G_TripMineThink(gentity_t* ent) {
 	trace_t trace;
 	vec3_t start, end;
-	gentity_t* traceEnt;
-
-	VectorMA(ent->r.currentOrigin, 2, ent->s.origin2, start);
+	gentity_t* hit;
+	ent->s.effect1Time = 2;
+	ent->nextthink = level.time + 100;
+	VectorCopy(ent->r.currentOrigin, start);
 	VectorMA(start, 2048, ent->s.origin2, end);
-
-	trap_Trace(&trace, start, NULL, NULL, end, ent->s.number, MASK_SHOT);
-
-	ent->nextthink = level.time + FRAMETIME;
-
-	if(trace.fraction == 1.f) { // Gordon: shouldnt really happen once we do a proper range check on placing
-/*		ent->nextthink = level.time;
-		ent->think = DynaSink;
-		ent->timestamp = level.time + 1500;*/
+	if(G_NITMOD_TripmineSmokeBlocks(start, end)) return;
+	G_Trace(ent, &trace, start, NULL, NULL, end, ent->s.number, MASK_SHOT);
+	if(trace.entityNum < 0 || trace.entityNum >= ENTITYNUM_WORLD) return;
+	hit = &g_entities[trace.entityNum];
+	if(!hit->client) {
+		/* Original classname hashes 0x1cce6 and 0x3bf8a. */
+		if(!Q_stricmp(hit->classname, "func_door") || !Q_stricmp(hit->classname, "func_door_rotating"))
+			ent->think = G_ExplodeMissile;
 		return;
 	}
-
-	if(trace.entityNum >= ENTITYNUM_NONE) {
-		return;
-	}
-	
-	traceEnt = &g_entities[trace.entityNum];
-
-	if(!Q_stricmp(traceEnt->classname, "player")) {
-		ent->think = G_ExplodeMissile;
-//		return;
-	}
+	/* Original TripMineThink uses friendly-fire bit 0x80, unlike landmines. */
+	if(ent->parent && (g_friendlyFire.integer & 0x80) &&
+	   hit->client->sess.sessionTeam == G_LandmineTeam(ent) &&
+	   hit->s.clientNum != ent->parent->s.clientNum) return;
+	if(!(g_OmniBotFlags.integer & 0x20) && (hit->r.svFlags & SVF_BOT) &&
+	   hit->client->sess.sessionTeam == G_LandmineTeam(ent)) return;
+	ent->think = G_ExplodeMissile;
 }
 
-/*
-==========
-G_TripMinePrime
-==========
-*/
-
 void G_TripMinePrime(gentity_t* ent) {
+	ent->takedamage = qtrue;
+	ent->health = 20;
+	ent->die = G_NITMOD_WeaponDie;
 	ent->think = G_TripMineThink;
-	ent->nextthink = level.time + 500;
+	ent->nextthink = level.time + 5;
 }
 
 void G_NITMOD_RemoveTripmines(gentity_t *owner) {
@@ -1723,6 +1803,7 @@ gentity_t *fire_grenade (gentity_t *self, vec3_t start, vec3_t dir, int grenadeW
 			break;
 // JPW NERVE
 		case WP_SMOKE_MARKER:
+			G_NITMOD_RegisterAirstrike( bolt );
 			G_NITMOD_ConfigureAirstrikeMarkerDamage( bolt, g_damageweapons.integer );
 			bolt->classname				= "grenade";
 			bolt->s.eFlags				= EF_BOUNCE_HALF | EF_BOUNCE;
@@ -1880,7 +1961,7 @@ fire_rocket
 =================
 */
 static int G_NITMOD_MissileThinkDelay(void) {
-	int fps = G_NITMOD_LegacyCvarInteger("sv_fps", 20);
+	int fps = trap_Cvar_VariableIntegerValue("sv_fps");
 	if(fps < 1) fps = 20;
 	return 1000 / fps;
 }

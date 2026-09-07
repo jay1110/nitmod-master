@@ -123,6 +123,8 @@ static animStringItem_t animEventTypesStr[] =
 	{"RELOADPRONE", -1},
 	{"TALK", -1},
 	{"NOPOWER", -1},
+	{"FIREWEAPON3", -1},
+	{"FIREWEAPON3PRONE", -1},
 
 	{NULL, -1},
 };

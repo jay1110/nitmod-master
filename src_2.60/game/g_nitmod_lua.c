@@ -1,3 +1,4 @@
+#include "nitmod_xp_snapshot.h"
 #include "g_nitmod_admin.h"
 #include "g_local.h"
 #include "nitmod_lua_mod.h"
@@ -222,8 +223,7 @@ static int *PersistantFieldSlot(gentity_t *ent,const luaField_t *f,int index) {
 }
 static int *PowerupFieldSlot(gentity_t *ent,const luaField_t *f,int index) {
     if(strcmp(f->name,"ps.powerups")) return NULL;
-    return index>=13?&ent->client->nitmodLuaUnusedPowerups[index-13]:
-        &ent->client->ps.powerups[nitmodPowerupIds[index]];
+    return &ent->client->ps.powerups[nitmodPowerupIds[index]];
 }
 static int *AmmoFieldSlot(gentity_t *ent,const luaField_t *f,int index) {
     int clip=!strcmp(f->name,"ps.ammoclip");
@@ -357,7 +357,7 @@ static int XPSet(lua_State *L) {
     luaL_argcheck(L,xp>=0,2,"negative XP is not allowed");luaL_argcheck(L,skill>=0 && skill<SK_NUM_SKILLS,3,"invalid skill");
     if(add) { client->sess.skillpoints[skill]+=xp; client->sess.startxptotal+=xp; }
     else { client->sess.startxptotal+=xp-client->sess.skillpoints[skill]; client->sess.skillpoints[skill]=xp; }
-    client->ps.stats[STAT_XP]=(int)client->sess.startxptotal;
+    NITMOD_SetSnapshotXP(&client->ps,NITMOD_XPInteger(client->sess.startxptotal));
     G_CalcRank(client); BG_PlayerStateToEntityState(&client->ps,&ent->s,qtrue);
     /* The original binding returns its fourth argument without pushing a value. */
     lua_pushvalue(L,4); return 1;
@@ -447,12 +447,23 @@ void G_NITMOD_LuaSpawn(int client,int revived,int teamChange,int restoreHealth) 
     for(i=0;i<count;++i) Call(states[i],"et_ClientSpawn",4,args);
 }
 void G_NITMOD_LuaStatus(int client) {
-    /* Include every maximum-length name, signature and filename for all VMs. */
-    char text[sizeof(modnames)+sizeof(signatures)+sizeof(filenames)+16*32+128];int i;
-    Com_sprintf(text,sizeof(text),"Lua API: %d modules loaded\nVM Modname Signature Filename Errors\n",count);
-    for(i=0;i<count;++i) Q_strcat(text,sizeof(text),va("%d %s %s %s %u\n",i,modnames[i],signatures[i],filenames[i],vmErrors[i]));
+    /* Original G_LuaStatus (ELF 0x109460): four fixed-width columns. Hook
+     * errors remain in the server log; they are not part of this listing. */
+    static const char separator[] = "-- ------------------------ ---------------------------------------- ------------------------\n";
+    char text[sizeof(modnames)+sizeof(signatures)+sizeof(filenames)+16*96+512];
+    int i;
+    if(!count) Q_strncpyz(text,"Lua API: no scripts loaded.\n",sizeof(text));
+    else {
+        Com_sprintf(text,sizeof(text),"Lua API: showing lua information ( %d %s loaded )\n",count,count==1?"module":"modules");
+        Q_strcat(text,sizeof(text),va("%-2s %-24s %-40s %-24s\n","VM","Modname","Signature","Filename"));
+        Q_strcat(text,sizeof(text),separator);
+        for(i=0;i<count;++i)
+            Q_strcat(text,sizeof(text),va("%2d %-24s %-40s %-24s\n",i,modnames[i],signatures[i],filenames[i]));
+        Q_strcat(text,sizeof(text),separator);
+    }
     if(client<0) G_Printf("%s",text);else NITMOD_SendChunkedPrint(client,text);
 }
+
 void G_NITMOD_LuaPrint(const char *text) {
     static int printing; int i;
     if(printing) return; printing=1;

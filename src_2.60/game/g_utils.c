@@ -592,6 +592,7 @@ void G_FreeEntity( gentity_t *ed ) {
 	/* Remove before callbacks and before the engine can reuse this slot. */
 	G_NITMOD_UnregisterSatchel( ed );
 	G_NITMOD_UnregisterLandmine( ed );
+	G_NITMOD_UnregisterAirstrike( ed );
 
 	if(ed->free) {
 		ed->free( ed );

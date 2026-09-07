@@ -6,6 +6,9 @@ static int browserHumans[MAX_GLOBAL_SERVERS];
 static qboolean browserHumanKnown[MAX_GLOBAL_SERVERS];
 static int browserHumanStarted[MAX_GLOBAL_SERVERS];
 static qboolean browserHumanPending[MAX_GLOBAL_SERVERS];
+/* Retain the requested address: engine indices may belong to another source
+ * or change during a master refresh before its pending request is released. */
+static char browserStatusAddress[MAX_GLOBAL_SERVERS][MAX_ADDRESSLENGTH];
 
 static int UI_ServerGametype( const char *info ) {
 	int gametype;
@@ -146,6 +149,13 @@ UI_BuildServerDisplayList
  * outstanding, 0 that it is absent, and 1 that it is present. */
 static int nitmodNxacStatus[MAX_GLOBAL_SERVERS];
 static int nitmodNxacStatusSource = -1;
+/* Original feeder filter column consumes resolved sv_NxAC, without opening
+ * another request while painting. Unknown/expired source data has no icon. */
+qboolean UI_ServerHasNxac(int server) {
+    return nitmodNxacStatusSource == ui_netSource.integer &&
+        server >= 0 && server < MAX_GLOBAL_SERVERS && nitmodNxacStatus[server] > 0;
+}
+
 /* Original UI_FeederItemText case 2: humans(+bots)/capacity. Rendering must
  * not allocate status requests; consume only this source's resolved cache. */
 void UI_ServerPopulationText(int server, const char *master, char *out, int size) {
@@ -173,8 +183,32 @@ void UI_ServerPopulationText(int server, const char *master, char *out, int size
  * the original total. Favorites and pending replies can revisit an index. */
 static int nitmodBrowserPlayers[MAX_GLOBAL_SERVERS];
 
-/* Original full refresh zeroes the human-count table as well as status data. */
+static void UI_ReleaseBrowserStatus(int server) {
+    if(browserStatusAddress[server][0]) {
+        trap_LAN_ServerStatus(browserStatusAddress[server],NULL,0);
+        browserStatusAddress[server][0]=0;
+    }
+    browserHumanPending[server]=qfalse;
+}
+
+void UI_CancelBrowserStatusRequests(void) {
+    int server;
+    for(server=0;server<MAX_GLOBAL_SERVERS;++server)
+        if(browserHumanPending[server]) UI_ReleaseBrowserStatus(server);
+}
+
+qboolean UI_BrowserStatusPending(void) {
+    int server;
+    for(server=0;server<MAX_GLOBAL_SERVERS;++server)
+        if(browserHumanPending[server]) return qtrue;
+    return qfalse;
+}
+
+/* Original full refresh clears the engine status cache as well as both local
+ * caches. Address-specific release alone leaves old replies cached in ET. */
 static void UI_ResetBrowserStatusCache(int source) {
+    UI_CancelBrowserStatusRequests();
+    trap_LAN_ServerStatus(NULL,NULL,0);
     memset(nitmodNxacStatus,0xff,sizeof(nitmodNxacStatus));
     memset(nitmodBrowserPlayers,0,sizeof(nitmodBrowserPlayers));
     memset(browserHumans,0,sizeof(browserHumans));
@@ -197,6 +231,12 @@ static int UI_NitmodNxacStatus( int serverNum, const char *master ) {
 
 	trap_LAN_GetServerAddressString( ui_netSource.integer, serverNum,
 		address, sizeof( address ) );
+	address[sizeof(address)-1]=0;
+	if(strcmp(address,browserStatusAddress[serverNum])) {
+		if(browserStatusAddress[serverNum][0])
+			trap_LAN_ServerStatus(browserStatusAddress[serverNum],NULL,0);
+		Q_strncpyz(browserStatusAddress[serverNum],address,sizeof(browserStatusAddress[serverNum]));
+	}
 	if( !address[0] || !trap_LAN_ServerStatus( address, status, sizeof( status ) ) ) {
 		return -1;
 	}
@@ -204,9 +244,8 @@ static int UI_NitmodNxacStatus( int serverNum, const char *master ) {
 	nitmodNxacStatus[serverNum] = atoi( Info_ValueForKey( status, "sv_NxAC" ) ) ? 1 : 0;
 	browserHumans[serverNum]=UI_ServerHumanCount(status,master);
 	browserHumanKnown[serverNum]=qtrue;
-	browserHumanPending[serverNum]=qfalse;
 	/* The value is cached locally; release the engine's finite request slot. */
-	trap_LAN_ServerStatus( address, NULL, 0 );
+	UI_ReleaseBrowserStatus(serverNum);
 	return nitmodNxacStatus[serverNum];
 }
 
@@ -259,7 +298,7 @@ void UI_BuildServerDisplayList(qboolean force) {
 	count = trap_LAN_GetServerCount(ui_netSource.integer);
 	if (count < 0 || (ui_netSource.integer == AS_LOCAL && count == 0) ) {
 		// still waiting on a response from the master
-		memset(nitmodBrowserPlayers, 0, sizeof(nitmodBrowserPlayers));
+		UI_ResetBrowserStatusCache(ui_netSource.integer);
 		uiInfo.serverStatus.numDisplayServers = 0;
 		uiInfo.serverStatus.numPlayersOnServers = 0;
 		uiInfo.serverStatus.nextDisplayRefresh = uiInfo.uiDC.realTime > INT_MAX - 500 ?
@@ -268,6 +307,9 @@ void UI_BuildServerDisplayList(qboolean force) {
 		return;
 	}
 	if(count > MAX_GLOBAL_SERVERS) count = MAX_GLOBAL_SERVERS;
+	/* Entries removed while refreshing cannot retain engine request slots. */
+	for(i=count;i<MAX_GLOBAL_SERVERS;++i)
+		if(browserHumanPending[i]) UI_ReleaseBrowserStatus(i);
 
 	if( !uiInfo.serverStatus.numDisplayServers ) {
 		uiInfo.serverStatus.currentServerPreview = 0;
@@ -277,6 +319,7 @@ void UI_BuildServerDisplayList(qboolean force) {
 	for (i = 0; i < count; i++) {
 		// if we already got info for this server
 		if( !trap_LAN_ServerIsVisible(ui_netSource.integer, i) ) {
+			if(browserHumanPending[i]) UI_ReleaseBrowserStatus(i);
 			continue;
 		}
 		visible = qtrue;
@@ -405,22 +448,35 @@ void UI_BuildServerDisplayList(qboolean force) {
 				}
 			}
 
-			/* 0 = all, 1 = NxAC-only, 2 = hide NxAC.  Status is asynchronous;
-			 * keep a pending server visible for the next refresh instead of
-			 * classifying it from incomplete master information. */
+			/* Resolve status before applying either NxAC filter, so every request
+			 * shares the bounded lifetime. Original refresh waits for status work
+			 * independently of pings and eventually drops unanswered requests.
+			 * Retain this port's documented 5-second master-population fallback
+			 * for unfiltered rows; an unknown NxAC status never passes a filter. */
+			if(!browserHumanKnown[i]) {
+				if(!browserHumanPending[i]) {
+					browserHumanPending[i]=qtrue;
+					browserHumanStarted[i]=uiInfo.uiDC.realTime;
+				}
+				if(UI_NitmodNxacStatus(i,info)<0) {
+					double elapsed=(double)uiInfo.uiDC.realTime-browserHumanStarted[i];
+					if(elapsed<0) browserHumanStarted[i]=uiInfo.uiDC.realTime;
+					if(elapsed<5000) {
+						uiInfo.serverStatus.numPlayersOnServers-=clients;
+						nitmodBrowserPlayers[i]=0;
+						continue;
+					}
+					UI_ReleaseBrowserStatus(i);
+					browserHumans[i]=clients;
+					browserHumanKnown[i]=qtrue;
+				}
+			}
 			trap_Cvar_Update( &ui_browserNxAConly );
 			if( ui_browserNitmodonly.integer == 1 &&
 				(ui_browserNxAConly.integer == 1 || ui_browserNxAConly.integer == 2) ) {
-				nxacStatus = UI_NitmodNxacStatus( i, info );
-				if( nxacStatus < 0 ) {
-					/* This server remains visible while its asynchronous status
-					 * request is pending and will be visited again next refresh.
-					 * Undo the early total so clients are not counted repeatedly. */
-					uiInfo.serverStatus.numPlayersOnServers -= clients;
-					nitmodBrowserPlayers[i] = 0;
-					continue;
-				}
-				if( ( ui_browserNxAConly.integer == 1 && !nxacStatus ) ||
+				nxacStatus = nitmodNxacStatus[i];
+				if( nxacStatus < 0 ||
+					( ui_browserNxAConly.integer == 1 && !nxacStatus ) ||
 					( ui_browserNxAConly.integer == 2 && nxacStatus ) ) {
 					trap_LAN_MarkServerVisible( ui_netSource.integer, i, qfalse );
 					continue;
@@ -435,23 +491,6 @@ void UI_BuildServerDisplayList(qboolean force) {
 				}
 			}*/
 
-			/* Resolve the original human-count sort asynchronously. A failed
-			 * status request cannot hide a server forever: after five seconds
-			 * use the bounded master count for this refresh (documented fallback). */
-			if(uiInfo.serverStatus.sortKey==SORT_CLIENTS && !browserHumanKnown[i]) {
-				if(!browserHumanPending[i]) { browserHumanPending[i]=qtrue; browserHumanStarted[i]=uiInfo.uiDC.realTime; }
-				if(UI_NitmodNxacStatus(i,info)<0) {
-					double elapsed=(double)uiInfo.uiDC.realTime-browserHumanStarted[i];
-					if(elapsed<0) browserHumanStarted[i]=uiInfo.uiDC.realTime;
-					if(elapsed<5000) {
-						uiInfo.serverStatus.numPlayersOnServers-=clients; nitmodBrowserPlayers[i]=0; continue;
-					}
-					{ char address[MAX_ADDRESSLENGTH];
-					trap_LAN_GetServerAddressString(ui_netSource.integer,i,address,sizeof(address));
-					if(*address) trap_LAN_ServerStatus(address,NULL,0); }
-					browserHumans[i]=clients; browserHumanKnown[i]=qtrue; browserHumanPending[i]=qfalse;
-				}
-			}
 			// make sure we never add a favorite server twice
 			if (ui_netSource.integer == AS_FAVORITES) {
 				UI_RemoveServerFromDisplayList(i);

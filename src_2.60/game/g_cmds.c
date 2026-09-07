@@ -8,6 +8,7 @@
 #include "g_nitmod_teamcount.h"
 #include "g_nitmod_config.h"
 #include "nitmod_protocol.h"
+#include "nitmod_lua_events.h"
 
 void BotDebug(int clientNum);
 void GetBotAutonomies(int clientNum, int *weapAutonomy, int *moveAutonomy);	
@@ -1631,7 +1632,7 @@ static void G_NITMOD_ExpandChatShortcuts( gentity_t *ent, const char *input,
 	const char *value;
 	int used = 0;
 
-	if( !G_NITMOD_LegacyCvarInteger("g_shortcuts", 1) ) {
+	if( !ent || !ent->client || !G_NITMOD_LegacyCvarInteger("g_shortcuts", 1) ) {
 		Q_strncpyz(output, input, outputSize);
 		return;
 	}
@@ -1640,6 +1641,32 @@ static void G_NITMOD_ExpandChatShortcuts( gentity_t *ent, const char *input,
 		if( input[0] == '[' && input[1] && input[2] == ']' &&
 			(value = G_NITMOD_ShortcutValue(ent, input[1])) != NULL ) {
 			while( *value && used < outputSize - 1 ) output[used++] = *value++;
+			input += 3;
+			continue;
+		}
+		output[used++] = *input++;
+	}
+	output[used] = '\0';
+}
+
+void G_NITMOD_ExpandCommandShortcuts( gentity_t *ent, const char *input,
+	char *output, int outputSize )
+{
+	const char *value;
+	int used = 0;
+
+	if( !ent || !ent->client || !G_NITMOD_LegacyCvarInteger("g_shortcuts", 1) ) {
+		Q_strncpyz(output, input, outputSize);
+		return;
+	}
+
+	while( *input && used < outputSize - 1 ) {
+		if( input[0] == '[' && input[1] && input[2] == ']' &&
+			(value = G_NITMOD_ShortcutValue(ent, input[1])) != NULL ) {
+			while( *value && used < outputSize - 1 ) {
+                char c=*value++;
+                if(c!=';' && c!='\n' && c!='\r' && c!='"' && c!='\\') output[used++]=c;
+            }
 			input += 3;
 			continue;
 		}
@@ -2858,7 +2885,7 @@ static qboolean G_NITMOD_ClassSteal(gentity_t *ent, gentity_t *body) {
 		return qtrue;
 	}
 	body->nextthink = body->timestamp + 20000;
-	body->s.time2 = 1;
+	body->s.time2 = (body->s.time2 & NITMOD_ES_GLOW) | 1;
 	body->activator = ent;
 	BODY_TEAM(body) += 4;
 	ent->client->sess.playerType = BODY_CLASS(body);
@@ -2903,7 +2930,7 @@ qboolean Do_Activate2_f(gentity_t *ent, gentity_t *traceEnt) {
 						BODY_TEAM(traceEnt) += 4;
 						traceEnt->activator = ent;
 
-						traceEnt->s.time2 =	1;
+						traceEnt->s.time2 = (traceEnt->s.time2 & NITMOD_ES_GLOW) | 1;
 
 						// sound effect
 						G_AddEvent( ent, EV_DISGUISE_SOUND, 0 );
@@ -4018,6 +4045,53 @@ static void G_NITMOD_PlayDead_f( gentity_t *ent ) {
 ClientCommand
 =================
 */
+/* Original ClientCommand 0x61a24..0x61aa0 and Nit_AdminChat 0x10cbe0.
+ * SHA256 84a7e7958952f804d65fbe6db6b4758ea0cf6b596b26a514a68de0ba3bd9ef49. */
+static void G_NITMOD_DamageCommand(gentity_t *ent) {
+	float total=ent->client->sess.nitmodTotalHits;
+	float team=ent->client->sess.nitmodTeamHits;
+	float percent=total!=0.0f ? team/total*100.0f : 0.0f;
+	trap_SendServerCommand((int)(ent-g_entities),
+		va("print \"Team Hits: %.2f Total Hits: %.2f Pct: %.2f Limit: %d\n\"",
+		(double)team,(double)total,(double)percent,
+		G_NITMOD_LegacyCvarInteger("g_teamDamageRestriction",0)));
+}
+static void G_NITMOD_AdminChatCommand(gentity_t *ent) {
+	char message[MAX_STRING_CHARS],safe[MAX_STRING_CHARS],name[MAX_NETNAME];
+	int n=(int)(ent-g_entities),i;
+	if(ent->client->pers.nitmodDemoClient) return;
+	if(G_NITMOD_ClientMuted(ent)) {
+		NITMOD_SendChunkedPrint(n,"^1Adminchat Error ^9: You are muted\n");return;
+	}
+	if(!G_NITMOD_AdminPrivilege(n,"adminchat")) {
+		NITMOD_SendChunkedPrint(n,"^1Error ^9: You don't have the permission to use AdminChat\n");return;
+	}
+	Q_strncpyz(message,ConcatArgs(1),sizeof(message));
+	if(trap_Argc()<2 || !*message) {
+		NITMOD_SendChunkedPrint(n,"^9usage: ma [message]\n");return;
+	}
+	/* Original uses Q_CleanStr before lc. Also keep quotes/control bytes from
+	 * breaking the quoted engine command; visible ordinary text is unchanged. */
+	Q_CleanStr(message);
+	G_NITMOD_CleanPrivateMessage(message,safe,sizeof(safe));
+	G_NITMOD_CleanPrivateMessage(ent->client->pers.netname,name,sizeof(name));
+	for(i=0;i<level.numConnectedClients && i<MAX_CLIENTS;++i) {
+		int target=level.sortedClients[i];
+		gentity_t *recipient;
+		if(target<0 || target>=MAX_CLIENTS) continue;
+		recipient=&g_entities[target];
+		if(!recipient->client || (recipient->r.svFlags&SVF_BOT)) continue;
+		/* Original stops at a replay client in this sorted recipient list. */
+		if(recipient->client->pers.nitmodDemoClient) return;
+		if(!G_NITMOD_AdminPrivilege(target,"adminchat")) continue;
+		trap_SendServerCommand(target,va("pop \"^xAdminChat from ^7%s\"",name));
+		trap_SendServerCommand(target,va("chat \"^7%s^1(AdminChat):\" -2",name));
+		trap_SendServerCommand(target,va("lc \"%s\"",safe));
+		G_AddEvent(recipient,NITMOD_LuaEventEncode(98),0);
+	}
+	G_LogPrintf("adminchat: %s: %s\n",ent->client->pers.netname,safe);
+}
+
 void ClientCommand( int clientNum ) {
 	gentity_t *ent;
 	char	cmd[MAX_TOKEN_CHARS];
@@ -4029,12 +4103,19 @@ void ClientCommand( int clientNum ) {
 
 	trap_Argv( 0, cmd, sizeof( cmd ) );
 	if(G_NITMOD_ChecksumCommand(clientNum,cmd)) return;
+	if(G_NITMOD_CvarScanCommand(clientNum,cmd)) return;
+	if(G_NITMOD_LegacySessionCommand(clientNum,cmd)) {
+		if(!strcmp(cmd,"getdata")) G_NITMOD_CvarScanRequest(clientNum);
+		return;
+	}
 	if(G_NITMOD_LuaCommand(clientNum,cmd)) return;
 	if(G_NITMOD_GlobalStatsCommand(clientNum,cmd)) return;
 	if(G_NITMOD_ShoutcasterCommand(clientNum,cmd)) return;
 	if(!Q_stricmp(cmd,"lua_status")) { G_NITMOD_LuaStatus(clientNum); return ; }
 	if(G_NITMOD_AdminCommand(clientNum,cmd)) return;
 	if(G_NITMOD_AccountCommand(clientNum,cmd)) return;
+	if(!strcmp(cmd,"damage")) { G_NITMOD_DamageCommand(ent);return; }
+	if(!strcmp(cmd,"ma")) { G_NITMOD_AdminChatCommand(ent);return; }
 
 	if ( !Q_stricmp( cmd, NITMOD_CAPABILITIES_COMMAND ) ) {
 		char argument[MAX_TOKEN_CHARS];
@@ -4054,6 +4135,7 @@ void ClientCommand( int clientNum ) {
 			return;
 		}
 		G_NITMOD_ClientCapabilities( clientNum, version, capabilities );
+		if(version==NITMOD_PROTOCOL_VERSION) G_NITMOD_CvarScanStart(clientNum);
 		return;
 	}
 
@@ -4082,11 +4164,6 @@ void ClientCommand( int clientNum ) {
 		}
 		return;
 	} else if (Q_stricmp (cmd, "vsay_team") == 0) {
-		if( ent->client->sess.sessionTeam == TEAM_SPECTATOR || ent->client->sess.sessionTeam == TEAM_FREE ) {
-			trap_SendServerCommand( ent-g_entities, "print \"Can't team chat as spectator\n\"\n" );
-			return;
-		}
-
 		if( !G_NITMOD_ClientMuted(ent)) {
 			Cmd_Voice_f (ent, SAY_TEAM, qfalse, qfalse);
 		}
@@ -4238,6 +4315,8 @@ void ClientCommand( int clientNum ) {
 		Cmd_SetViewpos_f( ent );
 	} else if (Q_stricmp (cmd, "setspawnpt") == 0) {
 		Cmd_SetSpawnPoint_f( ent );
+	} else if (!strcmp(cmd,"dropweapon") && G_NITMOD_LegacyCvarInteger("n_allowDropWeapon",0)) {
+		G_DropWeapon(ent,G_GetPrimaryWeaponForClient(ent->client));
 	} else if (Q_stricmp (cmd, "setsniperspot") == 0) {
 		Cmd_SetSniperSpot_f( ent );
 //	} else if (Q_stricmp (cmd, "waypoint") == 0) {
@@ -4251,4 +4330,55 @@ void ClientCommand( int clientNum ) {
 	} else {
 		trap_SendServerCommand( clientNum, va("print \"unknown cmd[lof] %s\n\"", cmd ) );
 	}
+}
+
+/* Original ExecGive, invoked only after command authorization. */
+#include "nitmod_weapon_ids.h"
+#include "nitmod_skills.h"
+void G_NITMOD_ExecGive(gentity_t *ent,const char *name,const char *arg,const char *extra) {
+    static const char *skillCvars[]={"skill_battlesense","skill_engineer","skill_medic","skill_fieldops","skill_lightweapons","skill_soldier","skill_covertops"};
+    int amount=atoi(arg),i,all=!strcmp(name,"all");gitem_t *item;
+    if(!ent || !ent->client) return;
+    if(!Q_stricmpn(name,"skill",5)) {
+        nitmodSkillThresholds_t thresholds;char text[MAX_CVAR_VALUE_STRING];
+        NITMOD_DefaultSkillThresholds(&thresholds);
+        for(i=0;i<SK_NUM_SKILLS;++i) if(!*arg || amount==i) {
+            int current=ent->client->sess.skill[i];float points=20,reportedPoints;
+            trap_Cvar_VariableStringBuffer(skillCvars[i],text,sizeof(text));
+            NITMOD_ParseSkillThresholdRow(text,thresholds.threshold[i]);
+            if(current>=0 && current<5) points=roundf(thresholds.threshold[i][current+1]-ent->client->sess.skillpoints[i]);
+            reportedPoints=points;
+            if(*arg && *extra) points=atoi(extra);
+            G_AddSkillPoints(ent,i,points);
+            if(g_debugSkills.integer) G_DebugAddSkillPoints(ent,i,reportedPoints,"give skill");
+        }
+        return;
+    }
+    if(!Q_stricmpn(name,"medal",5)) {
+        for(i=0;i<SK_NUM_SKILLS;++i) if(!ent->client->sess.medals[i]) ent->client->sess.medals[i]=1;
+        ClientUserinfoChanged(ent-g_entities);return;
+    }
+    if(all || !Q_stricmpn(name,"health",6)) {
+        if((ent->client->ps.pm_flags & PMF_LIMBO) || ent->health<=0) return;
+        ent->health=amount?(int)((unsigned int)ent->health+(unsigned int)amount):ent->client->ps.stats[STAT_MAX_HEALTH];
+        if(!all) return;
+    }
+    if(all || !strcmp(name,"weapons")) {
+        for(i=0;i<52;++i) { int weapon=NITMOD_NativeWeaponId(i);if(BG_WeaponInWolfMP(weapon)) COM_BitSet(ent->client->ps.weapons,weapon); }
+        if(!all) return;
+    }
+    if(all || !Q_stricmpn(name,"ammo",4)) {
+        if(amount) { i=ent->client->ps.weapon;if(i && i!=WP_SATCHEL && i!=WP_SATCHEL_DET) Add_Ammo(ent,i,amount,qtrue); }
+        else for(i=1;i<52;++i) { int weapon=NITMOD_NativeWeaponId(i);if(i!=26 && i!=27 && COM_BitCheck(ent->client->ps.weapons,weapon)) Add_Ammo(ent,weapon,9999,qtrue); }
+        if(!all) return;
+    }
+    if(!Q_stricmpn(name,"allammo",7) && amount) {
+        for(i=1;i<52;++i) Add_Ammo(ent,NITMOD_NativeWeaponId(i),amount,qtrue);
+        if(!all) return;
+    }
+    if(all || !strcmp(name,"keys")) { ent->client->ps.stats[STAT_KEYS]=0x1fffe;if(!all) return; }
+    if(all || !strcmp(name,"charge")) ent->client->ps.classWeaponTime=(int)0xfff0bdc1u;
+    if(all) return;
+    item=BG_FindItem(name);if(!item) item=BG_FindItemForClassName(name);
+    if(item) Drop_Item(ent,item,0,qfalse);
 }

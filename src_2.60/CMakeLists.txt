@@ -164,7 +164,7 @@ if(NITMOD_BUILD_QAGAME)
         game/g_nitmod_weapon_config.c game/g_nitmod_legacy_cvars.c game/g_nitmod_banners.c game/g_nitmod_omnibot.c game/g_nitmod_weapon_adapter.c game/g_nitmod_class_command.c game/g_nitmod_campaign_vote.c game/g_nitmod_team_vote.c game/g_nitmod_mapvote.c game/g_nitmod_surrender.c
         game/g_nitmod_etbot_interface.cpp omnibot/common/BotLoadLibrary.cpp
         game/g_nitmod_loadout.c game/g_nitmod_pickup.c game/nitmod_weapon_definition.c game/g_nitmod_canister.c game/g_nitmod_poison.c
-        game/g_nitmod_integrity.c game/g_nitmod_weapon_definition.c game/g_nitmod_weapon_registry.c
+        game/g_nitmod_integrity.c game/g_nitmod_cvarscan.c game/g_nitmod_weapon_definition.c game/g_nitmod_weapon_registry.c
         game/nitmod_weapon_paths.c game/nitmod_weapon_recoil.c game/nitmod_weapon_defaults.c
         game/nitmod_weapon_consumption.c game/nitmod_weapon_akimbo.c game/nitmod_weapon_clip.c game/nitmod_weapon_inventory.c game/nitmod_weapon_reload.c)
     nitmod_module(qagame qagame GAMEDLL ${NITMOD_QAGAME_SRC} ${NITMOD_BOTAI_SRC})
@@ -199,6 +199,11 @@ if(BUILD_TESTING)
             "${CMAKE_CURRENT_SOURCE_DIR}/../pak")
         add_test(NAME nitmod_lua_global_awards COMMAND nitmod_original_charge_dispatch_test --lua-awards)
         add_test(NAME nitmod_lua_obituary COMMAND nitmod_original_charge_dispatch_test --lua-obituary)
+        add_test(NAME nitmod_vsay_runtime COMMAND nitmod_original_charge_dispatch_test --vsay-runtime)
+        add_test(NAME nitmod_custom_sound_runtime COMMAND nitmod_original_charge_dispatch_test --custom-sound-runtime)
+        add_test(NAME nitmod_missile_camera_runtime COMMAND nitmod_original_charge_dispatch_test --missile-camera-runtime)
+        add_test(NAME nitmod_crosshair_catalog_runtime COMMAND nitmod_original_charge_dispatch_test --crosshair-catalog-runtime)
+        add_test(NAME nitmod_maprestart_session COMMAND nitmod_original_charge_dispatch_test --maprestart-session)
     endif()
     if(TARGET ui AND NOT CMAKE_CROSSCOMPILING)
         get_target_property(nitmod_ui_test_sources ui SOURCES)
@@ -321,6 +326,13 @@ if(BUILD_TESTING)
             target_link_libraries(nitmod_integrity_test PRIVATE m)
         endif()
         add_test(NAME nitmod_integrity COMMAND nitmod_integrity_test)
+        add_executable(nitmod_cvarscan_test ../tests/test_nitmod_cvarscan.c
+            game/g_nitmod_cvarscan.c game/q_shared.c game/q_math.c)
+        target_include_directories(nitmod_cvarscan_test PRIVATE game)
+        if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+            target_link_libraries(nitmod_cvarscan_test PRIVATE m)
+        endif()
+        add_test(NAME nitmod_cvarscan COMMAND nitmod_cvarscan_test)
         add_executable(nitmod_database_test ../tests/test_nitmod_database.c
             game/nitmod_database.c game/g_nitmod_database.c sqlite/sqlite3.c game/q_shared.c game/q_math.c)
         target_include_directories(nitmod_database_test PRIVATE game)
@@ -718,4 +730,20 @@ if(BUILD_TESTING)
             COMMAND ${Python3_EXECUTABLE} -B
                 "${CMAKE_CURRENT_SOURCE_DIR}/../tests/test_wasm_layout_audit.py")
     endif()
+endif()
+
+# Verification calls and checks must execute in Release builds as well.
+# Keep the shipped module compilation flags unchanged.
+if(BUILD_TESTING)
+    get_property(nitmod_verification_targets DIRECTORY PROPERTY BUILDSYSTEM_TARGETS)
+    foreach(nitmod_verification_target IN LISTS nitmod_verification_targets)
+        get_target_property(nitmod_verification_type ${nitmod_verification_target} TYPE)
+        if(nitmod_verification_type STREQUAL "EXECUTABLE")
+            if(MSVC)
+                target_compile_options(${nitmod_verification_target} PRIVATE /UNDEBUG)
+            else()
+                target_compile_options(${nitmod_verification_target} PRIVATE -UNDEBUG)
+            endif()
+        endif()
+    endforeach()
 endif()

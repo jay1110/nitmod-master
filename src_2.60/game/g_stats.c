@@ -1,5 +1,7 @@
+#include "nitmod_xp_snapshot.h"
 #include "g_nitmod_lua.h"
 #include "g_local.h"
+#include "g_nitmod_restrictions.h"
 #include "nitmod_skills.h"
 #include "g_nitmod_legacy_cvars.h"
 #include "g_nitmod_abilities.h"
@@ -165,7 +167,7 @@ static void G_UpgradeSkill( gentity_t *ent, skillType_t skill ) {
 		G_NITMOD_FirstAidUnlocks(ent->client),
 		(unsigned int)G_NITMOD_LegacyCvarInteger("g_adrenClasses", 2),
 		(unsigned int)G_NITMOD_LegacyCvarInteger("g_adrenaline", 0),
-		G_NITMOD_LegacyCvarInteger("g_war", 0)) ) return;
+		G_NITMOD_ConfiguredWarMode()) ) return;
 	if( skill == SK_EXPLOSIVES_AND_CONSTRUCTION &&
 		ent->client->sess.playerType == PC_ENGINEER &&
 		(ent->client->sess.nitmodSkillMasks[skill] & 16u) ) {
@@ -251,12 +253,12 @@ void G_AddSkillPoints( gentity_t *ent, skillType_t skill, float points ) {
 		/* Original G_ResetXP recalculates all seven skills (and Lua hooks).
 		 * Team XP already includes this award; team score and medals survive. */
 		G_CalcRank(ent->client);
-		ent->client->ps.stats[STAT_XP] = 0;
+		NITMOD_SetSnapshotXP(&ent->client->ps,0);
 		ent->client->ps.persistant[PERS_SCORE] = 0;
 		/* G_ResetXP.part.1 clears the first weapon word outside war 1..4.
 		 * Its SetWolfSpawnWeapons(client, 1) only refreshes class/team metadata;
 		 * it does not grant a loadout or alter ammunition and charge time. */
-		if( (unsigned int)G_NITMOD_LegacyCvarInteger("g_war", 0) - 1u > 3u ) {
+		if( (unsigned int)G_NITMOD_ConfiguredWarMode() - 1u > 3u ) {
 			ent->client->ps.weapons[0] = 0;
 			ent->client->ps.stats[STAT_PLAYER_CLASS] = ent->client->sess.playerType;
 			ent->client->ps.teamNum = ent->client->sess.sessionTeam;

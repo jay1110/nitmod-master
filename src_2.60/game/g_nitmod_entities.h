@@ -6,6 +6,8 @@ void G_NITMOD_ResetEntityLists( void );
 void G_NITMOD_RegisterSatchel( struct gentity_s *entity );
 void G_NITMOD_UnregisterSatchel( struct gentity_s *entity );
 void G_NITMOD_RegisterLandmine( struct gentity_s *entity );
+void G_NITMOD_RegisterAirstrike( struct gentity_s *entity );
+void G_NITMOD_UnregisterAirstrike( struct gentity_s *entity );
 void G_NITMOD_UnregisterLandmine( struct gentity_s *entity );
 int G_NITMOD_CountTeamLandmines( int team, int maximum );
 /* Release callback handles engine/map bookkeeping after ownership is cleared.
@@ -18,6 +20,7 @@ void G_NITMOD_FadeLandmines( struct gentity_s *owner, nitmodEntityRelease_t rele
 /* Engine release adapter; mine must be NULL or a slot in g_entities. */
 void NITMOD_FreeFadedLandmine( struct gentity_s *mine );
 void G_NITMOD_FadeSatchels( struct gentity_s *owner, nitmodEntityRelease_t release );
+void G_NITMOD_FadeAirstrikes( struct gentity_s *owner, nitmodEntityRelease_t release );
 struct gentity_s *G_NITMOD_FindSatchel( const struct gentity_s *owner );
 /* Team-only proximity marker that follows one artillery salvo. */
 void G_NITMOD_SpawnArtilleryHint( struct gentity_s *shell );

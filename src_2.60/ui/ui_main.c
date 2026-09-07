@@ -84,7 +84,7 @@ static int uitogamecode[] = {4,6,2,3,1,5,7};
 // NERVE - SMF - enabled for multiplayer
 static void UI_StartServerRefresh(qboolean full);
 static void UI_StopServerRefresh( void );
-static void UI_DoServerRefresh( void );
+void UI_DoServerRefresh( void );
 void UI_FeederSelection(float feederID, int index);
 qboolean UI_FeederSelectionClick( itemDef_t *item );
 void UI_BuildServerDisplayList(qboolean force);
@@ -1542,6 +1542,18 @@ qboolean UI_SelectedNetGameType(int *game) {
 	return UI_GameTypeForCatalogRow(ui_netGameType.integer, game);
 }
 
+/* Original map feeders 1 and 4 share the network filter, including the
+ * complete 32-bit arena type mask. Hosting/previews still validate supported
+ * game enums through UI_SelectedNetGameType. Resolve custom catalog rows
+ * before choosing either the map or campaign array. */
+static qboolean UI_MapListGameType(int *game) {
+    int row=ui_netGameType.integer;
+    if(!game || uiInfo.numGameTypes<=0 || uiInfo.numGameTypes>MAX_GAMETYPES ||
+       row<0 || row>=uiInfo.numGameTypes) return qfalse;
+    *game=uiInfo.gameTypes[row].gtEnum;
+    return *game>=0 && *game<32;
+}
+
 /* Resolve before touching either catalog; empty catalogs have no row zero. */
 static qboolean UI_MapPreviewSelection(qboolean net, int *map, int *game) {
 	int count;
@@ -2426,7 +2438,7 @@ static void UI_DrawRedBlue(rectDef_t *rect, float scale, vec4_t color, int textS
   Text_Paint(rect->x, rect->y, scale, color, (uiInfo.redBlue == 0) ? "Red" : "Blue", 0, 0, textStyle);
 }
 
-static void UI_DrawCrosshair(rectDef_t *rect, float scale, vec4_t color)
+void UI_DrawCrosshair(rectDef_t *rect, float scale, vec4_t color)
 {
 	float size = cg_crosshairSize.integer;
 
@@ -2468,6 +2480,29 @@ static void UI_SyncRosterRows(void) {
 			if(index >= 0 && index < list->startPos) list->startPos = index;
 		}
 	}
+}
+
+/* Shared menu code requests the ET 2.60 logical config slots. Cgame already
+ * translates its display context; the UI has its own raw engine connection.
+ * Original Item_SettingShow reads slot 29 (ELF 0x3211f), while reconstructed
+ * Nitmod advertises nitmod_csLayout=et260 and uses the native slot 32. */
+int UI_GetConfigString(int index, char *buffer, int size) {
+	int wire=index, result;
+	char info[MAX_INFO_STRING];
+	if(!buffer || size<1) return 0;
+	buffer[0]=0;
+	if(index==CS_SERVERTOGGLES) {
+		info[0]=0;
+		if(trap_GetConfigString(CS_SERVERINFO,info,sizeof(info))) {
+			info[sizeof(info)-1]=0;
+			if(!Q_stricmp(Info_ValueForKey(info,"gamename"),"nitmod") &&
+				Q_stricmp(Info_ValueForKey(info,"nitmod_csLayout"),"et260")) wire=29;
+		}
+	}
+	result=trap_GetConfigString(wire,buffer,size);
+	if(!result) buffer[0]=0;
+	else buffer[size-1]=0;
+	return result;
 }
 
 static void UI_BuildPlayerList() {
@@ -3343,7 +3378,7 @@ static qboolean UI_RedBlue_HandleKey(int flags, float *special, int key) {
 	return qfalse;
 }
 
-static qboolean UI_Crosshair_HandleKey(int flags, float *special, int key) {
+qboolean UI_Crosshair_HandleKey(int flags, float *special, int key) {
   if (key == K_MOUSE1 || key == K_MOUSE2 || key == K_ENTER || key == K_KP_ENTER) {
 		if (key == K_MOUSE2) {
 			uiInfo.currentCrosshair--;
@@ -4123,6 +4158,7 @@ void UI_RunMenuScript(char **args) {
 				uiInfo.nextServerStatusRefresh = 0;
 				uiInfo.nextFindPlayerRefresh = 0;
 				UI_BuildServerDisplayList(qtrue);
+				UI_CancelBrowserStatusRequests();
 			} else {
 				Menus_CloseByName( "joinserver" );
 				Menus_OpenByName( "main" );
@@ -4733,7 +4769,7 @@ static int UI_MapCountByGameType(qboolean singlePlayer) {
 		if(uiInfo.numGameTypes <= 0 || uiInfo.numGameTypes > MAX_GAMETYPES ||
 		   ui_gameType.integer < 0 || ui_gameType.integer >= uiInfo.numGameTypes) return 0;
 		game = uiInfo.gameTypes[ui_gameType.integer].gtEnum;
-	} else if(!UI_SelectedNetGameType(&game)) return 0;
+	} else if(!UI_MapListGameType(&game)) return 0;
 	if(game<0 || game>=32) return 0;
 
 	if( game == GT_WOLF_CAMPAIGN ) {
@@ -4883,7 +4919,7 @@ int UI_FeederCount(float feederID) {
 	} else if (feederID == FEEDER_SAVEGAMES) {
 		return UI_ListCount(uiInfo.savegameCount, MAX_SAVEGAMES);
 	} else if (feederID == FEEDER_MAPS || feederID == FEEDER_ALLMAPS) {
-		return UI_MapCountByGameType(feederID == FEEDER_MAPS ? qtrue : qfalse);
+		return UI_MapCountByGameType(qfalse);
 	} else if (feederID == FEEDER_CAMPAIGNS || feederID == FEEDER_ALLCAMPAIGNS) {
 		return UI_CampaignCount(feederID == FEEDER_CAMPAIGNS ? qtrue : qfalse);
 	} else if( feederID == FEEDER_GLINFO ) {
@@ -4923,8 +4959,7 @@ static const char *UI_SelectedMap(qboolean singlePlayer, int index, int *actual)
 	if(index < 0) return "";
 	if(singlePlayer && (ui_gameType.integer < 0 || ui_gameType.integer >= uiInfo.numGameTypes ||
 	   ui_gameType.integer >= (int)(sizeof(uiInfo.gameTypes) / sizeof(uiInfo.gameTypes[0])))) return "";
-	if(singlePlayer) game = uiInfo.gameTypes[ui_gameType.integer].gtEnum;
-	else if(!UI_SelectedNetGameType(&game)) return "";
+	if(!UI_MapListGameType(&game)) return "";
 	if(game<0 || game>=32) return "";
 	
 	if( game == GT_WOLF_CAMPAIGN ) {
@@ -5144,7 +5179,7 @@ const char *UI_FeederItemText( float feederID, int index, int column, qhandle_t 
 						*numhandles = 0;
 						return "";
 					} else {
-						*numhandles = 7;
+						*numhandles = 8;
 						needpass = atoi( Info_ValueForKey( info, "needpass" ) );
 						friendlyfire = atoi( Info_ValueForKey( info, "friendlyFire" ) );
 						maxlives = atoi( Info_ValueForKey( info, "maxlives" ) );
@@ -5154,12 +5189,13 @@ const char *UI_FeederItemText( float feederID, int index, int column, qhandle_t 
 						balancedteams = atoi( Info_ValueForKey( info, "balancedteams" ) );
 
 						if( needpass ) handles[0] = uiInfo.passwordFilter; else handles[0] = -1;
-						if( friendlyfire ) handles[1] = uiInfo.friendlyFireFilter; else handles[1] = -1;
+						if( friendlyfire & 1 ) handles[1] = uiInfo.friendlyFireFilter; else handles[1] = -1;
 						if( maxlives ) handles[2] = uiInfo.maxLivesFilter; else handles[2] = -1;
 						if( punkbuster ) handles[3] = uiInfo.punkBusterFilter; else handles[3] = -1;
 						if( weaponrestrictions < 100 ) handles[4] = uiInfo.weaponRestrictionsFilter; else handles[4] = -1;
 						if( antilag ) handles[5] = uiInfo.antiLagFilter; else handles[5] = -1;
 						if( balancedteams ) handles[6] = uiInfo.teamBalanceFilter; else handles[6] = -1;
+						handles[7] = UI_ServerHasNxac(uiInfo.serverStatus.displayServers[index]) ? uiInfo.nxacFilter : -1;
 
 						return "";
 					}
@@ -5258,8 +5294,7 @@ static qhandle_t UI_FeederItemImage(float feederID, int index) {
 		UI_SelectedMap(feederID == FEEDER_MAPS ? qtrue : qfalse, index, &actual);
 		index = actual;
 		if(actual < 0) return 0;
-		if(feederID == FEEDER_MAPS) game = uiInfo.gameTypes[ui_gameType.integer].gtEnum;
-		else if(!UI_SelectedNetGameType(&game)) return 0;
+		if(!UI_MapListGameType(&game)) return 0;
 		if( game == GT_WOLF_CAMPAIGN ) {
 			if (index >= 0 && index < uiInfo.campaignCount) {
 				if (uiInfo.campaignList[index].campaignShot == -1) {
@@ -6163,7 +6198,7 @@ void _UI_Init( qboolean inGameLoad ) {
 	uiInfo.uiDC.add2dPolys = &trap_R_Add2dPolys;
 	uiInfo.uiDC.updateScreen = &trap_UpdateScreen;
 	uiInfo.uiDC.getHunkData = &trap_GetHunkData;
-	uiInfo.uiDC.getConfigString = &trap_GetConfigString;
+	uiInfo.uiDC.getConfigString = &UI_GetConfigString;
 
 
 
@@ -6182,6 +6217,7 @@ void _UI_Init( qboolean inGameLoad ) {
 	uiInfo.weaponRestrictionsFilter = trap_R_RegisterShaderNoMip( "ui/assets/filter_weap.tga" );
 	uiInfo.antiLagFilter = trap_R_RegisterShaderNoMip( "ui/assets/filter_antilag.tga" );
 	uiInfo.teamBalanceFilter = trap_R_RegisterShaderNoMip( "ui/assets/filter_balance.tga" );
+	uiInfo.nxacFilter = trap_R_RegisterShaderNoMip( "ui/assets/filter_nxac_loading.tga" );
 
 	uiInfo.campaignMap = trap_R_RegisterShaderNoMip( "gfx/loading/camp_map.tga" );
 
@@ -7329,6 +7365,7 @@ static void UI_StopServerRefresh( void )
 {
 	int count;
 
+	UI_CancelBrowserStatusRequests();
 	if (!uiInfo.serverStatus.refreshActive) {
 		// not currently refreshing
 		return;
@@ -7351,12 +7388,15 @@ static void UI_StopServerRefresh( void )
 UI_DoServerRefresh
 =================
 */
-static void UI_DoServerRefresh( void )
+void UI_DoServerRefresh( void )
 {
 	qboolean wait = qfalse;
 
 	if (!uiInfo.serverStatus.refreshActive) {
-		return;
+		/* Filtering, sorting or switching to cached sources can start status
+		 * work without a new ping refresh. Keep those requests progressing. */
+		if(!UI_BrowserStatusPending()) return;
+		uiInfo.serverStatus.refreshActive=qtrue;
 	}
 	if (ui_netSource.integer != AS_FAVORITES) {
 		if (ui_netSource.integer == AS_LOCAL) {
@@ -7376,17 +7416,23 @@ static void UI_DoServerRefresh( void )
 		}
 	}
 
-	// if still trying to retrieve pings
+	// Ping completion does not imply that asynchronous status replies arrived.
 	if (trap_LAN_UpdateVisiblePings(ui_netSource.integer)) {
-		uiInfo.serverStatus.refreshtime = uiInfo.uiDC.realTime + 1000;
+		UI_BuildServerDisplayList(qfalse);
+		uiInfo.serverStatus.refreshtime = uiInfo.uiDC.realTime > INT_MAX-1000 ?
+			INT_MAX : uiInfo.uiDC.realTime + 1000;
 	} else if (!wait) {
-		// get the last servers in the list
 		UI_BuildServerDisplayList(2);
-		// stop the refresh
-		UI_StopServerRefresh();
+		if(UI_BrowserStatusPending()) {
+			/* Original _UI_Refresh keeps pending status work alive (+50 ms). */
+			uiInfo.serverStatus.refreshtime = uiInfo.uiDC.realTime > INT_MAX-50 ?
+				INT_MAX : uiInfo.uiDC.realTime + 50;
+		} else {
+			UI_StopServerRefresh();
+		}
+	} else {
+		UI_BuildServerDisplayList(qfalse);
 	}
-	//
-	UI_BuildServerDisplayList(qfalse);
 }
 
 /*

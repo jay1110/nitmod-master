@@ -1203,7 +1203,7 @@ void G_CheckForCursorHints( gentity_t *ent ) {
 					{
 						hintDist	= CH_BREAKABLE_DIST;
 						hintType	= HINT_DISARM;
-						hintVal		= checkEnt->health;		// also send health to client for visualization
+						hintVal		= checkEnt->s.weapon == WP_TRIPMINE ? checkEnt->nitmodMineProgress : checkEnt->health;
 						if ( hintVal > 255 )
 							hintVal = 255;
 					}
@@ -1832,8 +1832,9 @@ void G_InitGame( int levelTime, int randomSeed, int restart ) {
 	G_NITMOD_ResetPickupDefinitions();
 	G_NITMOD_LoadMapWeaponDefinitions();
 	G_NITMOD_LoadChecksums();
+	G_NITMOD_LoadCvarList();
 	G_NITMOD_LoadDatabase();
-	if(NITMOD_DBUserCount()>=0) G_NITMOD_LoadAdminLevels();
+	if(NITMOD_DBUserCount()>=0) { G_NITMOD_LoadAdminLevels(); G_NITMOD_LoadAdminCommands(); }
 	/* Seed the capability handshake with registered cvars; a client may
 	 * negotiate before the first G_RunFrame refresh. */
 	nitmod_RefreshBaseSettings();
@@ -2141,6 +2142,7 @@ void G_ShutdownGame( int restart ) {
 	G_NITMOD_GlobalStatsShutdown();
 	G_NITMOD_GeoIPClose();
 	G_NITMOD_ClearChecksums();
+	G_NITMOD_ClearCvarList();
 	G_NITMOD_AccountsSaveAllXP();
 	G_NITMOD_DatabaseShutdown();
 

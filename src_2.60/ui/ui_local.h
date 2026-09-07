@@ -15,6 +15,7 @@ qboolean UI_NitmodFoundPlayerAddress(char *out, int size);
 qboolean UI_NitmodPlayerSelectionValid(void);
 qboolean UI_NitmodTeamSelection(int *selection);
 void UI_NitmodRefreshPlayers(void);
+int UI_GetConfigString(int index, char *buffer, int size);
 qboolean UI_GameTypeForCatalogRow(int index, int *game);
 qboolean UI_SelectedNetGameType(int *game);
 qboolean UI_OwnerDrawVisible(int flags);
@@ -800,6 +801,7 @@ int UI_GetConnectedLocalServerStatus(const char *address, serverStatusInfo_t *in
 void UI_BuildFindPlayerList(qboolean force);
 int UI_ServerHumanCount(const char *status, const char *master);
 void UI_ServerPopulationText(int server, const char *master, char *out, int size);
+qboolean UI_ServerHasNxac(int server);
 int UI_CompareBrowserServers(int first, int second);
 void UI_DrawDescriptionText(const rectDef_t *rect, float scale, vec4_t color, float textX, float textY, int style, int align, const char *text, int stars);
 void UI_DrawCampaignDescription(rectDef_t *rect, float scale, vec4_t color, float textX, float textY, int style, int align, qboolean net);
@@ -943,6 +945,7 @@ typedef struct {
 	qhandle_t	weaponRestrictionsFilter;
 	qhandle_t	antiLagFilter;
 	qhandle_t	teamBalanceFilter;
+	qhandle_t	nxacFilter;
 
 	qhandle_t	campaignMap;
 } uiInfo_t;
@@ -1215,6 +1218,9 @@ void UI_SPUnlockMedals_f( void );
 
 void UI_InitGameinfo( void );
 void UI_BuildServerDisplayList(qboolean force);
+void UI_DoServerRefresh(void);
+qboolean UI_BrowserStatusPending(void);
+void UI_CancelBrowserStatusRequests(void);
 void UI_FeederSelection(float feederID, int index);
 int UI_FeederCount(float feederID);
 const char *UI_FileText(char *fileName);

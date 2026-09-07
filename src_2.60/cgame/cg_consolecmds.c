@@ -388,10 +388,6 @@ static void CG_Fade_f( void ) {
 }
 
 void CG_QuickMessage_f( void ) {
-	if( cgs.clientinfo[ cg.clientNum ].team == TEAM_SPECTATOR ) {
-		return;
-	}
-
 	CG_EventHandling( CGAME_EVENT_NONE, qfalse );
 
 	if( cg_quickMessageAlt.integer ) {

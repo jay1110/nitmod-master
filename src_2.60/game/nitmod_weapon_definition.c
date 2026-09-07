@@ -148,7 +148,9 @@ static int Block( tokenStream_t *stream, int selected, unsigned int *mask,
             /* Resolve the borrowed key before reading the next token. */
             isMask = !strcmp(token, "classes");
             field = AmmoField(ammo, token);
-            if( !isMask && !field ) return 0;
+            /* Original BG_RW_ParseDefinition skips unrecognized tokens.
+             * Extensions such as selfKillMessage must not discard the file. */
+            if( !isMask && !field ) continue;
             if( !ReadInteger(stream, &value) ) return 0;
             if( isMask ) *mask = (unsigned int)value;
             else *field = value;
@@ -181,7 +183,12 @@ static int ParseDefinition( nitmodWeaponTokenReader_t readToken,
         else return 0;
         if( !Block(&stream, selected, &nextMask, ammo, recoil, options) ) return 0;
     }
-    return 0;
+    /* Original BG_RegisterWeaponFromWeaponFile (ELF 0x36132) also accepts
+     * root EOF: stock knife.weap omits the final }. Block EOF remains an
+     * error, as does exhausting the parser's work bound. */
+    if(stream.remaining < 0) return 0;
+    *mask = nextMask;
+    return 1;
 }
 
 int NITMOD_ParseWeaponClassMask( nitmodWeaponTokenReader_t readToken,

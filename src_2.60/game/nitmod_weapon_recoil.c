@@ -6,9 +6,9 @@ int NITMOD_ApplyWeaponRecoil( pmoveExt_t *state, int serverTime,
     double phase;
     if( !state || !recoil ) return -1;
     if( !recoil->enabled ) return 0;
-    /* Invalid duration would reach division by zero/negative recoil windows
-     * in native PM_Weapon. Reject it here, without changing parser semantics. */
-    if( recoil->duration <= 0 ||
+    /* Zero is an explicit custom setting, not a request for stock recoil.
+     * PM_Weapon executes no recoil steps for a zero-length window. */
+    if( recoil->duration < 0 ||
         !(recoil->yaw >= -FLT_MAX && recoil->yaw <= FLT_MAX) ||
         !(recoil->pitch >= -FLT_MAX && recoil->pitch <= FLT_MAX) ) return -1;
     phase = cos((double)serverTime);

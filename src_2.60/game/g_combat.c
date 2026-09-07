@@ -7,6 +7,7 @@
 */
 
 #include "g_local.h"
+#include "g_nitmod_restrictions.h"
 #include "g_nitmod_weapon_definition.h"
 #include "g_nitmod_config.h"
 #include "g_nitmod_etbot_lifecycle.h"
@@ -42,7 +43,7 @@ static void G_NITMOD_ApplySniperWarHeadshot( gentity_t *targ,
 
 	if ( !targ || !targ->client || !attacker || !attacker->client ||
 		!damage || !dflags ||
-		G_NITMOD_LegacyCvarInteger( "g_war", 0 ) != 2 ||
+		G_NITMOD_ConfiguredWarMode() != 2 ||
 		( mod != MOD_K43_SCOPE && mod != MOD_GARAND_SCOPE ) ) {
 		return;
 	}
@@ -763,7 +764,7 @@ void player_die( gentity_t *self, gentity_t *inflictor, gentity_t *attacker, int
 			/* Original g_DMOptions bit 1 awards up to 20 health for a hostile
 			 * player kill, capped at the attacker's typed maximum health. */
 			if( g_gametype.integer == GT_WOLF_DM &&
-				(G_NITMOD_LegacyCvarInteger("g_DMOptions", 0) & 1) ) {
+				(g_DMOptions.integer & 1) ) {
 				int maximum = attacker->client->ps.stats[STAT_MAX_HEALTH];
 				int bonus = maximum - attacker->health;
 				if( bonus > 20 ) bonus = 20;

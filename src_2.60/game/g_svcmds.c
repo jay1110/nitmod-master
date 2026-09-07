@@ -6,6 +6,7 @@
 // this file holds commands that can be executed by the server console, but not remote clients
 
 #include "g_local.h"
+#include "g_nitmod_restrictions.h"
 #include "g_nitmod_omnibot.h"
 #include "g_nitmod_etbot_lifecycle.h"
 #include "g_nitmod_legacy_cvars.h"
@@ -1234,10 +1235,11 @@ static qboolean Svcmd_CrazyGravity_f( void ) {
  * binary applies one unprotected, knockback-free point to every connected
  * client; preserve that observable contract instead of inventing a forced
  * respawn. */
-static void Svcmd_WarModeTouchClients( void ) {
+void G_NITMOD_WarModeTouchClients( void ) {
 	int i;
 
-	for ( i = 0; i < level.numConnectedClients; i++ ) {
+	/* Original Nit_GibAll: level+0x9c (non-spectators), sortedClients. */
+	for ( i = 0; i < level.numNonSpectatorClients; i++ ) {
 		int clientNum = level.sortedClients[i];
 		gentity_t *player;
 
@@ -1245,7 +1247,7 @@ static void Svcmd_WarModeTouchClients( void ) {
 			continue;
 		}
 		player = &g_entities[clientNum];
-		if ( !player->client || player->client->pers.connected != CON_CONNECTED ) {
+		if ( !player->client ) {
 			continue;
 		}
 		G_Damage( player, NULL, NULL, NULL, NULL, 0,
@@ -1274,7 +1276,7 @@ static qboolean Svcmd_WarMode_f( const char *command, int mode,
 		return qtrue;
 	}
 
-	current = G_NITMOD_LegacyCvarInteger( "g_war", 0 );
+	current = G_NITMOD_ConfiguredWarMode();
 	if ( enable && current == mode ) {
 		G_Printf( "%s is already enabled.\n", displayName );
 		return qtrue;
@@ -1285,7 +1287,7 @@ static qboolean Svcmd_WarMode_f( const char *command, int mode,
 	}
 
 	trap_Cvar_Set( "g_war", enable ? va( "%i", mode ) : "0" );
-	Svcmd_WarModeTouchClients();
+	G_NITMOD_WarModeTouchClients();
 	trap_SendServerCommand( -1, va( "cpm \"^x%s: %s !\"", command,
 		enable ? "^2Enabled" : "^1Disabled" ) );
 	return qtrue;
@@ -1332,6 +1334,7 @@ qboolean	ConsoleCommand( void ) {
 			G_NITMOD_LoadDatabase();
 			if(NITMOD_DBUserCount()>=0) {
 				G_NITMOD_LoadAdminLevels();
+				G_NITMOD_LoadAdminCommands();
 				for(clientNum=0;clientNum<level.maxclients;++clientNum)
 					if(g_entities[clientNum].client && g_entities[clientNum].client->pers.connected!=CON_DISCONNECTED)
 						ClientUserinfoChanged(clientNum);
@@ -1368,11 +1371,38 @@ qboolean	ConsoleCommand( void ) {
 		return Svcmd_WarMode_f( "sniperwar", 2, "Sniperwar" );
 	}
 
+    if(!Q_stricmp(cmd,"playsound") || !Q_stricmp(cmd,"playsound_env")) {
+        char sound[MAX_QPATH],selector[36];int argc=trap_Argc(),target=-1,matches=0,i;
+        if(argc<2) { G_Printf("usage: playsound [name|slot#] sound\n");return qtrue; }
+        trap_Argv(argc<3?1:2,sound,sizeof(sound));
+        if(argc<3) { G_globalSound(sound);return qtrue; }
+        trap_Argv(1,selector,sizeof(selector));Q_CleanStr(selector);Q_strlwr(selector);
+        for(i=0;i<level.maxclients;++i) {
+            char name[MAX_NETNAME],slot[12];gclient_t *client=g_entities[i].client;
+            if(!client || client->pers.connected==CON_DISCONNECTED) continue;
+            Com_sprintf(slot,sizeof(slot),"%d",i);
+            Q_strncpyz(name,client->pers.netname,sizeof(name));Q_CleanStr(name);Q_strlwr(name);
+            if(!strcmp(slot,selector)) { target=i;matches=1;break; }
+            if(*selector && strstr(name,selector)) { target=i;++matches; }
+        }
+        if(matches==1) {
+            vec3_t origin={0,0,0};gentity_t *event=G_TempEntity(origin,EV_GLOBAL_CLIENT_SOUND);
+            event->r.svFlags=SVF_SINGLECLIENT;event->r.singleClient=target;
+            event->s.teamNum=target;event->s.eventParm=G_SoundIndex(sound);
+        } else G_Printf("playsound: No unique player\n");
+        return qtrue;
+    }
+    if(!Q_stricmp(cmd,"chat")) {
+        char text[MAX_STRING_CHARS-32];int i;
+        Q_strncpyz(text,ConcatArgs(1),sizeof(text));
+        for(i=0;text[i];++i) if(text[i]=='"') text[i]='\'';
+        trap_SendServerCommand(-1,va("chat \"%s\" -2",text));return qtrue;
+    }
 	if (Q_stricmp(cmd, "nitmod_omnibot_status") == 0) {
 		G_NITMOD_OmniBotReportStatus();
 		return qtrue;
 	}
-	if (Q_stricmp(cmd, "omnibot") == 0) {
+	if (Q_stricmp(cmd, "bot") == 0 || Q_stricmp(cmd, "omnibot") == 0) {
 		Bot_Interface_ConsoleCommand();
 		return qtrue;
 	}

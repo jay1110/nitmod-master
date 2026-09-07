@@ -3,6 +3,8 @@
 static void ClientSpawnContext(gentity_t *ent,qboolean revived,qboolean teamChange,qboolean restoreHealth);
 #include "g_nitmod_etbot_lifecycle.h"
 #include "g_nitmod_legacy_cvars.h"
+#include "g_nitmod_restrictions.h"
+#include "g_nitmod_integrity.h"
 #include "g_nitmod_abilities.h"
 #include "nitmod_protocol.h"
 #include "nitmod_secondary_weapon.h"
@@ -446,7 +448,7 @@ void CopyToBodyQue( gentity_t *ent ) {
 	BODY_CHARACTER(body) =	ent->client->pers.characterIndex;
 	BODY_VALUE(body) =		0;
 
-	body->s.time2 =			0;
+	body->s.time2 &= NITMOD_ES_GLOW;
 
 	body->activator = NULL;
 
@@ -964,7 +966,7 @@ static qboolean G_NITMOD_AddSpecialClassTool(gclient_t *client, weapon_t weapon)
 	}
 	options = g_gametype.integer == GT_WOLF_DM ?
 		(unsigned int)g_DMOptions.integer :
-		(unsigned int)G_NITMOD_LegacyCvarInteger("g_weapons", 0);
+		(unsigned int)G_NITMOD_ConfiguredWeaponFlags();
 	if(!(options & (g_gametype.integer == GT_WOLF_DM ? dmBit : normalBit))) return qfalse;
 	ammo = GetAmmoTableData(weapon);
 	return AddWeaponToPlayer(client, weapon, ammo->defaultStartingAmmo,
@@ -1295,7 +1297,7 @@ void SetWolfSpawnWeapons( gclient_t *client )
 			/* Original class-tool branch: Engineering bit32, g_weapons bit4;
 			 * Deathmatch additionally requires g_DMOptions bit0x2000. */
 			if((client->sess.nitmodSkillMasks[SK_EXPLOSIVES_AND_CONSTRUCTION] & 32u) &&
-				(G_NITMOD_LegacyCvarInteger("g_weapons", 0) & 4) &&
+				(G_NITMOD_ConfiguredWeaponFlags() & 4) &&
 				(!deathmatch || (dmOptions & 0x2000u))) {
 				const ammotable_t *bombAmmo = GetAmmoTableData(WP_BOMB);
 				AddWeaponToPlayer(client, WP_BOMB, bombAmmo->defaultStartingAmmo,
@@ -1410,7 +1412,7 @@ void AddMedicTeamBonus( gclient_t *client ) {
 ClientCheckName
 ============
 */
-static void ClientCleanName( const char *in, char *out, int outSize )
+void ClientCleanName( const char *in, char *out, int outSize )
 {
 	int		len, colorlessLen;
 	char	ch;
@@ -1697,7 +1699,7 @@ void ClientUserinfoChanged( int clientNum ) {
 	trap_GetConfigstring( CS_PLAYERS + clientNum, oldname, sizeof( oldname ) );
 
 	/* Optional original equipment field; stock clients ignore unknown keys. */
-	if(g_gametype.integer==8 && (G_NITMOD_LegacyCvarInteger("g_DMOptions",0)&8) &&
+	if(g_gametype.integer==8 && (g_DMOptions.integer&8) &&
 		client->sess.sessionTeam==TEAM_SPECTATOR) client->sess.shoutcaster=1;
 	s = va( "%s\\rn\\%i\\lc\\%i\\xp\\%s\\sc\\%i\\u\\%i", s, client->sess.rifleGrenadeStatus,
 		client->sess.latchPlayerType, xpStr, client->sess.shoutcaster, client->sess.uci );
@@ -1747,6 +1749,8 @@ char *ClientConnect( int clientNum, qboolean firstTime, qboolean isBot ) {
 #endif // USEXPSTORAGE
 
 	ent = &g_entities[ clientNum ];
+	G_NITMOD_CvarScanResetClient(clientNum);
+	G_NITMOD_ResetClient(clientNum);
 
 	trap_GetUserinfo( clientNum, userinfo, sizeof( userinfo ) );
 
@@ -2004,7 +2008,7 @@ void ClientBegin( int clientNum )
 
 	client = level.clients + clientNum;
     notifyLuaBegin=client->pers.connected==CON_CONNECTING && !(ent->r.svFlags&SVF_BOT) && !client->pers.nitmodDemoClient;
-	G_NITMOD_ResetClient( clientNum );
+	G_NITMOD_ResetGameplayClient( clientNum );
 
 	if ( ent->r.linked ) {
 		trap_UnlinkEntity( ent );
@@ -2116,6 +2120,7 @@ void ClientBegin( int clientNum )
 
 	G_LogPrintf( "ClientBegin: %i\n", clientNum );
 	G_NITMOD_AccountBegin(clientNum);
+	if(notifyLuaBegin) G_NITMOD_CvarScanStart(clientNum);
 	if(notifyLuaBegin) G_NITMOD_LuaClientEvent("et_ClientBegin",clientNum);
 
 	// Xian - Check for maxlives enforcement
@@ -2586,6 +2591,7 @@ void ClientDisconnect( int clientNum ) {
 	vec3_t		launchvel;
 	int			i;
 
+	G_NITMOD_CvarScanResetClient(clientNum);
 	G_NITMOD_LuaClientEvent("et_ClientDisconnect",clientNum);
 	G_NITMOD_GlobalStatsUpload(clientNum);
 	G_NITMOD_GlobalStatsReset(clientNum);
@@ -2638,6 +2644,7 @@ void ClientDisconnect( int clientNum ) {
 		G_NITMOD_RemoveTripmines(ent);
 	}
 	G_FadeItems(ent, MOD_SATCHEL);
+	G_NITMOD_FadeDisconnectProjectiles(ent, G_NITMOD_LegacyCvarInteger("g_missileCams", 0));
 
 	// remove ourself from teamlists
 	{

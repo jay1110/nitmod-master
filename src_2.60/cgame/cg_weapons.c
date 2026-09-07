@@ -1654,15 +1654,15 @@ static qboolean CG_RW_ParseClient( int handle, weaponInfo_t *weaponInfo )
  * weaponInfo_t media fields. Keep malformed blocks bounded and release the
  * parser source through the same error path as the client block. */
 static int *CG_RW_AmmoField(ammotable_t *ammo, const char *name) {
-	if(!Q_stricmp(name, "maxammo")) return &ammo->maxammo;
-	if(!Q_stricmp(name, "maxclip")) return &ammo->maxclip;
-	if(!Q_stricmp(name, "defaultStartingAmmo")) return &ammo->defaultStartingAmmo;
-	if(!Q_stricmp(name, "defaultStartingClip")) return &ammo->defaultStartingClip;
-	if(!Q_stricmp(name, "reloadTime")) return &ammo->reloadTime;
-	if(!Q_stricmp(name, "fireDelayTime")) return &ammo->fireDelayTime;
-	if(!Q_stricmp(name, "nextShotTime")) return &ammo->nextShotTime;
-	if(!Q_stricmp(name, "maxHeat")) return &ammo->maxHeat;
-	if(!Q_stricmp(name, "coolRate")) return &ammo->coolRate;
+	if(!strcmp(name, "maxammo")) return &ammo->maxammo;
+	if(!strcmp(name, "maxclip")) return &ammo->maxclip;
+	if(!strcmp(name, "defaultStartingAmmo")) return &ammo->defaultStartingAmmo;
+	if(!strcmp(name, "defaultStartingClip")) return &ammo->defaultStartingClip;
+	if(!strcmp(name, "reloadTime")) return &ammo->reloadTime;
+	if(!strcmp(name, "fireDelayTime")) return &ammo->fireDelayTime;
+	if(!strcmp(name, "nextShotTime")) return &ammo->nextShotTime;
+	if(!strcmp(name, "maxHeat")) return &ammo->maxHeat;
+	if(!strcmp(name, "coolRate")) return &ammo->coolRate;
 	return NULL;
 }
 
@@ -1679,50 +1679,53 @@ static qboolean CG_RW_ParseSharedDefinition( int handle, qboolean selected,
 		else if( !strcmp( token.string, "}" ) && !--depth ) return qtrue;
 		else if( selected && depth == 1 ) {
 			int *field = CG_RW_AmmoField(ammo, token.string);
-			if(!Q_stricmp(token.string, "noMidclipReload")) {
+			if(!strcmp(token.string, "name")) {
+				if(!trap_PC_ReadToken(handle, &token)) return CG_RW_ParseError(handle, "expected weapon name");
+				Q_strncpyz(weaponInfo->name, token.string, sizeof(weaponInfo->name));
+			} else if(!strcmp(token.string, "noMidclipReload")) {
 				weaponInfo->noMidclipReload = qtrue;
 			} else if(field) {
 				if( !trap_PC_ReadToken( handle, &token ) || token.type != TT_NUMBER )
 					return CG_RW_ParseError( handle, "expected numeric value for shared weapon field" );
 				*field = token.intvalue;
-			} else if(!Q_stricmp( token.string, "movementSpeedScale" )) {
+			} else if(!strcmp( token.string, "movementSpeedScale" )) {
 			if( !trap_PC_ReadToken( handle, &token ) || token.type != TT_NUMBER )
 				return CG_RW_ParseError( handle, "expected numeric movementSpeedScale" );
 			weaponInfo->movementSpeedScale = token.floatvalue;
-			} else if(!Q_stricmp(token.string, "recoilDuration")) {
+			} else if(!strcmp(token.string, "recoilDuration")) {
 				if(!trap_PC_ReadToken(handle, &token) || token.type != TT_NUMBER)
 					return CG_RW_ParseError(handle, "expected numeric recoilDuration");
 				weaponInfo->customRecoilDuration = token.intvalue;
 				weaponInfo->customRecoilEnabled = qtrue;
-			} else if(!Q_stricmp(token.string, "recoilYaw") || !Q_stricmp(token.string, "recoilPitch")) {
-				qboolean yaw = !Q_stricmp(token.string, "recoilYaw");
+			} else if(!strcmp(token.string, "recoilYaw") || !strcmp(token.string, "recoilPitch")) {
+				qboolean yaw = !strcmp(token.string, "recoilYaw");
 				if(!trap_PC_ReadToken(handle, &token) || token.type != TT_NUMBER)
 					return CG_RW_ParseError(handle, "expected numeric recoil angle");
 				if(yaw) weaponInfo->customRecoilYaw = token.floatvalue;
 				else weaponInfo->customRecoilPitch = token.floatvalue;
 				weaponInfo->customRecoilEnabled = qtrue;
-			} else if(!Q_stricmp(token.string, "SpreadScaleAdd") || !Q_stricmp(token.string, "SpreadScaleAddRand")) {
-				qboolean random = !Q_stricmp(token.string, "SpreadScaleAddRand");
+			} else if(!strcmp(token.string, "SpreadScaleAdd") || !strcmp(token.string, "SpreadScaleAddRand")) {
+				qboolean random = !strcmp(token.string, "SpreadScaleAddRand");
 				if(!trap_PC_ReadToken(handle, &token) || token.type != TT_NUMBER)
 					return CG_RW_ParseError(handle, "expected numeric spread scale value");
 				if(random) weaponInfo->spreadScaleAddRand = token.intvalue;
 				else weaponInfo->spreadScaleAdd = token.intvalue;
-			} else if(!Q_stricmp(token.string, "spreadRatio")) {
+			} else if(!strcmp(token.string, "spreadRatio")) {
 				if(!trap_PC_ReadToken(handle, &token) || token.type != TT_NUMBER)
 					return CG_RW_ParseError(handle, "expected numeric spreadRatio");
 				weaponInfo->spreadRatio = token.floatvalue;
-			} else if(!Q_stricmp(token.string, "velocity2spread") || !Q_stricmp(token.string, "viewchange2spread")) {
-				qboolean velocity = !Q_stricmp(token.string, "velocity2spread");
+			} else if(!strcmp(token.string, "velocity2spread") || !strcmp(token.string, "viewchange2spread")) {
+				qboolean velocity = !strcmp(token.string, "velocity2spread");
 				int value;
 				if(!trap_PC_ReadToken(handle, &token))
 					return CG_RW_ParseError(handle, "expected yes/no spread option");
-				if(!Q_stricmp(token.string, "yes")) value = 1;
-				else if(!Q_stricmp(token.string, "no")) value = 2;
-				else return CG_RW_ParseError(handle, "expected yes/no spread option");
+				if(!strcmp(token.string, "yes")) value = 1;
+				else if(!strcmp(token.string, "no")) value = 2;
+				else { value = 0; CG_Printf("^3WARNING: invalid shared weapon yes/no option %s\n", token.string); }
 				if(velocity) weaponInfo->velocityToSpread = value;
 				else weaponInfo->viewChangeToSpread = value;
-			} else if(!Q_stricmp(token.string, "KillMessage") || !Q_stricmp(token.string, "KillMessage2")) {
-				qboolean suffix = !Q_stricmp(token.string, "KillMessage2");
+			} else if(!strcmp(token.string, "KillMessage") || !strcmp(token.string, "KillMessage2")) {
+				qboolean suffix = !strcmp(token.string, "KillMessage2");
 				if(!trap_PC_ReadToken(handle, &token))
 					return CG_RW_ParseError(handle, "expected custom kill message");
 				Q_strncpyz(suffix ? weaponInfo->killMessage2 : weaponInfo->killMessage,
@@ -1740,7 +1743,12 @@ static qboolean CG_RegisterWeaponFromWeaponFile( const char *filename,
 	int handle;
 	qboolean clientComplete = qfalse;
 
-	handle = trap_PC_LoadSource( filename );
+	/* Engine VFS resolves loose files and PK3 members identically. Original
+	 * CG_RegisterWeapon (ELF 0xc4580) falls back only when opening fails. */
+	handle = 0;
+	if(NITMOD_WeaponScriptsDir()[0])
+		handle = trap_PC_LoadSource(va("%s/%s", NITMOD_WeaponScriptsDir(), filename));
+	if(!handle) handle = trap_PC_LoadSource(va("weapons/%s", filename));
 
 	if( !handle )
 		return qfalse;
@@ -1850,7 +1858,7 @@ void CG_RegisterWeapon( int weaponNum, qboolean force ) {
 		return;
 	}
 
-	if( !CG_RegisterWeaponFromWeaponFile( va( "weapons/%s", filename ), weaponInfo,
+	if( !CG_RegisterWeaponFromWeaponFile( filename, weaponInfo,
 		path ? !!path->alternate : qfalse, &parsedAmmo ) ) {
 		// Never expose a half-parsed model hierarchy. Keep a prior valid
 		// registration on forced reload; otherwise retain an empty cached failure.
@@ -3649,6 +3657,16 @@ CG_AltfireWeapon_f
 	for example, switching between WP_MAUSER and WP_SNIPERRIFLE
 ==============
 */
+/* Original CG_Init migrates the obsolete weapalt binding to +attack2.
+ * Use engine key IDs so two bound keys are preserved independently. */
+void CG_NitmodMigrateAltWeaponBindings(void) {
+	int first = -1, second = -1;
+	if(!NITMOD_UsesOriginalProtocol() && !NITMOD_UsesNitmodHud()) return;
+	trap_Key_KeysForBinding("weapalt", &first, &second);
+	if(first >= 0) trap_Key_SetBinding(first, "+attack2");
+	if(second >= 0 && second != first) trap_Key_SetBinding(second, "+attack2");
+}
+
 void CG_AltWeapon_f(void)
 {
 	int original, num;

@@ -130,8 +130,10 @@ qboolean CG_NitmodExtendedEvent(centity_t *cent, int wireEvent) {
 		CG_FireWeapon(cent, NITMOD_FIRE_THROWKNIFE);
 		return qtrue;
 	case 97:
+	case EV_NITMOD_ALTWEAPON:
 		if(!cg.snap || es->number != cg.snap->ps.clientNum) return qtrue;
-		weapon = NITMOD_WeaponFromWire(es->eventParm);
+		/* Native prediction and native servers already use typed weapon IDs. */
+		weapon = wireEvent == 97 ? NITMOD_WeaponFromWire(es->eventParm) : es->eventParm;
 		if(weapon <= WP_NONE || weapon >= WP_NUM_WEAPONS ||
 		   cg.weaponSelect <= WP_NONE || cg.weaponSelect >= WP_NUM_WEAPONS) return qtrue;
 		CG_FinishWeaponChange(cg.weaponSelect, weapon);

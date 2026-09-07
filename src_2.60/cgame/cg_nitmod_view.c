@@ -1,27 +1,36 @@
 #include "cg_local.h"
 #include "cg_nitmod_config.h"
 #include "cg_nitmod_view.h"
+#include "cg_nitmod_hud.h"
+#include "cg_nitmod_coronas.h"
 
 void CG_Zoom(void);
 void CG_DrawMiscGamemodels(void);
 
 static centity_t *nitmodMissileCamera;
+static vec3_t nitmodMissileCameraAngles;
+static qboolean nitmodRenderingMissileCamera;
+
+qboolean CG_NitmodRenderingMissileCamera(void) {
+	return nitmodRenderingMissileCamera;
+}
 
 void CG_NitmodMissileCameraBeginFrame(void) {
 	nitmodMissileCamera = NULL;
+	nitmodRenderingMissileCamera = qfalse;
 }
 
-/* Original CG_Missile, ELF 0x65bde..0x65c99: remember the local player's
+/* Original CG_Missile, ELF 0x56480..0x56639: remember the local player's
  * currently rendered panzer, mortar or rifle-grenade projectile according to
  * the server's g_missileCams mask.  This is deliberately based only on typed
  * entityState fields so it also consumes snapshots from an original server. */
-void CG_NitmodMissileCameraTrack(centity_t *cent) {
+void CG_NitmodMissileCameraTrack(centity_t *cent, vec3_t axis[3]) {
 	const entityState_t *state;
 	int option;
 
 	/* Snapshots already contain native weapon IDs here. Camera policy is
 	 * shared by original and reconstructed Nitmod configstring layouts. */
-	if(!cent || !cg.snap || !NITMOD_UsesNitmodHud()) return;
+	if(!cent || !cg.snap || nitmodRenderingMissileCamera || !NITMOD_UsesNitmodHud()) return;
 	state = &cent->currentState;
 	if(state->eType != ET_MISSILE || state->clientNum != cg.snap->ps.clientNum) return;
 
@@ -29,36 +38,60 @@ void CG_NitmodMissileCameraTrack(centity_t *cent) {
 	case WP_PANZERFAUST: option = 1; break;
 	case WP_MORTAR:
 	case WP_MORTAR_SET: option = 2; break;
+	case WP_KAR98:
+	case WP_CARBINE:
 	case WP_GPG40:
 	case WP_M7: option = 4; break;
 	default: return;
 	}
-	if(NITMOD_SimpleConfig()->missileCams & option) nitmodMissileCamera = cent;
+	if(NITMOD_SimpleConfig()->missileCams & option) {
+		nitmodMissileCamera = cent;
+		/* The native ET renderer does not store missile-axis angles back in
+		 * cent->lerpAngles. Capture its actual rendered direction instead of
+		 * aiming a native rocket camera along the default zero angles. */
+		if(!NITMOD_UsesOriginalProtocol() && axis) AxisToAngles(axis, nitmodMissileCameraAngles);
+		else VectorCopy(cent->lerpAngles, nitmodMissileCameraAngles);
+	}
 }
 
-/* Original CG_DrawMissileCamera, ELF 0x7ee70.  Render a compact 4:3 view from
- * 32 units ahead of the projectile and then restore the main refdef. */
+/* Original CG_DrawMissileCamera, hash-pinned ELF 0x4b300. The second
+ * scene must submit entities already drawn in the main view. Its zeroed
+ * refdef deliberately does not inherit main-view area masks or underwater
+ * flags; only the FOV is copied. */
 void CG_NitmodDrawMissileCamera(void) {
 	refdef_t camera;
 	refdef_t *mainView;
-	vec3_t forward;
+	vec3_t angles;
+	nitmodHudAnchor_t previous;
 	float x = 16, y = 160, width = 160, height = 120;
+	qboolean blinded;
 
-	if(!nitmodMissileCamera || !cg_drawCam.integer || cg.demoPlayback ||
-	   !cg.snap || !cg.refdef_current || (cg.snap->ps.eFlags & EF_MOUNTEDTANK)) return;
+	if(!nitmodMissileCamera || !cg_drawCam.integer || cg.showGameView ||
+	   !cg.snap || !cg.refdef_current || nitmodRenderingMissileCamera ||
+	   NITMOD_SimpleConfig()->missileCams <= 0 || !NITMOD_UsesNitmodHud()) return;
+	/* Original draw-frame gate tests blindness, not mounted-tank state,
+	 * and permits demo playback. Native Nitmod publishes blindness separately. */
+	blinded = NITMOD_UsesOriginalProtocol() ?
+		(cg.snap->ps.eFlags & NITMOD_EF_BLINDED) != 0 :
+		(cg.snap->ps.powerups[PW_BLACKOUT] & NITMOD_BLACKOUT_ADMIN) != 0;
+	if(blinded) return;
 
 	mainView = cg.refdef_current;
-	camera = *mainView;
+	memset(&camera, 0, sizeof(camera));
+	camera.fov_x = mainView->fov_x; camera.fov_y = mainView->fov_y;
+	previous = CG_NitmodHudAnchor(NITMOD_HUD_LEFT);
 	CG_AdjustFrom640(&x, &y, &width, &height);
 	camera.x = (int)x; camera.y = (int)y;
 	camera.width = (int)width; camera.height = (int)height;
 	VectorCopy(nitmodMissileCamera->lerpOrigin, camera.vieworg);
-	AnglesToAxis(nitmodMissileCamera->lerpAngles, camera.viewaxis);
-	VectorCopy(camera.viewaxis[0], forward);
-	VectorMA(camera.vieworg, 32, forward, camera.vieworg);
+	VectorCopy(nitmodMissileCameraAngles, angles);
+	angles[ROLL] = 0;
+	AnglesToAxis(angles, camera.viewaxis);
+	VectorMA(camera.vieworg, 32, camera.viewaxis[0], camera.vieworg);
 	camera.time = cg.time;
 
 	trap_R_SaveViewParms();
+	nitmodRenderingMissileCamera = qtrue;
 	cg.refdef_current = &camera;
 	trap_R_ClearScene();
 	CG_SetupFrustum();
@@ -74,11 +107,16 @@ void CG_NitmodDrawMissileCamera(void) {
 		CG_AddTrails();
 		CG_PB_RenderPolyBuffers();
 		CG_DrawMiscGamemodels();
+		CG_NitmodDrawCoronas();
 	}
 	trap_SetClientLerpOrigin(camera.vieworg[0], camera.vieworg[1], camera.vieworg[2]);
 	trap_R_RenderScene(&camera);
 	cg.refdef_current = mainView;
+	nitmodRenderingMissileCamera = qfalse;
+	CG_DrawPic(16, 160, 160, 120, cgs.media.nitmodMissileCameraOverlay);
 	trap_R_RestoreViewParms();
+	CG_SetupFrustum();
+	CG_NitmodHudAnchor(previous);
 }
 
 /* Inlined in original CG_CalcViewValues (ELF 0xbc2b0). */

@@ -50,6 +50,7 @@ static nitmodLegacyCvar_t legacyGameplayCvars[] = {
 	{{0},"g_mortarBBox","0",0},
 	{{0},"g_TDMScore","500",0}, {{0},"g_flushItems","1",0},
 	{{0},"g_multikillTime","2000",0}, {{0},"g_headshot","0",0},
+	{{0},"g_announcer","127",0},
 	{{0},"g_weaponScriptsDir","",0}, {{0},"g_missileGravity","0",0},
 	{{0},"g_fixedphysics","0",5}, {{0},"g_fixedphysicsfps","125",5},
 	{{0},"g_adrenaline","0",0}, {{0},"jp_keepAwards","0",0},

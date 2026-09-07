@@ -594,6 +594,12 @@ static void CG_ConfigStringModified( void ) {
 	// new configstring already integrated
 	trap_GetGameState( &cgs.gameState );
 
+	/* Nitmod's weapon-directory slot precedes the core layout translation. */
+	if(NITMOD_UsesNitmodHud() && num == (NITMOD_UsesOriginalProtocol() ? 36 : CS_NITMOD_INFO)) {
+		NITMOD_UpdateWeaponScripts(qtrue);
+		return;
+	}
+
 	// look up the individual string that was modified
 	if(NITMOD_UsesOriginalProtocol()) {
 		num = NITMOD_CoreConfigFromWire(num);
@@ -999,6 +1005,10 @@ static void CG_MapRestart( void ) {
 	CG_ParseTagConnects();
 
 	trap_Cvar_Set("cg_thirdPerson", "0");
+	/* Qagame recreates its negotiated state on a map restart, while cgame
+	 * stays loaded. Restore the native handshake just as the original
+	 * session below requests its state again. Demo playback sends neither. */
+	NITMOD_AdvertiseCapabilities();
 	if(NITMOD_UsesOriginalProtocol()) {
 		trap_Cvar_Set("cg_spawnTimer_set", "0");
 		trap_Cvar_Set("cg_spawnTimer_period", "0");
@@ -1426,10 +1436,10 @@ CG_VoiceChat
 =================
 */
 void CG_VoiceChat( int mode ) {
-	const char *cmd;
+	char cmd[MAX_SAY_TEXT];
 	int clientNum, color;
 	qboolean voiceOnly;
-	vec3_t origin;			// NERVE - SMF
+	vec3_t origin = {0,0,0};			// NERVE - SMF
 
 	voiceOnly = atoi(CG_Argv(1));
 	clientNum = atoi(CG_Argv(2));
@@ -1442,7 +1452,7 @@ void CG_VoiceChat( int mode ) {
 		origin[2] = atoi(CG_Argv(7));
 	}
 
-	cmd = CG_Argv(4);
+	trap_Argv(4, cmd, sizeof(cmd));
 
 	if (cg_noTaunt.integer != 0) {
 		/* Native ET voice IDs are code-side protocol strings, not definitions

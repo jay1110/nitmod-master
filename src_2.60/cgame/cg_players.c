@@ -7,6 +7,7 @@
 
 #include "cg_local.h"
 #include "cg_nitmod_names.h"
+#include "cg_nitmod_view.h"
 #include "cg_nitmod_debug.h"
 #include "cg_nitmod_animation.h"
 #include "cg_nitmod_lean.h"
@@ -1800,7 +1801,7 @@ void CG_Player( centity_t *cent )
 	shadowPlane = 0.0;												// ditto
 
 	// if set to invisible, skip
-	if( cent->currentState.eFlags & EF_NODRAW ) {
+	if( (cent->currentState.eFlags & EF_NODRAW) && !NITMOD_UsesOriginalProtocol() ) {
 		return;
 	}
 
@@ -1893,7 +1894,7 @@ void CG_Player( centity_t *cent )
 	}
 
 	// draw the player in cameras
-	if( cg.cameraMode )
+	if( cg.cameraMode || CG_NitmodRenderingMissileCamera() )
 		renderfx &= ~RF_THIRD_PERSON;
 
 	if( cg_shadows.integer == 3 && shadow ) {
@@ -1943,7 +1944,8 @@ void CG_Player( centity_t *cent )
 	//
 	// add the body
 	//
-	if( cent->currentState.eType == ET_CORPSE && cent->currentState.time2 == 1 ) {
+	if( (cent->currentState.eType == ET_CORPSE && (cent->currentState.time2 & ~NITMOD_ES_GLOW) == 1) ||
+	    (cent->currentState.eFlags & NITMOD_EF_STRIPPED) ) {
 		body.hModel		= character->undressedCorpseModel;
 		body.customSkin	= character->undressedCorpseSkin;
 	} else {
@@ -1952,6 +1954,15 @@ void CG_Player( centity_t *cent )
 	}
 
 	VectorCopy( playerOrigin, body.origin );
+    if((NITMOD_UsesOriginalProtocol() && (cent->currentState.eFlags & 0x40)) ||
+       (!NITMOD_UsesOriginalProtocol() && (cent->currentState.time2 & NITMOD_ES_GLOW))) {
+        int glowTeam=cgs.clientinfo[cent->currentState.clientNum].team,j,copies;
+        char dynamicLight[8];
+        if(cent->currentState.powerups & (NITMOD_UsesOriginalProtocol()?0x80:(1<<PW_OPS_DISGUISED))) glowTeam=glowTeam==TEAM_AXIS?TEAM_ALLIES:TEAM_AXIS;
+        trap_Cvar_VariableStringBuffer("r_dynamicLight",dynamicLight,sizeof(dynamicLight));copies=atoi(dynamicLight)==2?4:1;
+        for(j=0;j<copies;++j) trap_R_AddLightToScene(body.origin,100,1.0f,glowTeam==TEAM_AXIS?1.0f:0.0f,0,glowTeam==TEAM_AXIS?0.0f:1.0f,0,0);
+    }
+
 	VectorCopy( lightorigin, body.lightingOrigin );
 	body.shadowPlane = shadowPlane;
 	body.renderfx = renderfx;
@@ -2168,7 +2179,7 @@ void CG_Player( centity_t *cent )
 		acc.customSkin = character->accSkins[i];
 
 		// Gordon: looted corpses dont have any accsserories, evil looters :E
-		if( !(cent->currentState.eType == ET_CORPSE && cent->currentState.time2 == 1 )) {
+		if( !(cent->currentState.eType == ET_CORPSE && (cent->currentState.time2 & ~NITMOD_ES_GLOW) == 1 )) {
 			switch(i)
 			{
 				case ACC_BELT_LEFT:

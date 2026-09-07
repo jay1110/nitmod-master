@@ -13,6 +13,8 @@
 
 
 void NITMOD_ClearConfigStrings( void );
+const char *NITMOD_WeaponScriptsDir(void);
+void NITMOD_UpdateWeaponScripts(qboolean reload);
 extern vmCvar_t cg_markDistance, cg_projectileNudge, nitmod_sv_fps;
 extern vmCvar_t cg_countryflags, cg_optimizePrediction, cg_locations;
 extern vmCvar_t cg_logFile, cg_clientLog, cg_drawCam, cg_locationMaxChars;

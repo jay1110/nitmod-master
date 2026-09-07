@@ -1,3 +1,4 @@
+#include "../game/nitmod_xp_snapshot.h"
 #include "cg_local.h"
 #include "cg_nitmod_hud.h"
 #include "cg_nitmod_config.h"
@@ -9,7 +10,7 @@
 
 void CG_NitmodDrawSpectatorInstruction(int row, const char *text) {
     nitmodHudAnchor_t previous;
-    if(row < 0 || row > 1 || !text || !NITMOD_UsesOriginalProtocol()) return;
+    if(row < 0 || row > 1 || !text || !NITMOD_UsesNitmodHud()) return;
     previous = CG_NitmodHudAnchor(NITMOD_HUD_LEFT);
     CG_Text_Paint_Ext(8, 150 + row * 8, .2f, .2f, colorWhite, text, 0, 0, 7, &cgs.media.limboFont2);
     CG_NitmodHudAnchor(previous);
@@ -17,7 +18,7 @@ void CG_NitmodDrawSpectatorInstruction(int row, const char *text) {
 
 void CG_NitmodDrawWoundedInstruction(int row, const char *text) {
     nitmodHudAnchor_t previous;
-    if(row < 0 || row > 2 || !text || !NITMOD_UsesOriginalProtocol()) return;
+    if(row < 0 || row > 2 || !text || !NITMOD_UsesNitmodHud()) return;
     previous = CG_NitmodHudAnchor(NITMOD_HUD_LEFT);
     CG_Text_Paint_Ext(8, 118 + row * 12, .2f, .2f, colorWhite, text, 0, 0, 7, &cgs.media.limboFont2);
     CG_NitmodHudAnchor(previous);
@@ -182,11 +183,12 @@ void CG_NitmodDrawStatusBars(void) {
     playerState_t nativeDisplay;
     const playerState_t *display;
     if(!NITMOD_UsesNitmodHud() || !cg.snap) return;
-    display = &cg.snap->ps;
+    nativeDisplay = cg.snap->ps;
+    nativeDisplay.powerups[11] = cg.snap->ps.powerups[PW_ADRENALINE];
+    display = &nativeDisplay;
     if(!NITMOD_UsesOriginalProtocol()) {
         /* Presentation-only adapter: never reinterpret or rewrite the
          * ET260 snapshot as an original Nitmod network state. */
-        nativeDisplay = *display;
         nativeDisplay.stats[6] = cg.pmext.sprintTime;
         nativeDisplay.stats[9] = BG_EffectiveMaxHealth(display);
         nativeDisplay.powerups[11] = display->powerups[PW_ADRENALINE];
@@ -223,13 +225,9 @@ void CG_NitmodDrawStatusBars(void) {
 /* Original CG_DrawSkillLevels: snapshot+0x108 is the high XP word,
  * snapshot+0x11c the low word. These are stats, not persistant slots. */
 int CG_NitmodDisplayXP(const playerState_t *state) {
-    double value;
     if(!state) return 0;
-    if(!NITMOD_UsesOriginalProtocol()) return state->stats[STAT_XP];
-    value = (double)state->stats[3] * 32768.0 + state->stats[STAT_XP];
-    if(value > INT_MAX) return INT_MAX;
-    if(value < INT_MIN) return INT_MIN;
-    return (int)value;
+    if(!NITMOD_UsesNitmodHud()) return state->stats[STAT_XP];
+    return NITMOD_SnapshotXP(state);
 }
 
 int CG_NitmodHudSkill(int playerClass, int row, const playerState_t *state) {
@@ -471,9 +469,8 @@ void CG_NitmodRegisterAnnouncerSounds(void) {
     announcerPrepareSound = trap_S_RegisterSound("sound/nit/prepare.wav", qfalse);
 }
 
-/* CG_DrawActivePowerups: original snapshot offsets minus the 44-byte
- * snapshot header map to these typed arrays. These are WIRE indices,
- * intentionally not native PW_* aliases. No player state is rewritten. */
+/* Snapshot powerups have already been normalized by the protocol adapter.
+ * Use native slots for both original servers and the local Qagame. */
 static qhandle_t statusShield, statusFlak, statusHelmet, statusBinoculars;
 static qhandle_t statusUniformAxis, statusUniformAllies;
 
@@ -490,25 +487,25 @@ void CG_NitmodDrawActivePowerups(void) {
     const playerState_t *ps;
     nitmodHudAnchor_t previous;
     int disguiseClass;
-    if(!cg.snap || !NITMOD_UsesOriginalProtocol()) return;
+    if(!cg.snap || !NITMOD_UsesNitmodHud()) return;
     ps = &cg.snap->ps;
     previous = CG_NitmodHudAnchor(NITMOD_HUD_RIGHT);
     trap_R_SetColor(NULL);
-    if(ps->powerups[5] || ps->powerups[6]) {
+    if(ps->powerups[PW_REDFLAG] || ps->powerups[PW_BLUEFLAG]) {
         CG_DrawPic(600, 390, 15, 15, cgs.media.objectiveShader);
-    } else if(ps->powerups[7]) {
+    } else if(ps->powerups[PW_OPS_DISGUISED]) {
         CG_DrawPic(580, 390, 15, 15,
-            ps->persistant[7] == TEAM_AXIS ? statusUniformAllies : statusUniformAxis);
-        disguiseClass = (ps->powerups[8] != 0) | ((ps->powerups[9] != 0) << 1) |
-            ((ps->powerups[10] != 0) << 2);
+            ps->persistant[PERS_TEAM] == TEAM_AXIS ? statusUniformAllies : statusUniformAxis);
+        disguiseClass = (ps->powerups[PW_OPS_CLASS_1] != 0) | ((ps->powerups[PW_OPS_CLASS_2] != 0) << 1) |
+            ((ps->powerups[PW_OPS_CLASS_3] != 0) << 2);
         if(disguiseClass < NUM_PLAYER_CLASSES)
             CG_DrawStringExt(578, 390, BG_ShortClassnameForNumber(disguiseClass),
                 colorWhite, qfalse, qtrue, 4, 12, 0);
     }
     if(ps->stats[1] & 64) CG_DrawPic(560, 409, 15, 15, statusBinoculars);
     if(!(ps->eFlags & EF_HEADSHOT)) CG_DrawPic(580, 410, 15, 15, statusHelmet);
-    if(ps->powerups[1] || ps->powerups[2])
-        CG_DrawPic(600, 409, 15, 15, ps->powerups[1] ? statusShield : statusFlak);
+    if(ps->powerups[PW_INVULNERABLE] || ps->powerups[PW_FIRE])
+        CG_DrawPic(600, 409, 15, 15, ps->powerups[PW_INVULNERABLE] ? statusShield : statusFlak);
     trap_R_SetColor(NULL);
     CG_NitmodHudAnchor(previous);
 }

@@ -1,10 +1,16 @@
 #include "g_local.h"
+#include "g_nitmod_restrictions.h"
+#include "../../pak/ui/menudef.h"
 #include "g_nitmod_admin.h"
 #include "g_nitmod_accounts.h"
 #include "g_nitmod_database.h"
 #include "g_nitmod_config.h"
 #include "g_nitmod_records.h"
 #include "g_nitmod_legacy_cvars.h"
+#include "nitmod_admin_commands.h"
+#include "nitmod_lua_events.h"
+#include "../sqlite/sqlite3.h"
+#include <time.h>
 typedef struct { int number; char name[36],flags[1024],gtext[1024],gsound[1024]; } adminLevel_t;
 static adminLevel_t levels[64];
 static int levelCount,levelsReady;
@@ -183,16 +189,37 @@ static const char *Duration(unsigned int seconds) {
     while(unit<6 && seconds>=divisors[unit+1]) ++unit;
     return va("%u %s",seconds/divisors[unit],units[unit]);
 }
-static int Target(const char *text) {
-    int n,i,found=-1; char needle[MAX_NAME_LENGTH],name[MAX_NAME_LENGTH];
-    if(Number(text,&n)) return n<MAX_CLIENTS && g_entities[n].client && g_entities[n].client->pers.connected!=CON_DISCONNECTED?n:-1;
+static int Targets(const char *text,int *matches) {
+    int n,i,count=0; char needle[MAX_NAME_LENGTH],name[MAX_NAME_LENGTH];
+    if(Number(text,&n)) {
+        if(n<MAX_CLIENTS && g_entities[n].client && g_entities[n].client->pers.connected!=CON_DISCONNECTED) { matches[0]=n;return 1; }
+        return 0;
+    }
     Q_strncpyz(needle,text,sizeof(needle)); Q_CleanStr(needle); Q_strlwr(needle);
-    if(!*needle) return -1;
+    if(!*needle) return 0;
     for(i=0;i<MAX_CLIENTS;++i) if(g_entities[i].client && g_entities[i].client->pers.connected!=CON_DISCONNECTED) {
         Q_strncpyz(name,g_entities[i].client->pers.netname,sizeof(name)); Q_CleanStr(name); Q_strlwr(name);
-        if(strstr(name,needle)) { if(found>=0) return -1; found=i; }
+        if(strstr(name,needle)) matches[count++]=i;
     }
-    return found;
+    return count;
+}
+static int Target(const char *text) {
+    int matches[MAX_CLIENTS];return Targets(text,matches)==1?matches[0]:-1;
+}
+static int FlingClient(gentity_t *ent,int mode) {
+    vec3_t direction;
+    if(!ent || !ent->client || ent->health<=0) return 0;
+    if(mode==0) {
+        direction[0]=(((rand()&32767)/32767.0f)-0.5f)*100.0f;
+        direction[1]=(((rand()&32767)/32767.0f)-0.5f)*100.0f;
+        direction[2]=10.0f;
+    } else if(mode==1) {
+        AngleVectors(ent->client->ps.viewangles,direction,NULL,NULL);direction[2]=0.25f;
+    } else VectorSet(direction,0,0,10);
+    VectorNormalize(direction);
+    VectorMA(ent->s.pos.trDelta,1500,direction,ent->s.pos.trDelta);
+    VectorMA(ent->client->ps.velocity,1500,direction,ent->client->ps.velocity);
+    return 1;
 }
 static int PenaltyStore(const nitmodDatabasePenalty_t *penalty,int mute,int add) {
     int length,ok; void *before=NITMOD_DBExport(&length); if(!before) return 0;
@@ -497,16 +524,119 @@ static int UserCommand(int n,const char *command,int argc,char args[][1024]) {
     else Print(n,va("^xuseredit: ^7%s ^9updated\n",account.user.name));
     return 1;
 }
-static int SupportedAdminCommand(const char *cursor) { return !(Q_stricmp(cursor,"setlevel") && Q_stricmp(cursor,"admintest") && Q_stricmp(cursor,"records") &&
+
+typedef struct { char name[64],exec[1024],description[1024]; int levels[64],levelCount; } customCommand_t;
+static customCommand_t customCommands[128];
+static int customCommandCount;
+int G_NITMOD_LoadAdminCommands(void) {
+    static const char initial[]="**********\nname = minbots\nexec = bot minbots [1]\ndesc = Sets the minimum number of bots on the server\nlevels = 1 2\n**********\nname = maxbots\nexec = bot maxbots [1]\ndesc = Sets the maximum number of bots on the server\nlevels = 1 2\n";
+    fileHandle_t f=0; int length,i,count=0,ok=0; char *buffer=NULL,*cursor,*token;
+    customCommand_t *next=NULL,*current=NULL;
+    const char *filename="commands.db";
+    customCommandCount=0;
+    length=trap_FS_FOpenFile(filename,&f,FS_READ);
+    if(length<0 && !f) {
+        trap_FS_FOpenFile("commands.db",&f,FS_WRITE);
+        if(!f) return 0;
+        i=trap_FS_Write(initial,sizeof(initial)-1,f);trap_FS_FCloseFile(f);f=0;
+        if(i!=sizeof(initial)-1 || !LevelFileMatches("commands.db",initial,sizeof(initial)-1)) return 0;
+        length=trap_FS_FOpenFile("commands.db",&f,FS_READ);
+    }
+    if(!f || length<0 || length>1048576) { if(f) trap_FS_FCloseFile(f);return 0; }
+    buffer=malloc(length+1);next=calloc(128,sizeof(*next));
+    if(!buffer || !next) goto done;
+    trap_FS_Read(buffer,length,f);buffer[length]=0;cursor=buffer;
+    if(length>=3 && (unsigned char)buffer[0]==0xef && (unsigned char)buffer[1]==0xbb && (unsigned char)buffer[2]==0xbf) cursor+=3;
+    while(*cursor) {
+        char *line=cursor,*end,*equal,*key,*value;
+        while(*cursor && *cursor!='\n') ++cursor;
+        if(*cursor) *cursor++=0;
+        while(*line==' ' || *line=='\t' || *line=='\r') ++line;
+        end=line+strlen(line);
+        while(end>line && (end[-1]==' ' || end[-1]=='\t' || end[-1]=='\r')) *--end=0;
+        if(!*line || *line=='#' || !strncmp(line,"//",2)) continue;
+        if(!strcmp(line,"**********") || !strcmp(line,"---")) { current=NULL;continue; }
+        equal=strchr(line,'=');if(!equal) goto done;
+        *equal=0;key=line;end=equal;
+        while(end>key && (end[-1]==' ' || end[-1]=='\t')) *--end=0;
+        value=equal+1;while(*value==' ' || *value=='\t') ++value;
+        if(strlen(value)>=1024) goto done;
+        if(strcmp(key,"exec") && value[0]=='"' && strlen(value)>1 && value[strlen(value)-1]=='"') { value[strlen(value)-1]=0;++value; }
+        if(!strcmp(key,"name") && (!current || *current->name)) {
+            if(count==128) goto done;current=&next[count++];
+        }
+        if(!current) goto done;
+        if(!strcmp(key,"name")) {
+            if(strlen(value)>=sizeof(current->name) || strpbrk(value," \t\r\n;\"")) goto done;
+            Q_strncpyz(current->name,value,sizeof(current->name));Q_strlwr(current->name);
+        } else if(!strcmp(key,"exec")) Q_strncpyz(current->exec,value,sizeof(current->exec));
+        else if(!strcmp(key,"desc")) Q_strncpyz(current->description,value,sizeof(current->description));
+        else if(!strcmp(key,"levels")) {
+            char *v=value,*separator;current->levelCount=0;
+            for(separator=value;*separator;++separator) if(*separator==',') *separator=' ';
+            while(*(token=COM_Parse(&v))) {
+                int number;if(current->levelCount==64 || !Number(token,&number)) goto done;
+                current->levels[current->levelCount++]=number;
+            }
+        } else goto done;
+    }
+    for(i=0;i<count;++i) { int j;if(!*next[i].name || !*next[i].exec) goto done;for(j=0;j<i;++j) if(!strcmp(next[i].name,next[j].name)) goto done; }
+    memcpy(customCommands,next,sizeof(customCommands));customCommandCount=count;ok=1;
+done:
+    trap_FS_FCloseFile(f);free(buffer);free(next);
+    if(!ok) G_Printf("[Admin] Invalid %s; custom commands disabled\n",filename);
+    else G_Printf("[Admin] Loaded %d custom commands from %s\n",count,filename);
+    return ok;
+}
+static int CustomAllowed(int n,int index) {
+    int i,number;
+    if(NITMOD_DBUserCount()<0 || !levelsReady) return 0;
+    number=G_NITMOD_AdminLevel(n);
+    if(n<0) return 1;
+    for(i=0;i<customCommands[index].levelCount;++i) if(customCommands[index].levels[i]==number) return 1;
+    return 0;
+}
+/* Exact custom names take priority, then exact builtins; abbreviations must
+ * be unique across the entire original table, even for unported handlers. */
+static const char *ResolveAdminCommand(const char *name,int *custom) {
+    int i,matches=0;const char *found=NULL;size_t length=strlen(name);*custom=-1;
+    if(!length) return NULL;
+    for(i=0;i<customCommandCount;++i) if(!Q_stricmp(name,customCommands[i].name)) { *custom=i;return customCommands[i].name; }
+    for(i=0;i<78;++i) if(!Q_stricmp(name,nitmodAdminCommands[i].name)) return nitmodAdminCommands[i].name;
+    for(i=0;i<78;++i) if(!Q_stricmpn(name,nitmodAdminCommands[i].name,length)) { ++matches;found=nitmodAdminCommands[i].name; }
+    for(i=0;i<customCommandCount;++i) if(!Q_stricmpn(name,customCommands[i].name,length)) { ++matches;found=customCommands[i].name;*custom=i; }
+    return matches==1?found:NULL;
+}
+static int ExecuteCustom(int n,int index,int argc,char args[][1024]) {
+    static char expanded[16384],output[16384];const char *p;int used=0;
+    if(!CustomAllowed(n,index)) { Print(n,va("^x%s: ^1Permission denied\n",customCommands[index].name));return 1; }
+    G_NITMOD_ExpandCommandShortcuts(n>=0?&g_entities[n]:NULL,customCommands[index].exec,expanded,sizeof(expanded));
+    for(p=expanded;*p;) {
+        char value[36];const char *v=NULL;
+        if(p[0]=='[' && p[1]>='1' && p[1]<='9' && p[2]==']') {
+            int arg=p[1]-'0';Q_strncpyz(value,arg<argc?args[arg]:"",sizeof(value));v=value;p+=3;
+        } else if(n>=0 && !strncmp(p,"[i]",3)) { Com_sprintf(value,sizeof(value),"%d",n);v=value;p+=3; }
+        if(v) {
+            for(;*v;++v) {
+                /* Argument substitutions are data, never extra console commands. */
+                if(*v==';' || *v=='\n' || *v=='\r' || *v=='"' || *v=='\\') continue;
+                if(used>=sizeof(output)-2) goto overflow;output[used++]=*v;
+            }
+        } else { if(used>=sizeof(output)-2) goto overflow;output[used++]=*p++; }
+    }
+    output[used++]='\n';output[used]=0;trap_SendConsoleCommand(EXEC_APPEND,output);return 1;
+overflow:
+    Print(n,"^1Custom command expansion is too long\n");return 1;
+}
+static int SupportedAdminCommand(const char *cursor) { if(!Q_stricmp(cursor,"glow") || !Q_stricmp(cursor,"give") || !Q_stricmp(cursor,"pants") || !Q_stricmp(cursor,"listplayers") || !Q_stricmp(cursor,"blind") || !Q_stricmp(cursor,"unblind") || !Q_stricmp(cursor,"stats") || !Q_stricmp(cursor,"nade") || !Q_stricmp(cursor,"pip") || !Q_stricmp(cursor,"pop") || !Q_stricmp(cursor,"disguise") || !Q_stricmp(cursor,"medpack") || !Q_stricmp(cursor,"ammopack") || !Q_stricmp(cursor,"warn") || !Q_stricmp(cursor,"finger") || !Q_stricmp(cursor,"about") || !Q_stricmp(cursor,"slap") || !Q_stricmp(cursor,"burn") || !Q_stricmp(cursor,"poison") || !Q_stricmp(cursor,"fling") || !Q_stricmp(cursor,"throw") || !Q_stricmp(cursor,"launch") || !Q_stricmp(cursor,"revive") || !Q_stricmp(cursor,"disorient") || !Q_stricmp(cursor,"orient") || !Q_stricmp(cursor,"kick") || !Q_stricmp(cursor,"news") || !Q_stricmp(cursor,"gibme") || !Q_stricmp(cursor,"splat") || !Q_stricmp(cursor,"splata") || !Q_stricmp(cursor,"lock") || !Q_stricmp(cursor,"unlock") || !Q_stricmp(cursor,"rename") || !Q_stricmp(cursor,"freeze") || !Q_stricmp(cursor,"unfreeze")) return 1; return !(Q_stricmp(cursor,"time") && Q_stricmp(cursor,"uptime") && Q_stricmp(cursor,"cancelvote") && Q_stricmp(cursor,"passvote") && Q_stricmp(cursor,"nextmap") && Q_stricmp(cursor,"panzerwar") && Q_stricmp(cursor,"sniperwar") && Q_stricmp(cursor,"crazygravity") && Q_stricmp(cursor,"help") && Q_stricmp(cursor,"pause") && Q_stricmp(cursor,"unpause") && Q_stricmp(cursor,"shuffle") && Q_stricmp(cursor,"swap") && Q_stricmp(cursor,"swap_restart") && Q_stricmp(cursor,"restart") && Q_stricmp(cursor,"reset") && Q_stricmp(cursor,"put") && Q_stricmp(cursor,"spec") && Q_stricmp(cursor,"spec999") && Q_stricmp(cursor,"setlevel") && Q_stricmp(cursor,"admintest") && Q_stricmp(cursor,"records") &&
        Q_stricmp(cursor,"readconfig") && Q_stricmp(cursor,"dbsave") && Q_stricmp(cursor,"ban") && Q_stricmp(cursor,"banguid") &&
        Q_stricmp(cursor,"mute") && Q_stricmp(cursor,"unmute") && Q_stricmp(cursor,"unban") && Q_stricmp(cursor,"showbans") &&
        Q_stricmp(cursor,"userlist") && Q_stricmp(cursor,"userinfo") && Q_stricmp(cursor,"useredit") && Q_stricmp(cursor,"userdelete") && Q_stricmp(cursor,"seen") &&
        Q_stricmp(cursor,"levadd") && Q_stricmp(cursor,"levdelete") && Q_stricmp(cursor,"levlist") && Q_stricmp(cursor,"levinfo") && Q_stricmp(cursor,"levedit") && Q_stricmp(cursor,"delrecords") && Q_stricmp(cursor,"resetxp") && Q_stricmp(cursor,"resetmyxp")); }
 int G_NITMOD_AdminCommand(int n,const char *command) {
     static char args[16][1024]; /* engine command dispatch is single threaded */
-    char *cursor,*token; int argc=0,i,target,number; nitmodDatabaseAccount_t account,actor;
-    if(n<0 && !SupportedAdminCommand(*command=='!'?command+1:command)) return 0;
-    if(!Q_stricmp(command,"say")) {
+    char *cursor,*token; int argc=0,i,target,number,custom; const char *resolved; nitmodDatabaseAccount_t account,actor;
+    if(!Q_stricmp(command,"say") || ((!Q_stricmp(command,"say_team") || !Q_stricmp(command,"say_buddy")) && G_NITMOD_AdminPrivilege(n,"teamcmds"))) {
         char text[MAX_STRING_CHARS],part[MAX_STRING_CHARS]; text[0]=0;
         for(i=1;i<trap_Argc();++i) { trap_Argv(i,part,sizeof(part)); if(i>1) Q_strcat(text,sizeof(text)," "); Q_strcat(text,sizeof(text),part); }
         if(text[0]!='!') return 0;
@@ -518,8 +648,624 @@ int G_NITMOD_AdminCommand(int n,const char *command) {
     }
     if(!argc) return 0;
     cursor=args[0]; if(*cursor=='!') ++cursor; Q_strlwr(cursor);
+    resolved=ResolveAdminCommand(cursor,&custom);if(!resolved) return 0;
+    if(custom>=0) return ExecuteCustom(n,custom,argc,args);
+    cursor=(char *)resolved;
     if(!SupportedAdminCommand(cursor)) return 0;
     if(!G_NITMOD_AdminAllowed(n,cursor)) { Print(n,va("^x%s: ^1Permission denied\n",cursor)); return 1; }
+
+    if(!strcmp(cursor,"glow")) {
+        int all,j,count,changed=0;
+        if(argc<2) { Print(n,"^9usage: ^g!glow [name|slot#|-1]^7\n");return 1; }
+        all=!strcmp(args[1],"-1");target=all?-1:Target(args[1]);
+        if(!all && target<0) { Print(n,"^1glow: ^9No unique player\n");return 1; }
+        count=all?level.numNonSpectatorClients:1;if(count>MAX_CLIENTS) count=MAX_CLIENTS;
+        for(j=0;j<count;++j) {
+            gclient_t *client;if(all) target=level.sortedClients[j];
+            if(target<0 || target>=MAX_CLIENTS || !g_entities[target].client) continue;
+            client=g_entities[target].client;
+            if(n>=0 && G_NITMOD_AdminLevel(n)<G_NITMOD_AdminLevel(target)) { if(!all) Print(n,"^1glow error: ^9Specified player has a higher admin level than you do.^7\n");continue; }
+            if(!all && client->sess.sessionTeam!=TEAM_AXIS && client->sess.sessionTeam!=TEAM_ALLIES) { Print(n,"^1glow error: ^9player must be on a team^7\n");return 1; }
+            if(all && client->nitmodGlowing) continue;
+            client->nitmodGlowing=all?qtrue:!client->nitmodGlowing;G_NITMOD_UpdateAdminGlow(&g_entities[target]);++changed;
+            if(!all) trap_SendServerCommand(-1,va("cpm \"^xglow: ^7%s ^9%s^7\"",client->pers.netname,client->nitmodGlowing?"is now glowing":"stopped glowing"));
+        }
+        if(all) trap_SendServerCommand(-1,va("cpm \"^xglow: %d ^9players are now glowing^7\"",changed));
+        return 1;
+    }
+
+    if(!strcmp(cursor,"give")) {
+        char name[1024],arg[1024],extra[1024];int war=G_NITMOD_ConfiguredWarMode();
+        if(argc<2) { Print(n,"^9usage: ^g!give [name|slot#] [item] [args]^7\n");return 1; }
+        if(war>=1 && war<=4) { Print(n,"^1give error: ^9Not allowed during panzerwar/sniperwar !^7\n");return 1; }
+        target=Target(args[1]);if(target<0) { Print(n,"^1give: ^9No unique player\n");return 1; }
+        name[0]=arg[0]=extra[0]=0;
+        for(i=2;i<argc;++i) { if(i>2) Q_strcat(name,sizeof(name)," ");Q_strcat(name,sizeof(name),args[i]); }
+        for(i=3;i<argc;++i) { if(i>3) Q_strcat(arg,sizeof(arg)," ");Q_strcat(arg,sizeof(arg),args[i]); }
+        for(i=4;i<argc;++i) { if(i>4) Q_strcat(extra,sizeof(extra)," ");Q_strcat(extra,sizeof(extra),args[i]); }
+        G_NITMOD_ExecGive(&g_entities[target],name,arg,extra);return 1;
+    }
+
+    if(!strcmp(cursor,"pants")) {
+        int all,j,count,changed=0;
+        if(argc<2) { Print(n,"^9usage: ^g!pants [name|slot#|-1]^7\n");return 1; }
+        all=!strcmp(args[1],"-1");target=all?-1:Target(args[1]);
+        if(!all && target<0) { Print(n,"^1pants: ^9No unique player\n");return 1; }
+        count=all?level.numNonSpectatorClients:1;if(count>MAX_CLIENTS) count=MAX_CLIENTS;
+        for(j=0;j<count;++j) {
+            gclient_t *client;if(all) target=level.sortedClients[j];
+            if(target<0 || target>=MAX_CLIENTS || !g_entities[target].client) continue;
+            client=g_entities[target].client;
+            if(n>=0 && G_NITMOD_AdminLevel(n)<G_NITMOD_AdminLevel(target)) { if(!all) Print(n,"^1pants error: ^9Specified player has a higher admin level than you do.^7\n");continue; }
+            if(client->ps.eFlags & NITMOD_EF_STRIPPED) { if(!all) Print(n,"^1pants error: ^9Player is already stripped^7\n");continue; }
+            if(!all && client->sess.sessionTeam!=TEAM_AXIS && client->sess.sessionTeam!=TEAM_ALLIES) { Print(n,"^1pants error: ^9Player must be on a team^7\n");return 1; }
+            if(all?g_entities[target].health<=0:g_entities[target].health==0) { if(!all) Print(n,"^1pants error: ^9Player must be alive^7\n");continue; }
+            client->ps.eFlags|=NITMOD_EF_STRIPPED;++changed;
+            if(!all) trap_SendServerCommand(-1,va("cpm \"^xpants: ^7%s ^9was stripped^7\"",client->pers.netname));
+        }
+        if(all) trap_SendServerCommand(-1,va("cpm \"^xpants: %d ^9players stripped^7\"",changed));
+        return 1;
+    }
+
+    if(!strcmp(cursor,"listplayers")) {
+        int team,j,count=level.numConnectedClients;
+        static const char *headings[]={"", "^9----------------------^_AXIS^9-----------------------\n", "^9---------------------^4ALLIES^9----------------------\n", "^9-------------------^xSPECTATORS^9--------------------\n"};
+        if(count<1) { Print(n,"^9No players connected\n");return 1; }
+        if(count>MAX_CLIENTS) count=MAX_CLIENTS;
+        Print(n,"^9  # | L  | NAME                                  \n");
+        for(team=TEAM_AXIS;team<=TEAM_SPECTATOR;++team) {
+            int heading=0;
+            for(j=0;j<count;++j) {
+                gclient_t *client;int displayLevel,muted;
+                target=level.sortedClients[j];if(target<0 || target>=MAX_CLIENTS || !g_entities[target].client) continue;
+                client=g_entities[target].client;if(client->sess.sessionTeam!=team) continue;
+                if(!heading) { Print(n,headings[team]);heading=1; }
+                displayLevel=G_NITMOD_AdminPrivilege(target,"incognito")?0:G_NITMOD_AdminLevel(target);
+                muted=client->sess.muted || G_NITMOD_AccountMuted(target);
+                Print(n,va(" ^%s%2i ^9| ^g%-2i ^9| ^7%s\n",muted?"1":"g",target,displayLevel,client->pers.netname));
+            }
+        }
+        Print(n,"^9-------------------------------------------------\n");
+        Print(n,"^9Info : ^gred slot# = player muted\n");
+        Print(n,va("^x%d ^9players connected\n",level.numConnectedClients));
+        return 1;
+    }
+
+    if(!strcmp(cursor,"blind") || !strcmp(cursor,"unblind")) {
+        int all,j,count,changed=0,blind=!strcmp(cursor,"blind");
+        if(argc<2) { Print(n,va("^9usage: ^g!%s [name|slot#|-1]^7\n",cursor));return 1; }
+        all=!strcmp(args[1],"-1");
+        target=all?-1:Target(args[1]);
+        if(!all && target<0) { Print(n,va("^1%s: ^9No unique player\n",cursor));return 1; }
+        count=all?level.numNonSpectatorClients:1;if(count>MAX_CLIENTS) count=MAX_CLIENTS;
+        for(j=0;j<count;++j) {
+            gclient_t *client;
+            if(all) target=level.sortedClients[j];
+            if(target<0 || target>=MAX_CLIENTS || !g_entities[target].client) continue;
+            client=g_entities[target].client;
+            if((blind || all) && n>=0 && G_NITMOD_AdminLevel(n)<G_NITMOD_AdminLevel(target)) {
+                if(!all) Print(n,va("^1%s error: ^9Specified player has a higher admin level than you.^7\n",cursor));continue;
+            }
+            if(!all && blind && client->sess.sessionTeam==TEAM_SPECTATOR) { Print(n,"^1blind error: ^9Can't blind spectators\n");return 1; }
+            if(!all && client->nitmodBlinded==blind) { Print(n,va("^1%s error: ^7%s ^9is %sblind^7\n",cursor,client->pers.netname,blind?"already ":"not "));return 1; }
+            client->nitmodBlinded=blind;
+            if(blind) client->ps.powerups[PW_BLACKOUT]|=NITMOD_BLACKOUT_ADMIN;
+            else client->ps.powerups[PW_BLACKOUT]&=~NITMOD_BLACKOUT_ADMIN;
+            ++changed;
+            if(!all) trap_SendServerCommand(-1,va("cpm \"^x%s: ^7%s ^9%s\"",cursor,client->pers.netname,blind?"is now blind":"can see again"));
+        }
+        if(all) trap_SendServerCommand(-1,va("cpm \"^x%s: ^7%d ^9players %s^7\"",cursor,changed,blind?"are now blind":"can see again"));
+        return 1;
+    }
+
+    if(!strcmp(cursor,"stats")) {
+        int width=4,j;char clean[MAX_NAME_LENGTH];
+        Print(n,"^xstats: ^9Showing ^gThompson^9 and ^gMP40 ^9stats of all connected players\n");
+        for(j=0;j<level.maxclients && j<MAX_CLIENTS;++j) if(g_entities[j].client && g_entities[j].client->pers.connected==CON_CONNECTED) {
+            Q_strncpyz(clean,g_entities[j].client->pers.netname,sizeof(clean));Q_CleanStr(clean);
+            if((int)strlen(clean)>width) width=strlen(clean);
+        }
+        Print(n,va("^x%*s SHOTS  HITS   ACC  HEAD    HR\n",width,"^gNAME"));
+        for(j=0;j<level.maxclients && j<MAX_CLIENTS;++j) if(g_entities[j].client && g_entities[j].client->pers.connected==CON_CONNECTED) {
+            gclient_t *client=g_entities[j].client;
+            int shots=(int)(client->sess.aWeaponStats[WS_MP40].atts+client->sess.aWeaponStats[WS_THOMPSON].atts);
+            int hits=(int)(client->sess.aWeaponStats[WS_MP40].hits+client->sess.aWeaponStats[WS_THOMPSON].hits);
+            int heads=(int)(client->sess.aWeaponStats[WS_MP40].headshots+client->sess.aWeaponStats[WS_THOMPSON].headshots);
+            float acc=shots>0 && hits>=0?(float)hits*100.0f/shots:0;
+            float hr=hits>0 && heads>=0?(float)heads*100.0f/hits:0;
+            int padded;
+            if(acc>999.9f) acc=999.9f;if(hr>999.9f) hr=999.9f;
+            Q_strncpyz(clean,client->pers.netname,sizeof(clean));Q_CleanStr(clean);
+            padded=width+(int)strlen(client->pers.netname)-(int)strlen(clean);
+            Print(n,va("^7%*s ^2%5i %5i ^%c%5.1f ^2%5i ^%c%5.1f\n",padded,client->pers.netname,shots,hits,acc>=40?'1':acc>=30?'3':'2',(double)acc,heads,hr>=12.5f?'1':hr>=7.5f?'3':'2',(double)hr));
+        }
+        return 1;
+    }
+
+    if(!strcmp(cursor,"nade")) {
+        static int lastNade;
+        int matches[MAX_CLIENTS],count,j,amount=0,all,available,changed=0;
+        char amountText[4];
+        if((long long)level.time-lastNade<600) { Print(n,"^1nade error: ^9denied by entities overflow protection.^7\n");return 1; }
+        lastNade=level.time;
+        if(argc>2) { Q_strncpyz(amountText,args[2],sizeof(amountText));amount=atoi(amountText);if(amount<1) amount=1;else if(amount>16) amount=16; }
+        if(argc<2) { Print(n,"^9usage: ^g!nade [name|slot#|-1] [nades]^7\n");return 1; }
+        all=!strcmp(args[1],"-1");
+        if(all) { count=level.numNonSpectatorClients;if(count>MAX_CLIENTS) count=MAX_CLIENTS;for(j=0;j<count;++j) matches[j]=level.sortedClients[j]; }
+        else count=Targets(args[1],matches);
+        if(!all && !count) { Print(n,"^1nade: ^9No matching player\n");return 1; }
+        available=MAX_GENTITIES-level.num_entities;
+        for(j=MAX_CLIENTS;j<level.num_entities && j<MAX_GENTITIES;++j) if(!g_entities[j].inuse) ++available;
+        if((all || count>1) && available-amount*(all?level.numConnectedClients*2:count*3)<=63) {
+            Print(n,"^1nade error: ^9too many entities, use fewer nades or nade fewer players.^7\n");return 1;
+        }
+        for(j=0;j<count;++j) {
+            target=matches[j];if(target<0 || target>=MAX_CLIENTS || !g_entities[target].client) continue;
+            if(n>=0 && G_NITMOD_AdminLevel(n)<G_NITMOD_AdminLevel(target)) { if(!all) Print(n,"^1nade error: ^9Specified player has a higher admin level than you do.^7\n");continue; }
+            if(!all && (g_entities[target].client->sess.sessionTeam==TEAM_SPECTATOR || (count>1 && g_entities[target].client->sess.sessionTeam!=TEAM_AXIS && g_entities[target].client->sess.sessionTeam!=TEAM_ALLIES))) {
+                Print(n,"^1nade error: ^9Player must be on a team to be naded^7\n");continue;
+            }
+            G_NITMOD_CreateClusterNade(&g_entities[target],all || !amount?1:amount,qtrue);++changed;
+            if(!all) trap_SendServerCommand(-1,va("cpm \"^xnade: ^7%s ^9was naded^7\"",g_entities[target].client->pers.netname));
+        }
+        if(all) trap_SendServerCommand(-1,va("cpm \"^xnade: ^7%d players naded^7\"",changed));
+        return 1;
+    }
+
+    if(!strcmp(cursor,"pop") || !strcmp(cursor,"pip")) {
+        int pip=!strcmp(cursor,"pip");
+        int matches[MAX_CLIENTS],count,j,changed=0,all=argc>1 && !strcmp(args[1],"-1");
+        vec3_t direction={5,5,5};
+        if(all) {
+            count=level.numNonSpectatorClients;if(count>MAX_CLIENTS) count=MAX_CLIENTS;
+            for(j=0;j<count;++j) matches[j]=level.sortedClients[j];
+        } else count=Targets(argc>1?args[1]:"",matches);
+        if(!count && !all) { Print(n,va("^1%s: ^9No matching player\n",cursor));return 1; }
+        for(j=0;j<count;++j) {
+            target=matches[j];if(target<0 || target>=MAX_CLIENTS || !g_entities[target].client) continue;
+            if(n>=0 && G_NITMOD_AdminLevel(n)<G_NITMOD_AdminLevel(target)) {
+                if(!all) Print(n,va("^1%s error: ^9Specified player has a higher admin level than you do.^7\n",cursor));continue;
+            }
+            if(all && !pip) {
+                if(g_entities[target].client->ps.eFlags & EF_HEADSHOT) continue;
+                g_entities[target].client->ps.eFlags|=EF_HEADSHOT;
+            } else if(!all && g_entities[target].client->sess.sessionTeam!=TEAM_AXIS && g_entities[target].client->sess.sessionTeam!=TEAM_ALLIES) {
+                Print(n,va("^1%s error: ^9Player must be on a team^7\n",cursor));continue;
+            }
+            if(pip) {
+                gentity_t *event=G_TempEntity(g_entities[target].r.currentOrigin,EV_NITMOD_LUA_FIRST);
+                event->s.event=NITMOD_LuaEventEncode(61);
+                VectorCopy(g_entities[target].r.currentOrigin,event->s.origin);event->s.origin[2]-=6;
+                VectorCopy(g_entities[target].r.currentAngles,event->s.angles);
+                event->s.density=5000;event->s.frame=6000;
+                VectorSet(event->s.angles2,18,18,0.5f);
+            } else G_AddEvent(&g_entities[target],EV_LOSE_HAT,DirToByte(direction));
+            ++changed;
+            if(!all) trap_SendServerCommand(-1,va("cpm \"^x%s: ^7%s ^9was %s'd^7\"",cursor,g_entities[target].client->pers.netname,cursor));
+        }
+        if(all) trap_SendServerCommand(-1,va("cpm \"^x%s: %d ^9players %s'd\"",cursor,changed,cursor));
+        return 1;
+    }
+
+    if(!strcmp(cursor,"disguise")) {
+        gclient_t *client;long disguise;
+        if(argc<3) { Print(n,"^9usage: ^g!disguise [name|slot#] [class]^7\n");return 1; }
+        target=Target(args[1]);if(target<0) { Print(n,"^1disguise: ^9No unique player\n");return 1; }
+        client=g_entities[target].client;
+        if(client->sess.sessionTeam!=TEAM_AXIS && client->sess.sessionTeam!=TEAM_ALLIES) { Print(n,"^1disguise error: ^9Player must be on a team.^7\n");return 1; }
+        disguise=strtol(args[2],NULL,10);if(disguise < -1) disguise=-1;else if(disguise>4) disguise=4;
+        if(!Q_stricmpn(args[2],"m",1)) disguise=PC_MEDIC;
+        else if(!Q_stricmpn(args[2],"e",1)) disguise=PC_ENGINEER;
+        else if(!Q_stricmpn(args[2],"f",1)) disguise=PC_FIELDOPS;
+        else if(!Q_stricmpn(args[2],"c",1)) disguise=PC_COVERTOPS;
+        else if(!Q_stricmpn(args[2],"s",1)) disguise=PC_SOLDIER;
+        else if(args[2][0]=='-') disguise=-1;
+        if(disguise==-1) { client->ps.powerups[PW_OPS_DISGUISED]=0;Print(target,"^9givedisguise : ^7Removing disguise\n");return 1; }
+        client->ps.powerups[PW_OPS_DISGUISED]=1;
+        client->ps.powerups[PW_OPS_CLASS_1]=disguise & 1;
+        client->ps.powerups[PW_OPS_CLASS_2]=disguise & 2;
+        client->ps.powerups[PW_OPS_CLASS_3]=disguise & 4;
+        Q_strncpyz(client->disguiseNetname,client->pers.netname,sizeof(client->disguiseNetname));
+        client->disguiseRank=client->sess.rank;
+        Print(target,va("^9givedisguise : ^7%s\n",BG_ClassnameForNumber(disguise)));
+        ClientUserinfoChanged(target);return 1;
+    }
+
+    if(!strcmp(cursor,"medpack") || !strcmp(cursor,"ammopack")) {
+        vec3_t velocity;
+        if(n<0) return 0;
+        velocity[0]=(((rand() & 32767)/32767.0f)-0.5f)*200.0f;
+        velocity[1]=(((rand() & 32767)/32767.0f)-0.5f)*200.0f;
+        velocity[2]=G_NITMOD_LegacyCvarInteger("g_throwDistance",75);
+        if(!strcmp(cursor,"medpack")) Weapon_MedicAdmin(&g_entities[n],g_entities[n].r.currentOrigin,velocity);
+        else Weapon_MagicAmmoAdmin(&g_entities[n],g_entities[n].r.currentOrigin,velocity);
+        return 1;
+    }
+
+    if(!strcmp(cursor,"warn")) {
+        char reason[1024];
+        if(argc<3) { Print(n,"^9usage: ^g!warn [name|slot#] [reason]^7\n");return 1; }
+        target=Target(args[1]);if(target<0) { Print(n,"^1warn: ^9No unique player\n");return 1; }
+        if(n>=0 && G_NITMOD_AdminLevel(n)<G_NITMOD_AdminLevel(target)) { Print(n,"^1warn error: ^9Specified player has a higher admin level than you do.^7\n");return 1; }
+        reason[0]=0;for(i=2;i<argc;++i) { if(i>2) Q_strcat(reason,sizeof(reason)," ");Q_strcat(reason,sizeof(reason),args[i]); }
+        nitmod_Sound_Global(12);
+        trap_SendServerCommand(-1,va("cpm \"^xwarn: ^7%s ^9was warned^7\"",g_entities[target].client->pers.netname));
+        trap_SendServerCommand(target,va("cp \"^7%s ^xwarned ^9you because:\n^x%s\"",n<0?"^3SERVER CONSOLE":g_entities[n].client->pers.netname,reason));return 1;
+    }
+
+    if(!strcmp(cursor,"finger")) {
+        char info[MAX_INFO_STRING],value[256];int hasAccount;gclient_t *client;
+        if(argc!=2) { Print(n,"^9usage: ^g!finger [name|slot#]\n");return 1; }
+        target=Target(args[1]);if(target<0) { Print(n,"^1finger: ^9No unique player\n");return 1; }
+        client=g_entities[target].client;hasAccount=G_NITMOD_ClientAccount(target,&account);
+        trap_GetUserinfo(target,info,sizeof(info));
+        Print(n,va("^9Information about ^7%s\n",client->pers.netname));
+        Print(n,va("^9Slot:   ^g%i\n",target));
+        if(client->sess.sessionTeam==TEAM_SPECTATOR) Print(n,va("^9Team:   ^7%s\n",TeamName(TEAM_SPECTATOR)));
+        else Print(n,va("^9Team:   ^7%s ^9(^7%s^9)\n",TeamName(client->sess.sessionTeam),BG_ClassnameForNumber(client->sess.playerType)));
+        Q_strncpyz(value,hasAccount?account.user.guid:Info_ValueForKey(info,"n_guid"),sizeof(value));
+        Print(n,strlen(value)==32?va("^9NGUID:  ^g%s\n",value):"^9NGUID:  ^1INVALID\n");
+        Print(n,va("^9IP:     ^g%s\n",hasAccount?account.ip:Info_ValueForKey(info,"ip")));
+        Print(n,va("^9MAC:    ^g%s\n",hasAccount?account.mac:Info_ValueForKey(info,"mac")));
+        Q_strncpyz(value,Info_ValueForKey(info,"etVersion"),sizeof(value));if(value[0]) Print(n,va("^9Client: ^g%s\n",value));
+        Q_strncpyz(value,Info_ValueForKey(info,"build"),sizeof(value));if(value[0]) Print(n,va("^9Mod build: ^g%s\n",value));
+        if(hasAccount) {
+            Print(n,va("^9Level:  ^g%i^7\n",G_NITMOD_AdminLevel(target)));
+            Print(n,va("^9GText:  ^g%s\n",account.gtext));Print(n,va("^9GAudio: ^g%s\n",account.gsound));
+            if(account.login[0]) Print(n,va("^2Registered user\n^9Username: ^g%s\n",account.login));
+        } else Print(n,"Admin information temporarly unavailable.\n");
+        return 1;
+    }
+
+    if(!strcmp(cursor,"about")) {
+        const char *platform;
+#ifdef __EMSCRIPTEN__
+        platform="wasm32";
+#elif defined(CPUSTRING)
+        platform=CPUSTRING;
+#else
+        platform="unknown";
+#endif
+        Print(n,"^9-- Mod informations\n");
+        Print(n," ^9Version : ^7N^1!^7tmod ^g2.3.5\n");
+        Print(n," ^9Website : ^getmods.net \n");
+        Print(n,va(" ^9Build : ^g%s %s\n",platform,__DATE__));
+        Print(n,va(" ^9SQLite version : ^g%s\n",sqlite3_libversion()));
+        Print(n,"^9-- Dev. Team\n");
+        Print(n," ^7N^1!^7trox^0*^9: ^gProject lead, programmer\n");
+        Print(n," ^hN^7ico^h$^9: ^gProgrammer\n");
+        Print(n," ^77Killer^9: ^gProgrammer\n");return 1;
+    }
+
+    if(!strcmp(cursor,"slap")) {
+        char amount[4];int damage;gentity_t *victim,*event;
+        if(argc<2) { Print(n,"^9usage: ^g!slap [name|slot#] (damage)^7\n");return 1; }
+        Q_strncpyz(amount,argc>2?args[2]:"",sizeof(amount));damage=(int)strtol(amount,NULL,10);if(damage<1) damage=20;
+        target=Target(args[1]);if(target<0) { Print(n,"^1slap: ^9No unique player\n");return 1; }
+        if(n>=0 && G_NITMOD_AdminLevel(n)<G_NITMOD_AdminLevel(target)) { Print(n,"^1slap error: ^9Specified player has a higher admin level than you do.^7\n");return 1; }
+        victim=&g_entities[target];
+        if(victim->client->sess.sessionTeam!=TEAM_AXIS && victim->client->sess.sessionTeam!=TEAM_ALLIES) { Print(n,"^1slap error: ^9Player must be on a team.^7\n");return 1; }
+        if(victim->health<=0 || (victim->client->ps.pm_flags&PMF_LIMBO)) { Print(n,va("^1slap error: ^7%s ^9is dead.^7\n",victim->client->pers.netname));return 1; }
+        victim->health=victim->health>damage?victim->health-damage:1;
+        event=G_TempEntity(victim->client->ps.origin,EV_NITMOD_LUA_FIRST);
+        event->s.event=NITMOD_LuaEventEncode(102);
+        event->s.onFireStart=2;event->r.svFlags=SVF_BROADCAST|SVF_SINGLECLIENT;event->r.singleClient=target;
+        trap_SendServerCommand(-1,va("cpm \"^xslap: ^7%s ^9was slapped^7\"",victim->client->pers.netname));return 1;
+    }
+
+    if(!strcmp(cursor,"burn")) {
+        if(argc<2 || !strcmp(args[1],"-1")) {
+            int affected=0;
+            for(i=0;i<level.numNonSpectatorClients && i<MAX_CLIENTS;++i) {
+                target=level.sortedClients[i];if(target<0 || target>=MAX_CLIENTS || !g_entities[target].client) continue;
+                if(n>=0 && G_NITMOD_AdminLevel(n)<G_NITMOD_AdminLevel(target)) continue;
+                G_BurnMeGood(&g_entities[target],&g_entities[target]);++affected;
+            }
+            trap_SendServerCommand(-1,va("cpm \"^xburn: %d ^9players burned^7\"",affected));return 1;
+        }
+        target=Target(args[1]);if(target<0) { Print(n,"^1burn: ^9No unique player\n");return 1; }
+        if(n>=0 && G_NITMOD_AdminLevel(n)<G_NITMOD_AdminLevel(target)) { Print(n,"^1burn error: ^9Specified player has a higher admin level than you do.^7\n");return 1; }
+        if(g_entities[target].client->sess.sessionTeam!=TEAM_AXIS && g_entities[target].client->sess.sessionTeam!=TEAM_ALLIES) { Print(n,"^1burn error: ^9player must be on a team^7\n");return 1; }
+        G_BurnMeGood(&g_entities[target],&g_entities[target]);
+        trap_SendServerCommand(-1,va("cpm \"^xburn: ^7%s ^9was set ablaze^7\"",g_entities[target].client->pers.netname));return 1;
+    }
+
+    if(!strcmp(cursor,"poison")) {
+        gclient_t *client;
+        if(argc<2) { Print(n,"^9usage: ^g!poison [name|slot#]^7\n");return 1; }
+        target=Target(args[1]);if(target<0) { Print(n,"^1poison: ^9No unique player\n");return 1; }
+        if(n>=0 && G_NITMOD_AdminLevel(n)<G_NITMOD_AdminLevel(target)) { Print(n,"^1poison error: ^9Specified player has a higher admin level than you do.^7\n");return 1; }
+        client=g_entities[target].client;
+        if(client->sess.sessionTeam!=TEAM_AXIS && client->sess.sessionTeam!=TEAM_ALLIES) { Print(n,"^1poison error: ^9Player must be on a team.^7\n");return 1; }
+        client->ps.eFlags|=NITMOD_EF_POISONED;
+        client->nitmodPoisonAttacker=g_entities[target].s.number;
+        client->nitmodPoisonStacks=1;client->nitmodPoisonNextTick=level.time;
+        trap_SendServerCommand(-1,va("cpm \"^xpoison: ^7%s ^9was poisoned^7\"",client->pers.netname));return 1;
+    }
+
+    if(!strcmp(cursor,"fling") || !strcmp(cursor,"throw") || !strcmp(cursor,"launch")) {
+        int mode=!strcmp(cursor,"throw")?1:!strcmp(cursor,"launch")?2:0;
+        int matches[MAX_CLIENTS],count=0,affected=0;const char *verb=mode==1?"thrown":mode==2?"launched":"flung";
+        if(argc>1) {
+            count=Targets(args[1],matches);
+            if(!count) { Print(n,va("^1%s: ^9No matching player\n",cursor));return 1; }
+        } else for(i=0;i<level.numNonSpectatorClients && i<MAX_CLIENTS;++i) matches[count++]=level.sortedClients[i];
+        for(i=0;i<count;++i) {
+            target=matches[i];if(target<0 || target>=MAX_CLIENTS || !g_entities[target].client) continue;
+            if(n>=0 && G_NITMOD_AdminLevel(n)<G_NITMOD_AdminLevel(target)) {
+                if(argc>1 && count==1) Print(n,va("^1%s error: ^7%s ^9has a higher admin level than you.^7\n",cursor,g_entities[target].client->pers.netname));
+                continue;
+            }
+            if(FlingClient(&g_entities[target],mode)) {
+                ++affected;
+                if(argc>1 && count==1) trap_SendServerCommand(-1,va("cpm \"^x%s: ^7%s ^9was %s^7\"",cursor,g_entities[target].client->pers.netname,verb));
+            }
+        }
+        if(argc<2 || count>1) trap_SendServerCommand(-1,va("cpm \"^x%s: %d ^9players %s^7\"",cursor,affected,verb));
+        return 1;
+    }
+
+    if(!strcmp(cursor,"revive")) {
+        target=argc>1?Target(args[1]):-1;
+        if(target<0) { Print(n,"^1revive: ^9No unique player\n");return 1; }
+        if(g_entities[target].client->sess.sessionTeam!=TEAM_AXIS && g_entities[target].client->sess.sessionTeam!=TEAM_ALLIES) { Print(n,va("^1revive error: ^7%s ^9is not in a team.^7\n",g_entities[target].client->pers.netname));return 1; }
+        if(g_entities[target].health>0) { Print(n,va("^1revive error: ^7%s ^9is alive.^7\n\n",g_entities[target].client->pers.netname));return 1; }
+        ReviveEntity(NULL,&g_entities[target]);return 1;
+    }
+
+    if(!strcmp(cursor,"disorient") || !strcmp(cursor,"orient")) {
+        int disorient=!strcmp(cursor,"disorient");gclient_t *client;
+        if(argc<2) { Print(n,va("^9usage: ^g!%s [name|slot#]\n",cursor));return 1; }
+        target=Target(args[1]);if(target<0) { Print(n,va("^1%s: ^9No unique player\n",cursor));return 1; }
+        client=g_entities[target].client;
+        if(disorient) {
+            if(n>=0 && G_NITMOD_AdminLevel(n)<G_NITMOD_AdminLevel(target)) { Print(n,"^1disorient error: ^9Specified player has a higher admin level than you do.\n");return 1; }
+            if(client->sess.sessionTeam!=TEAM_AXIS && client->sess.sessionTeam!=TEAM_ALLIES) { Print(n,"^1disorient error: ^9Player must be on a team\n");return 1; }
+            if(client->nitmodDisoriented) { Print(n,va("^1disorient error: ^7%s ^9is already disoriented\n",client->pers.netname));return 1; }
+        } else {
+            if(!client->nitmodDisoriented) { Print(n,va("^1orient error: ^7%s ^9is not disoriented\n",client->pers.netname));return 1; }
+            if(client->ps.eFlags&NITMOD_EF_POISONED) { Print(n,"^1orient error: ^9Can't orient poisoned players\n");return 1; }
+        }
+        client->nitmodDisoriented=disorient;
+        trap_SendServerCommand(-1,va(disorient?"cpm \"^xdisorient: ^7%s ^9is disoriented\" -1":"cpm \"^xorient: ^7%s ^9is no longer disoriented\"",client->pers.netname));return 1;
+    }
+
+    if(!strcmp(cursor,"kick")) {
+        char reason[1024];int duration;
+        if(argc<(G_NITMOD_AdminAllowed(n,"noreason")?2:3)) { Print(n,"^9usage: ^g!kick [name] [reason]^7\n");return 1; }
+        target=Target(args[1]);if(target<0) { Print(n,"^1kick: ^9No unique player\n");return 1; }
+        if(n>=0 && G_NITMOD_AdminLevel(n)<G_NITMOD_AdminLevel(target)) { Print(n,va("^1kick error: ^7%s ^9is a higher level admin than you are.\n",g_entities[target].client->pers.netname));return 1; }
+        if(g_entities[target].client->pers.localClient && (g_entities[target].r.svFlags&SVF_BOT)) { Print(n,"^1kick error: ^9Can't kick server host.\n");return 1; }
+        reason[0]=0;for(i=2;i<argc;++i) { if(i>2) Q_strcat(reason,sizeof(reason)," ");Q_strcat(reason,sizeof(reason),args[i]); }
+        if(!reason[0]) Q_strncpyz(reason,"^7kicked by admin^7",sizeof(reason));
+        duration=G_NITMOD_LegacyCvarInteger("g_autoTempBanTime",1800);
+        if(G_NITMOD_LegacyCvarInteger("g_autoTempBan",0) && duration) {
+            nitmodDatabasePenalty_t penalty;qtime_t now;int timestamp=trap_RealTime(&now)-946490400;
+            long long expires=(long long)timestamp+duration;
+            if(!G_NITMOD_ClientAccount(target,&account)) {
+                char userinfo[MAX_INFO_STRING];memset(&account,0,sizeof(account));trap_GetUserinfo(target,userinfo,sizeof(userinfo));
+                Q_strncpyz(account.user.guid,Info_ValueForKey(userinfo,"n_guid"),sizeof(account.user.guid));
+                Q_strncpyz(account.ip,Info_ValueForKey(userinfo,"ip"),sizeof(account.ip));
+                Q_strncpyz(account.mac,Info_ValueForKey(userinfo,"mac"),sizeof(account.mac));
+            }
+            if(timestamp<0 || expires<0 || expires>2147483647 || strlen(account.user.guid)!=32) {
+                Print(n,"^1kick error: ^9Cannot create temporary ban\n");
+            } else {
+            memset(&penalty,0,sizeof(penalty));
+            Q_strncpyz(penalty.name,g_entities[target].client->pers.netname,36);
+            Q_strncpyz(penalty.guid,account.user.guid,sizeof(penalty.guid));
+            Q_strncpyz(penalty.ip,account.ip,sizeof(penalty.ip));Q_strncpyz(penalty.mac,account.mac,sizeof(penalty.mac));
+            Q_strncpyz(penalty.actor,"Temp Ban System",sizeof(penalty.actor));
+            Com_sprintf(penalty.reason,sizeof(penalty.reason),"^7You have been kicked, Reason: %s^7",reason);
+            Com_sprintf(penalty.made,sizeof(penalty.made),"%02d/%02d/%02d %02d:%02d:%02d",now.tm_mon+1,now.tm_mday,(now.tm_year+1900)%100,now.tm_hour,now.tm_min,now.tm_sec);
+            penalty.expires=(int)expires;
+            if(!PenaltyStore(&penalty,0,1)) Print(n,"^1kick error: ^9Database write failed\n");
+            }
+        }
+        trap_DropClient(target,va("^7You have been kicked, Reason: %s^7",reason),120);return 1;
+    }
+
+    if(!strcmp(cursor,"news")) {
+        const char *map=argc>1?args[1]:level.rawmapname;
+        G_globalSound(va("sound/vo/%s/news_%s.wav",map,map));return 1;
+    }
+
+    if(!strcmp(cursor,"gibme")) {
+        gentity_t *ent;
+        if(n<0) { Print(n,"^1gibme error: ^9You are on the server console, you can't gib yourself^7\n");return 1; }
+        ent=&g_entities[n];
+        if((ent->client->ps.pm_flags&PMF_LIMBO) || ent->health<=0) { Print(n,"^1gibme error: ^9You must be alive to use this command^7\n");return 1; }
+        if(level.match_pause!=PAUSE_NONE) return 1;
+        if(ent->client->sess.sessionTeam==TEAM_SPECTATOR) { Print(n,"^1gibme error: ^9You must be on a team to use ^g!gibme^7\n");return 1; }
+        G_Damage(ent,ent,ent,NULL,NULL,0,DAMAGE_NO_PROTECTION|DAMAGE_NO_KNOCKBACK,MOD_GIBME);return 1;
+    }
+
+    if(!strcmp(cursor,"splata")) {
+        int affected=0;
+        for(i=0;i<level.numNonSpectatorClients && i<MAX_CLIENTS;++i) {
+            target=level.sortedClients[i];
+            if(target<0 || target>=level.maxclients || !g_entities[target].client) continue;
+            if(n>=0 && G_NITMOD_AdminLevel(n)<G_NITMOD_AdminLevel(target)) continue;
+            G_Damage(&g_entities[target],NULL,NULL,NULL,NULL,0,DAMAGE_NO_PROTECTION|DAMAGE_NO_KNOCKBACK,MOD_UNKNOWN);++affected;
+        }
+        trap_SendServerCommand(-1,va("cpm \"^xsplata: ^7%d ^9players splattered^7\"",affected));return 1;
+    }
+    if(!strcmp(cursor,"splat")) {
+        if(argc<2) { Print(n,"^9usage: ^g!splat ^7[name|slot#]^7\n");return 1; }
+        target=Target(args[1]);if(target<0) { Print(n,"^1splat: ^9No unique player\n");return 1; }
+        if(n>=0 && G_NITMOD_AdminLevel(n)<G_NITMOD_AdminLevel(target)) { Print(n,"^1splat error: ^9Specified player has a higher level admin than you.^7\n");return 1; }
+        if(g_entities[target].client->sess.sessionTeam!=TEAM_AXIS && g_entities[target].client->sess.sessionTeam!=TEAM_ALLIES) { Print(n,"^1splat error: ^9player isn't on a team^7\n");return 1; }
+        G_Damage(&g_entities[target],NULL,NULL,NULL,NULL,0,DAMAGE_NO_PROTECTION|DAMAGE_NO_KNOCKBACK,MOD_UNKNOWN);
+        /* Original sends the feedback only to the invoking player. */
+        if(n>=0) trap_SendServerCommand(n,va("cpm \"^xsplat: ^7%s ^9went splat^7\"",g_entities[target].client->pers.netname));
+        return 1;
+    }
+
+    if(!strcmp(cursor,"lock") || !strcmp(cursor,"unlock")) {
+        int lock=!strcmp(cursor,"lock"),all;char team[4];const char *label;
+        if(argc<2) { Print(n,va("^9usage: ^g!%s [r|b|s|all]^7\n",cursor));return 1; }
+        Q_strncpyz(team,args[1],sizeof(team));all=!Q_stricmp(team,"all");
+        if(!all && Q_stricmp(team,"r") && Q_stricmp(team,"b") && Q_stricmp(team,"s")) {
+            Print(n,va("^9usage: ^g!%s ^7r|b|s|all^7\n",cursor));return 1;
+        }
+        if(all || !Q_stricmp(team,"r")) teamInfo[TEAM_AXIS].team_lock=lock && TeamCount(-1,TEAM_AXIS)!=0;
+        if(all || !Q_stricmp(team,"b")) teamInfo[TEAM_ALLIES].team_lock=lock && TeamCount(-1,TEAM_ALLIES)!=0;
+        if(all || !Q_stricmp(team,"s")) {
+            G_updateSpecLock(TEAM_AXIS,lock && TeamCount(-1,TEAM_AXIS)!=0);
+            G_updateSpecLock(TEAM_ALLIES,lock && TeamCount(-1,TEAM_ALLIES)!=0);
+            if(lock) level.server_settings|=CV_SVS_LOCKSPECS;else level.server_settings&=~CV_SVS_LOCKSPECS;
+        }
+        /* Original updates the teams toggle even for a spectators-only command. */
+        if(lock) level.server_settings|=CV_SVS_LOCKTEAMS;else level.server_settings&=~CV_SVS_LOCKTEAMS;
+        label=all?"All teams":!Q_stricmp(team,"r")?"Axis team":!Q_stricmp(team,"b")?"Allied team":"Spectators";
+        trap_SendServerCommand(-1,va("cpm \"^x%s: ^9%s %sed^7\" -1",cursor,label,cursor));
+        trap_SetConfigstring(CS_SERVERTOGGLES,va("%d",level.server_settings));return 1;
+    }
+
+    if(!strcmp(cursor,"freeze") || !strcmp(cursor,"unfreeze")) {
+        int freeze=!strcmp(cursor,"freeze"),changed=0;
+        if(argc<2) { Print(n,va("^9usage: ^g!%s [name|slot#|-1]^7\n",cursor));return 1; }
+        if(!strcmp(args[1],"-1")) {
+            for(i=0;i<level.numNonSpectatorClients && i<MAX_CLIENTS;++i) {
+                target=level.sortedClients[i];
+                if(target<0 || target>=level.maxclients || !g_entities[target].client) continue;
+                if(n>=0 && G_NITMOD_AdminLevel(n)<G_NITMOD_AdminLevel(target)) continue;
+                if(!!g_entities[target].client->nitmodFrozen==freeze) continue;
+                g_entities[target].client->nitmodFrozen=freeze;++changed;
+            }
+            trap_SendServerCommand(-1,va(freeze?"cpm \"^xfreeze: %d ^9players frozen^7\"":"cpm \"^xunfreeze: %d players unfrozen^7\"",changed));return 1;
+        }
+        target=Target(args[1]);if(target<0) { Print(n,va("^1%s: ^9No unique player\n",cursor));return 1; }
+        if(n>=0 && G_NITMOD_AdminLevel(n)<G_NITMOD_AdminLevel(target)) { Print(n,va("^1%s error: ^9Specified player has a higher admin level than you do.^7\n",cursor));return 1; }
+        if(g_entities[target].client->sess.sessionTeam!=TEAM_AXIS && g_entities[target].client->sess.sessionTeam!=TEAM_ALLIES) { Print(n,va("^1%s error: ^9Player must be on a team^7\n",cursor));return 1; }
+        if(!!g_entities[target].client->nitmodFrozen==freeze) { Print(n,freeze?"^1freeze error: ^9Player is already freezed^7\n":"^1unfreeze error: ^9Player is not freezed^7\n");return 1; }
+        g_entities[target].client->nitmodFrozen=freeze;
+        trap_SendServerCommand(-1,va(freeze?"cpm \"^xfreeze: ^7%s ^9was frozen^7\"":"cpm \"^xunfreeze: ^7%s ^9was unfroze^7\"",g_entities[target].client->pers.netname));return 1;
+    }
+
+    if(!strcmp(cursor,"rename")) {
+        char userinfo[MAX_INFO_STRING],name[MAX_STRING_CHARS];
+        if(argc<3) { Print(n,"^9usage: ^g!rename [name] [newname]^7\n");return 1; }
+        target=Target(args[1]);if(target<0) { Print(n,"^1rename: ^9No unique player\n");return 1; }
+        if(n>=0 && G_NITMOD_AdminLevel(n)<G_NITMOD_AdminLevel(target)) {
+            Print(n,va("^1rename error: ^7%s ^9is a higher level admin than you are.^7\n",g_entities[target].client->pers.netname));return 1;
+        }
+        name[0]=0;
+        for(i=2;i<argc;++i) { if(i>2) Q_strcat(name,sizeof(name)," ");Q_strcat(name,sizeof(name),args[i]); }
+        trap_GetUserinfo(target,userinfo,sizeof(userinfo));
+        trap_SendServerCommand(-1,va("cpm \"^xrename: ^7%s ^9renamed to ^7%s\"",Info_ValueForKey(userinfo,"name"),name));
+        Info_SetValueForKey(userinfo,"name",name);
+        trap_SetUserinfo(target,userinfo);
+        ClientCleanName(name,g_entities[target].client->pers.netname,sizeof(g_entities[target].client->pers.netname));
+        ClientUserinfoChanged(target);return 1;
+    }
+
+
+
+    if(!strcmp(cursor,"time")) {
+        time_t now=time(NULL);struct tm *local=localtime(&now);char text[50];
+        if(now && local && strftime(text,sizeof(text),"%I:%M%p %Z",local)) trap_SendServerCommand(-1,va("chat \"^xtime:^g %s\" -2",text));
+        return 1;
+    }
+    if(!strcmp(cursor,"uptime")) {
+        int seconds=level.time/1000;
+        const char *text=va("^xuptime: ^g%i days, %i hours, %i minutes.",seconds/86400,(seconds%86400)/3600,(seconds%3600)/60);
+        if(n<0) Print(n,va("%s\n",text));else trap_SendServerCommand(n,va("chat \"%s\" -2",text));return 1;
+    }
+    if(!strcmp(cursor,"cancelvote") || !strcmp(cursor,"passvote")) {
+        if(!strcmp(cursor,"passvote")) { level.voteInfo.voteYes=level.numConnectedClients;level.voteInfo.voteNo=0; }
+        else level.voteInfo.voteNo=level.numConnectedClients;
+        CheckVote();Print(n,!strcmp(cursor,"passvote")?"^xpassvote: ^9Current vote has been forced to pass\n":"^xcancelvote: ^9Current vote has been canceled\n");return 1;
+    }
+    if(!strcmp(cursor,"nextmap")) {
+        if(g_gametype.integer==GT_WOLF_CAMPAIGN) {
+            g_campaignInfo_t *campaign=&g_campaigns[level.currentCampaign];
+            if(campaign->current+1<campaign->mapCount) {
+                trap_Cvar_Set("g_currentCampaignMap",va("%d",campaign->current+1));
+                trap_SendConsoleCommand(EXEC_APPEND,va("map %s\n",campaign->mapnames[campaign->current+1]));
+            } else trap_SendConsoleCommand(EXEC_APPEND,"vstr nextcampaign\n");
+        } else if(g_gametype.integer==GT_WOLF_MAPVOTE && (g_mapVoteFlags.integer&16)) {
+            LogExit("Nextmap forced by admin");trap_SendServerCommand(-1,"chat \"^3*** Nextmap forced by admin! Choose a new map! ***\" -2");
+        } else trap_SendConsoleCommand(EXEC_APPEND,"vstr nextmap\n");
+        return 1;
+    }
+    if(!strcmp(cursor,"crazygravity")) {
+        if(argc!=2 || (strcmp(args[1],"0") && strcmp(args[1],"1"))) { Print(n,"usage: crazygravity [0|1]\n");return 1; }
+        trap_Cvar_Set("n_crazyGravity",args[1]);trap_SendServerCommand(-1,args[1][0]=='1'?"cpm \"^xcrazygravity: ^2Enabled !\"":"cpm \"^xcrazygravity: ^1Disabled!\"");return 1;
+    }
+    if(!strcmp(cursor,"panzerwar") || !strcmp(cursor,"sniperwar")) {
+        int mode=!strcmp(cursor,"panzerwar")?1:2,enable,current;
+        const char *display=mode==1?"Panzerwar":"Sniperwar";
+        if(argc<2) { Print(n,va("^9usage : ^g!%s [1|on|0|off]^7\n",cursor));return 1; }
+        if(!Q_stricmp(args[1],"on") || !strcmp(args[1],"1")) enable=1;
+        else if(!Q_stricmp(args[1],"off") || !strcmp(args[1],"0")) enable=0;
+        else return 1;
+        current=G_NITMOD_ConfiguredWarMode();
+        if((enable && current==mode) || (!enable && current!=mode)) { Print(n,va("^1%s error: ^9%s is already %s.^7\n",cursor,display,enable?"enabled":"disabled"));return 1; }
+        trap_Cvar_Set("g_war",enable?va("%d",mode):"0");G_NITMOD_WarModeTouchClients();
+        trap_SendServerCommand(-1,va("cpm \"^x%s: %s !\"",cursor,enable?"^2Enabled":"^1Disabled"));return 1;
+    }
+    if(!strcmp(cursor,"help")) {
+        if(argc>1) {
+            int c;const char *name=ResolveAdminCommand(args[1],&c);
+            if(!name) { Print(n,"^1help: ^9Unknown or ambiguous command\n");return 1; }
+            if(c>=0) {
+                if(!CustomAllowed(n,c)) { Print(n,"^1help: ^9Permission denied\n");return 1; }
+                Print(n,va("^x%s: ^9%s\n",name,customCommands[c].description));return 1;
+            }
+            if(!SupportedAdminCommand(name) || !G_NITMOD_AdminAllowed(n,name)) { Print(n,"^1help: ^9Command unavailable\n");return 1; }
+            for(i=0;i<78;++i) if(!strcmp(name,nitmodAdminCommands[i].name)) {
+                Print(n,va("^x%s: ^9%s\n^9usage: ^g!%s %s\n",name,nitmodAdminCommands[i].description,name,nitmodAdminCommands[i].usage));break;
+            }
+        } else {
+            char listing[512] = "^9";
+            int available=0;
+            for(i=0;i<78;++i) if(SupportedAdminCommand(nitmodAdminCommands[i].name) && G_NITMOD_AdminAllowed(n,nitmodAdminCommands[i].name)) {
+                Q_strcat(listing,sizeof(listing),va("%-12s",nitmodAdminCommands[i].name));
+                if(++available%6==0) { Q_strcat(listing,sizeof(listing),"\n"); Print(n,listing); Q_strncpyz(listing,"^9",sizeof(listing)); }
+            }
+            for(i=0;i<customCommandCount;++i) if(CustomAllowed(n,i)) {
+                Q_strcat(listing,sizeof(listing),va("%-12s",customCommands[i].name));
+                if(++available%6==0) { Q_strcat(listing,sizeof(listing),"\n"); Print(n,listing); Q_strncpyz(listing,"^9",sizeof(listing)); }
+            }
+            if(available%6) { Q_strcat(listing,sizeof(listing),"\n"); Print(n,listing); }
+            Print(n,va("^g%i ^9Commands available\n",available));
+            Print(n,"^9Type !help [command] for help with a specific command.^7\n");
+        }
+        return 1;
+    }
+    if(!strcmp(cursor,"pause") || !strcmp(cursor,"unpause")) { G_refPause_cmd(n>=0?&g_entities[n]:NULL,!strcmp(cursor,"pause"));return 1; }
+    if(!strcmp(cursor,"shuffle")) { G_shuffleTeams();return 1; }
+    if(!strcmp(cursor,"swap")) { G_swapTeams();trap_SendServerCommand(-1,"chat \"^xswap: ^9Teams swapped^7\" -2");return 1; }
+    if(!strcmp(cursor,"swap_restart")) { Svcmd_SwapTeams_f();trap_SendServerCommand(-1,"chat \"^xswap_restart: ^9Teams swapped, match restarting^7\" -2");return 1; }
+    if(!strcmp(cursor,"restart") || !strcmp(cursor,"reset")) { Svcmd_ResetMatch_f(Q_stricmp(args[0],"reset")!=0,qtrue);return 1; }
+    if(!strcmp(cursor,"spec999")) {
+        for(i=0;i<level.maxclients;++i) {
+            gentity_t *e=&g_entities[i];
+            if(e->client && e->client->pers.connected==CON_CONNECTED && e->client->sess.sessionTeam!=TEAM_SPECTATOR && e->client->ps.ping==999) {
+                SetTeam(e,"s",qtrue,-1,-1,qfalse);
+                trap_SendServerCommand(-1,va("cpm \"^xspec999: ^7%s ^9moved to spectators^7\" -1",e->client->pers.netname));
+            }
+        }
+        return 1;
+    }
+    if(!strcmp(cursor,"put") || !strcmp(cursor,"spec")) {
+        int follow=!strcmp(cursor,"spec");
+        if(follow && n<0) return 1;
+        if(argc<(follow?2:3)) { Print(n,follow?"^9usage: ^g!spec ^7[name|slot#]^7\n":"^9usage: ^g!putteam ^7[name] [r|b|s]\n");return 1; }
+        target=Target(args[1]);if(target<0) { Print(n,"^1No unique player\n");return 1; }
+        if(follow) {
+            if(target==n) return 1;
+            if(g_entities[target].client->sess.sessionTeam==TEAM_SPECTATOR) { Print(n,va("^1spec error: ^7%s ^9isn't on a team^7\n",g_entities[target].client->pers.netname));return 1; }
+            if(g_entities[n].client->sess.sessionTeam!=TEAM_SPECTATOR) SetTeam(&g_entities[n],"s",qtrue,-1,-1,qfalse);
+            g_entities[n].client->sess.spectatorState=SPECTATOR_FOLLOW;g_entities[n].client->sess.spectatorClient=target;
+            Print(n,va("^xspec: ^9Now following %s^7\n",g_entities[target].client->pers.netname));
+        } else {
+            if(n>=0 && G_NITMOD_AdminLevel(n)<G_NITMOD_AdminLevel(target)) { Print(n,va("^1putteam error: ^7%s ^9is a higher level admin than you are.\n",g_entities[target].client->pers.netname));return 1; }
+            if(!SetTeam(&g_entities[target],args[2],qtrue,-1,-1,qfalse)) Print(n,"^1putteam error: ^9Put team failed^7\n");
+        }
+        return 1;
+    }
     if(!strcmp(cursor,"resetxp") || !strcmp(cursor,"resetmyxp")) {
         target=!strcmp(cursor,"resetmyxp")?n:argc>1?Target(args[1]):-1;
         if(target<0 || !G_NITMOD_ClientAccount(target,&account)) { Print(n,"^1resetxp error: ^9No unique player\n"); return 1; }
@@ -544,7 +1290,7 @@ int G_NITMOD_AdminCommand(int n,const char *command) {
         NITMOD_DBFreeExport(before); return 1;
     }
     if(!strcmp(cursor,"userlist") || !strcmp(cursor,"userinfo") || !strcmp(cursor,"useredit") || !strcmp(cursor,"userdelete") || !strcmp(cursor,"seen")) return UserCommand(n,cursor,argc,args);
-    if(!strcmp(cursor,"readconfig")) { G_NITMOD_LoadAdminLevels(); return 1; }
+    if(!strcmp(cursor,"readconfig")) { G_NITMOD_LoadAdminLevels(); G_NITMOD_LoadAdminCommands(); return 1; }
     if(!strcmp(cursor,"dbsave")) { if(!G_NITMOD_DatabaseFlush()) Print(n,"^1Database save failed\n"); return 1; }
     if(!strcmp(cursor,"ban") || !strcmp(cursor,"banguid") || !strcmp(cursor,"mute") || !strcmp(cursor,"unmute") ||
        !strcmp(cursor,"unban") || !strcmp(cursor,"showbans")) return PenaltyCommand(n,cursor,argc,args);
@@ -571,4 +1317,10 @@ int G_NITMOD_AdminCommand(int n,const char *command) {
     if(!G_NITMOD_StoreAccount(&account,2)) Print(n,"^1setlevel error: ^9Database write failed\n");
     else Print(n,va("^xsetlevel: ^7%s^9's level set to ^x%d\n",account.user.name,number));
     return 1;
+}
+
+void G_NITMOD_UpdateAdminGlow(gentity_t *ent) {
+    if(!ent || !ent->client) return;
+    if(ent->client->nitmodGlowing) ent->s.time2|=NITMOD_ES_GLOW;
+    else ent->s.time2&=~NITMOD_ES_GLOW;
 }

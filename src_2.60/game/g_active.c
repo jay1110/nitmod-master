@@ -1,3 +1,4 @@
+#include "nitmod_xp_snapshot.h"
 
 #include "g_local.h"
 #include "nitmod_lua_events.h"
@@ -6,6 +7,7 @@
 #include "g_nitmod_air.h"
 #include "g_nitmod_restrictions.h"
 #include "g_nitmod_legacy_cvars.h"
+#include "g_nitmod_integrity.h"
 #include "g_nitmod_config.h"
 #include "g_nitmod_abilities.h"
 #include "nitmod_air.h"
@@ -1068,6 +1070,8 @@ void ClientThink_real( gentity_t *ent ) {
 		return;
 	}
 
+	G_NITMOD_CvarScanThink(ent - g_entities);
+
 	// check for inactivity timer, but never drop the local client of a non-dedicated server
 	// OSP - moved here to allow for spec inactivity checks as well
 	if ( !ClientInactivityTimer( client ) ) {
@@ -1129,7 +1133,7 @@ void ClientThink_real( gentity_t *ent ) {
 	} else if ( client->ps.stats[STAT_HEALTH] <= 0 ) {
 		client->ps.pm_type = PM_DEAD;
 	} else {
-		client->ps.pm_type = PM_NORMAL;
+		client->ps.pm_type = client->nitmodFrozen ? PM_FREEZE : PM_NORMAL;
 	}
 
 	client->ps.aiState = AISTATE_COMBAT;
@@ -1225,7 +1229,7 @@ void ClientThink_real( gentity_t *ent ) {
 	pm.skill = client->sess.skill;
 	pm.nitmodPackChargeEnabled=G_NITMOD_ClientSupports(ent->s.number,NITMOD_FEATURE_PACK_CHARGE);
 	pm.nitmodPackChargeBypass=G_NITMOD_LegacyCvarInteger("g_noCharge",0) ||
-		G_NITMOD_LegacyCvarInteger("g_war",0)==1 || G_NITMOD_LegacyCvarInteger("g_war",0)==3;
+		G_NITMOD_ConfiguredWarMode()==1 || G_NITMOD_ConfiguredWarMode()==3;
 	memcpy(pm.nitmodPackSkillMasks,client->sess.nitmodSkillMasks,sizeof(pm.nitmodPackSkillMasks));
 
 	client->pmext.airleft = NITMOD_AirRemaining( ent->client->airOutTime, level.time );
@@ -1329,6 +1333,7 @@ void ClientThink_real( gentity_t *ent ) {
 	} else {
 		BG_PlayerStateToEntityState( &ent->client->ps, &ent->s, qfalse );
 	}
+	G_NITMOD_UpdateAdminGlow(ent);
 	BG_NITMOD_CopyLeanState(&ent->client->ps, &ent->s);
 
 	if ( !( ent->client->ps.eFlags & EF_FIRING ) ) {
@@ -1813,10 +1818,11 @@ void ClientEndFrame( gentity_t *ent ) {
 
 	// used for informing of speclocked teams.
 	// Zero out here and set only for certain specs
-	ent->client->ps.powerups[PW_BLACKOUT] = 0;
+	ent->client->ps.powerups[PW_BLACKOUT] = ent->client->nitmodBlinded ? NITMOD_BLACKOUT_ADMIN : 0;
 
 	if (( ent->client->sess.sessionTeam == TEAM_SPECTATOR ) || (ent->client->ps.pm_flags & PMF_LIMBO)) { // JPW NERVE
 		SpectatorClientEndFrame( ent );
+		if(ent->client->nitmodBlinded) ent->client->ps.powerups[PW_BLACKOUT] |= NITMOD_BLACKOUT_ADMIN;
 		return;
 	}
 
@@ -1826,6 +1832,7 @@ void ClientEndFrame( gentity_t *ent ) {
 
 			if(	i == PW_FIRE ||				// these aren't dependant on level.time
 				i == PW_ELECTRIC ||
+				i == PW_BLACKOUT ||
 				i == PW_BREATHER ||
 				i == PW_NOFATIGUE ||
 				ent->client->ps.powerups[i] == 0		// OSP
@@ -1850,9 +1857,13 @@ void ClientEndFrame( gentity_t *ent ) {
 			}
 		}
 
-		ent->client->ps.stats[STAT_XP] = 0;
-		for( i = 0; i < SK_NUM_SKILLS; i++ ) {
-			ent->client->ps.stats[STAT_XP] += ent->client->sess.skillpoints[i];
+		{
+			int totalXP = 0;
+			/* Original truncates after each float addition, then splits the
+			 * total so both snapshot stats fit the engine's signed shorts. */
+			for(i = 0; i < SK_NUM_SKILLS; ++i)
+				totalXP = NITMOD_XPInteger((float)totalXP + ent->client->sess.skillpoints[i]);
+			NITMOD_SetSnapshotXP(&ent->client->ps, totalXP);
 		}
 
 		// OSP - If we're paused, make sure other timers stay in sync
@@ -1894,6 +1905,19 @@ void ClientEndFrame( gentity_t *ent ) {
 
 	// burn from lava, etc
 	P_WorldEffects (ent);
+	/* Original ClientEndFrame: apply the roll offset after world effects. */
+	{
+	gclient_t *client=ent->client;
+	if(client->nitmodDisoriented) {
+		if(client->ps.pm_type==PM_DEAD && !(client->ps.eFlags&EF_SPARE0)) return;
+		client->ps.delta_angles[ROLL]=32000;
+		client->ps.viewangles[ROLL]=0;
+		client->nitmodDisorientApplied=qtrue;
+	} else if(client->nitmodDisorientApplied) {
+		client->ps.delta_angles[ROLL]=0;
+		client->nitmodDisorientApplied=qfalse;
+	}
+	}
 
 	// apply all the damage taken this frame
 	P_DamageFeedback (ent);
@@ -1918,6 +1942,7 @@ void ClientEndFrame( gentity_t *ent ) {
 	} else {
 		BG_PlayerStateToEntityState( &ent->client->ps, &ent->s, qfalse );
 	}
+	G_NITMOD_UpdateAdminGlow(ent);
 	BG_NITMOD_CopyLeanState(&ent->client->ps, &ent->s);
 
 	//SendPendingPredictableEvents( &ent->client->ps );

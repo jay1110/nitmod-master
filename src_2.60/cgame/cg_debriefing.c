@@ -1754,7 +1754,7 @@ static qboolean CG_Debriefing_ParsePlayerKillsDeaths( void ) {
 static qboolean CG_Debriefing_ParseWeaponStats( void ) {
 	int i;
 	int count = CG_Debriefing_WeaponStatCount();
-	cg_weaponstats_t next[26] = {0};
+	cg_weaponstats_t next[WS_MAX > 26 ? WS_MAX : 26] = {0};
 
 	if( trap_Argc() != count * 3 + 1 ) return qfalse;
 	for( i = 0; i < count; i++ ) {

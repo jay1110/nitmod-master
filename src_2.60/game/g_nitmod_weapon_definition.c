@@ -10,7 +10,8 @@ static unsigned int pickupDefinitionMask[WP_NUM_WEAPONS];
 static nitmodWeaponOptions_t weaponOptions[WP_NUM_WEAPONS];
 static nitmodWeaponRecoil_t weaponRecoil[WP_NUM_WEAPONS];
 
-/* Original g_weaponScriptsDir is qagame-only: the engine VFS resolves this
+/* Original g_weaponScriptsDir is registered by qagame and sent as InfoKey W.
+ * The engine VFS resolves this
  * relative directory identically from loose mod files or any mounted PK3.
  * An empty/unsafe value deliberately falls back to the stock weapons dir. */
 static const char *G_NITMOD_WeaponScriptsDirectory(void) {
@@ -28,6 +29,7 @@ static const char *G_NITMOD_WeaponScriptsDirectory(void) {
 }
 
 void G_NITMOD_ResetPickupDefinitions(void) {
+    /* Original BG_RegisterWeapon clears metadata, not ammoTableMP. */
     memset(pickupDefinitionState, 0, sizeof(pickupDefinitionState));
     memset(pickupDefinitionMask, 0, sizeof(pickupDefinitionMask));
     memset(weaponOptions, 0, sizeof(weaponOptions));
@@ -62,6 +64,11 @@ int G_NITMOD_PickupClassMask(int weapon, unsigned int *mask) {
 void G_NITMOD_LoadMapWeaponDefinitions(void) {
     int weapon;
     unsigned int mask;
+    char info[MAX_INFO_STRING] = "";
+    /* Original G_InitGame sends this directory in CS36. The reconstructed
+     * ET layout reserves CS40 so intermission/filter/charge slots stay valid. */
+    Info_SetValueForKey(info, "W", G_NITMOD_WeaponScriptsDirectory());
+    trap_SetConfigstring(CS_NITMOD_INFO, info);
     for(weapon=WP_NONE+1; weapon<WP_NUM_WEAPONS; ++weapon)
         G_NITMOD_PickupClassMask(weapon, &mask);
 }
@@ -190,17 +197,23 @@ static int LoadWeapon( const char *preferred, const char *fallback,
     weaponSource_t source;
     unsigned int next;
     int parsed;
+    const char *loaded = preferred;
     if( !preferred || !*preferred || !mask ) return 0;
     source.handle = trap_PC_LoadSource(preferred);
-    if( !source.handle && fallback && *fallback && strcmp(preferred, fallback) )
+    if( !source.handle && fallback && *fallback && strcmp(preferred, fallback) ) {
         source.handle = trap_PC_LoadSource(fallback);
+        loaded = fallback;
+    }
     if( !source.handle ) return 0;
     if( options ) parsed = NITMOD_ParseWeaponOptions(ReadWeaponToken, &source, alternate, ammo, &next, recoil, options);
     else if( recoil ) parsed = NITMOD_ParseWeaponRecoil(ReadWeaponToken, &source, alternate, ammo, &next, recoil);
     else if( ammo ) parsed = NITMOD_ParseWeaponAmmo(ReadWeaponToken, &source, alternate, ammo, &next);
     else parsed = NITMOD_ParseWeaponClassMask(ReadWeaponToken, &source, alternate, &next);
     trap_PC_FreeSource(source.handle);
-    if( !parsed ) return 0;
+    if( !parsed ) {
+        G_Printf("^3Nitmod: could not parse weapon script %s\n", loaded);
+        return 0;
+    }
     *mask = next;
     return 1;
 }

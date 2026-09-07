@@ -61,7 +61,7 @@
 #define	GIANT_WIDTH			32
 #define	GIANT_HEIGHT		48
 
-#define	NUM_CROSSHAIRS		10
+#define	NUM_CROSSHAIRS		16
 
 // Ridah, trails
 #define	STYPE_STRETCH	0
@@ -634,7 +634,7 @@ typedef struct weaponInfo_s {
 	int spreadScaleAdd, spreadScaleAddRand;
 	float spreadRatio;
 	int velocityToSpread, viewChangeToSpread;
-	char killMessage[64], killMessage2[64];
+	char name[32], killMessage[64], killMessage2[64];
 	int weaponIconScale;
 	vec3_t offset;
 	nitmodWeaponSmoke_t flashSmoke;
@@ -1242,6 +1242,7 @@ typedef struct {
 	qhandle_t	hudAlliedHelmet;
 	qhandle_t	countryFlags;
 	qhandle_t	nitmodHitRegionShaders[6];
+	qhandle_t	nitmodMissileCameraOverlay;
 	qhandle_t	redColorBar;
 	qhandle_t	blueColorBar;
 // jpw
@@ -1806,7 +1807,7 @@ typedef struct cg_weaponstats_s {
 } cg_weaponstats_t;
 
 typedef struct {
-	char strWS[26][MAX_STRING_TOKENS]; // original Nitmod categories
+	char strWS[WS_MAX > 26 ? WS_MAX : 26][MAX_STRING_TOKENS]; // native and original Nitmod categories
 	char strExtra[2][MAX_STRING_TOKENS];
 	char strRank[MAX_STRING_TOKENS];
 	char strSkillz[SK_NUM_SKILLS][MAX_STRING_TOKENS];
@@ -1821,7 +1822,7 @@ typedef struct {
 } gameStats_t;
 
 typedef struct {
-	char strWS[26*2][MAX_STRING_TOKENS]; // original Nitmod topshots: 52 rows
+	char strWS[2 * (WS_MAX > 26 ? WS_MAX : 26)][MAX_STRING_TOKENS]; // two rows per native/original category
 	int cWeapons;
 	int fadeTime;
 	int show;
@@ -2048,7 +2049,7 @@ typedef struct {
 	int					dbLastScoreRequest;
 	int					dbPlayerListOffset;
 	int					dbWeaponListOffset;
-	cg_weaponstats_t	dbWeaponStats[26]; /* Original Nitmod has 26 wire categories. */
+	cg_weaponstats_t	dbWeaponStats[WS_MAX > 26 ? WS_MAX : 26]; /* Native categories and 26 original wire categories. */
 	int				dbHitRegionHits[HR_NUM_HITREGIONS];
 	float				dbHitRegionPercent[HR_NUM_HITREGIONS];
 	int					dbChatMode;
@@ -2537,6 +2538,7 @@ void CG_PositionRotatedEntityOnTag( refEntity_t *entity, const refEntity_t *pare
 void CG_LastWeaponUsed_f(void);		//----(SA)	added
 void CG_NextWeaponInBank_f(void);	//----(SA)	added
 void CG_PrevWeaponInBank_f(void);	//----(SA)	added
+void CG_NitmodMigrateAltWeaponBindings(void);
 void CG_AltWeapon_f(void);
 void CG_NextWeapon_f(void);
 void CG_PrevWeapon_f(void);
@@ -2893,6 +2895,8 @@ void CG_scores_cmd(void);
 void CG_Respawn( qboolean revived );
 void CG_TransitionPlayerState( playerState_t *ps, playerState_t *ops );
 void CG_TransitionPredictedPlayerState(playerState_t *ps, playerState_t *ops);
+void CG_CheckPlayerstateEvents(playerState_t *ps, playerState_t *ops);
+void CG_CheckChangedPredictableEvents(playerState_t *ps);
 
 //
 // cg_atmospheric.c

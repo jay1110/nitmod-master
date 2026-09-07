@@ -9,6 +9,7 @@
 extern "C"
 {
 #include "g_nitmod_etbot_interface.h"
+#include "nitmod_xp_snapshot.h"
 #include "g_nitmod_legacy_cvars.h"
 #include "g_nitmod_etbot_lifecycle.h"
 	qboolean G_IsOnFireteam(int entityNum, fireteamData_t** teamNum);
@@ -4598,7 +4599,7 @@ public:
 					else if(pEnt && pEnt->client && !strcmp(pMsg->m_StatName, "deaths"))
 						pMsg->m_Result = obUserData(pEnt->client->sess.deaths);
 					else if(pEnt && pEnt->client && !strcmp(pMsg->m_StatName, "xp"))
-						pMsg->m_Result = obUserData(pEnt->client->ps.stats[STAT_XP]);
+						pMsg->m_Result = obUserData(NITMOD_SnapshotXP(&pEnt->client->ps));
 				}
 				break;
 			}

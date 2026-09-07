@@ -1,6 +1,7 @@
 #ifndef G_NITMOD_ADMIN_H
 #define G_NITMOD_ADMIN_H
 int G_NITMOD_LoadAdminLevels(void);
+int G_NITMOD_LoadAdminCommands(void);
 int G_NITMOD_AdminAllowed(int clientNum,const char *command);
 int G_NITMOD_AdminCommand(int clientNum,const char *command);
 int G_NITMOD_AdminPrivilege(int clientNum,const char *privilege);

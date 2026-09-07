@@ -361,6 +361,8 @@ extern const unsigned int aReinfSeeds[MAX_REINFSEEDS];
 #define CS_ENDGAME_STATS				37
 #define CS_CHARGETIMES					38
 #define CS_FILTERCAMS					39
+/* Native ET layout equivalent of original Nitmod CS36 (InfoKey W). */
+#define CS_NITMOD_INFO                   40
 
 #define	CS_MODELS						64
 #define	CS_SOUNDS						( CS_MODELS +				MAX_MODELS					)
@@ -689,6 +691,10 @@ typedef enum {
 #define EF_PRONE_MOVING		0x00100000		// player is prone and moving
 #define EF_VIEWING_CAMERA	0x00200000		// player is viewing a camera
 #define NITMOD_EF_POISONED EF_VIEWING_CAMERA
+/* Native PW_BLACKOUT bits 1/2 remain team locks; bit 4 carries admin blind. */
+#define NITMOD_BLACKOUT_ADMIN 4
+#define NITMOD_ES_GLOW 0x40000000 /* Native entityState.time2 flag; low bits remain corpse state. */
+#define NITMOD_EF_STRIPPED EF_SPARE3
 #define EF_AAGUN_ACTIVE		0x00400000		// Gordon: player is manning an AA gun
 #define EF_SPARE0			0x00800000		// Gordon: freed
 
@@ -1108,6 +1114,8 @@ typedef enum {
      * Keep all previous ET event IDs fixed; full eventParm remains available. */
     EV_NITMOD_LUA_FIRST,
     EV_NITMOD_LUA_LAST = EV_NITMOD_LUA_FIRST + 106,
+    /* Authoritative alternate selection; native weapon ID in eventParm. */
+    EV_NITMOD_ALTWEAPON,
     EV_MAX_EVENTS
 } entity_event_t;
 
@@ -1834,6 +1842,8 @@ typedef enum
 	ANIM_ET_RELOADPRONE,
 	ANIM_ET_TALK,
 	ANIM_ET_NOPOWER,
+	ANIM_ET_FIREWEAPON3,
+	ANIM_ET_FIREWEAPON3PRONE,
 
 	NUM_ANIM_EVENTTYPES
 } scriptAnimEventTypes_t;

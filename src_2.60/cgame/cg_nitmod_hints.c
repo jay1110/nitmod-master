@@ -152,7 +152,7 @@ int CG_NitmodCrosshairMaxHealth(int client) {
 int CG_NitmodTripminePresentation(const entityState_t *state, byte rgba[4]) {
     int viewer, local, intensity;
     qboolean caster;
-    if(!state || !rgba || !NITMOD_UsesOriginalProtocol() || !cg.snap) return 0;
+    if(!state || !rgba || !NITMOD_UsesNitmodHud() || !cg.snap) return 0;
     viewer = cg.snap->ps.clientNum; local = cg.clientNum;
     if(viewer < 0 || viewer >= MAX_CLIENTS || local < 0 || local >= MAX_CLIENTS) return 0;
     caster = cgs.clientinfo[local].team == TEAM_SPECTATOR && cgs.clientinfo[local].nitmodShoutcaster;

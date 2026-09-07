@@ -200,8 +200,21 @@ CG_DrawConnectScreen
 ================
 */
 
+/* Original CG_LoadPanel_GameTypeName, ELF 0x7bb40: load-screen labels
+ * differ from the shared menu labels for Co-op and both deathmatch modes. */
 const char* CG_LoadPanel_GameTypeName( gametype_t gt ) {
-	return BG_NitmodGametypeName( (int)gt, qfalse );
+	switch( (int)gt ) {
+	case 0: return "Single Player";
+	case 1: return "Co-op";
+	case 2: return "Objective";
+	case 3: return "Stopwatch";
+	case 4: return "Campaign";
+	case 5: return "Last Man Standing";
+	case 6: return "Map Voting";
+	case 7: return "Team Death Match";
+	case 8: return "Death Match";
+	default: return "Invalid";
+	}
 }
 
 /* Original CG_DrawConnectScreen 0x7bc00 and loadpanelButtons 0x137800.

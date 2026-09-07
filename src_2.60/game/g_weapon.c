@@ -35,21 +35,27 @@ void G_NITMOD_ThrowKnife(gentity_t *ent) {
 	gitem_t *item;
 	gentity_t *knife;
 	vec3_t direction, velocity;
-	float held, speed;
+	float horizontalSpread, verticalSpread, speed;
+	int held;
 
 	if(!ent || !ent->client || ent->s.weapon != WP_KNIFE) return;
 	item = BG_FindItemForWeapon(WP_KNIFE);
 	if(!item) return;
 
 	CalcMuzzlePoints(ent, WP_KNIFE);
-	AngleVectors(ent->client->ps.viewangles, direction, NULL, NULL);
-	direction[0] += crandom() * (G_GetWeaponSpread(WP_KNIFE) / 1000.0f);
-	direction[1] += crandom() * (G_GetWeaponSpread(WP_KNIFE) / 1000.0f);
+	/* Original ThrowKnife aims along forward*16 with spread along right/up,
+	 * then normalizes. The charged hold time is supplied by PM_Weapon. */
+	horizontalSpread = crandom() * (G_GetWeaponSpread(WP_KNIFE) / 1000.0f);
+	verticalSpread = crandom() * (G_GetWeaponSpread(WP_KNIFE) / 1000.0f);
+	VectorScale(forward, 16.0f, direction);
+	VectorMA(direction, horizontalSpread, right, direction);
+	VectorMA(direction, verticalSpread, up, direction);
 	VectorNormalize(direction);
 
-	held = ent->client->ps.grenadeTimeLeft * (1300.0f / 500.0f);
-	speed = held < 350.0f ? 350.0f : held;
+	held = ent->client->ps.grenadeTimeLeft * 1300 / 500;
+	speed = held < 350 ? 350.0f : (float)held;
 	VectorScale(direction, speed, velocity);
+	SnapVector(velocity);
 
 	knife = LaunchItem(item, muzzleEffect, velocity, ent->s.number);
 	if(!knife) return;
@@ -59,30 +65,36 @@ void G_NITMOD_ThrowKnife(gentity_t *ent) {
 	knife->s.clientNum = ent->s.number;
 	knife->s.teamNum = ent->client->sess.sessionTeam;
 	knife->damage = G_GetWeaponDamage(WP_KNIFE);
+	knife->methodOfDeath = MOD_THROWKNIFE;
 	/* Original ThrowKnife constructs an immediately usable ET_ITEM.  Ordinary
 	 * LaunchItem leaves active clear because dropped guns normally require the
 	 * auto-activate path to arm their touch callback first.  A thrown knife is
 	 * already an active pickup and also exposes the standard item use callback. */
 	knife->active = qtrue;
 	knife->use = Use_Item;
-	/* ThrowKnife in the original does not retain the generic dropped-gun
-	 * physics installed by LaunchItem.  These are direct typed mappings of
-	 * its ET_ITEM fields: full bounce, body/corpse collision, one-second
-	 * physics elasticity and a backdated trajectory start. */
-	knife->s.eFlags &= ~EF_BOUNCE_HALF;
-	knife->s.eFlags |= EF_BOUNCE;
+	/* ELF 0xfbf4d..0xfc0a1: low gravity, 0.25 bounce, view-angle base
+	 * and a pitch spin of three times the throw speed. That value belongs
+	 * to angular velocity, not positional trDuration. */
+	knife->s.eFlags &= ~(EF_BOUNCE | EF_BOUNCE_HALF);
 	knife->s.pos.trType = TR_GRAVITY_LOW;
 	knife->s.pos.trTime = level.time - 50;
-	knife->s.pos.trDuration = (int)(speed * 3.0f);
+	knife->s.pos.trDuration = 0;
 	knife->physicsObject = qtrue;
-	knife->physicsBounce = 1.0f;
+	knife->physicsBounce = 0.25f;
+	VectorSet(knife->r.mins, -10, -10, 0);
+	VectorSet(knife->r.maxs, 10, 10, 20);
 	knife->clipmask = CONTENTS_SOLID | CONTENTS_MISSILECLIP |
 		CONTENTS_BODY | CONTENTS_CORPSE;
+	G_SetAngle(knife, ent->client->ps.viewangles);
+	knife->s.apos.trType = TR_LINEAR;
+	knife->s.apos.trTime = level.time - 50;
+	VectorSet(knife->s.apos.trDelta, speed * 3.0f, 0, 0);
 	/* Pickup_Weapon has a dedicated original WP_KNIFE path; count belongs to
 	 * dropped firearm clip transfer and must remain zero for thrown knives. */
 	knife->count = 0;
 	knife->nextthink = level.time + 20000;
 	knife->s.weapon = WP_KNIFE;
+	trap_LinkEntity(knife);
 	ent->client->ps.grenadeTimeLeft = 0;
 }
 
@@ -313,10 +325,10 @@ void NITMOD_DropLimboPacks(gentity_t *ent) {
 	}
 }
 
-static qboolean G_NITMOD_NormalPackCharge(gentity_t *ent, qboolean health) {
+static qboolean G_NITMOD_NormalPackCharge(gentity_t *ent, qboolean health, qboolean force) {
 	int duration, team=ent->client->sess.sessionTeam-1;
 	float fraction;
-	if(!G_NITMOD_ClientSupports(ent->s.number,NITMOD_FEATURE_PACK_CHARGE)) return qfalse;
+	if(!force && !G_NITMOD_ClientSupports(ent->s.number,NITMOD_FEATURE_PACK_CHARGE)) return qfalse;
 	if(team<0 || team>1) return qtrue;
 	switch(ent->client->sess.playerType) {
 	case PC_MEDIC: duration=level.medicChargeTime[team]; break;
@@ -328,12 +340,12 @@ static qboolean G_NITMOD_NormalPackCharge(gentity_t *ent, qboolean health) {
 	NITMOD_GameplayTableValue(health ? NITMOD_TABLE_HEALTH : NITMOD_TABLE_AMMO,
 		ent->client->sess.nitmodSkillMasks[health ? SK_FIRST_AID : SK_SIGNALS],&fraction);
 	NITMOD_ApplyChargeCost(level.time,duration,fraction,
-		G_NITMOD_LegacyCvarInteger("g_noCharge",0),G_NITMOD_LegacyCvarInteger("g_war",0),
+		G_NITMOD_LegacyCvarInteger("g_noCharge",0),G_NITMOD_ConfiguredWarMode(),
 		&ent->client->ps.classWeaponTime);
 	return qtrue;
 }
 
-void Weapon_Medic( gentity_t *ent ) {
+static void Weapon_MedicInternal( gentity_t *ent, const vec3_t suppliedOrigin, const vec3_t suppliedVelocity ) {
 	gitem_t *item;
 	gentity_t *ent2;
 	vec3_t	velocity, offset;
@@ -341,7 +353,7 @@ void Weapon_Medic( gentity_t *ent ) {
 	vec3_t	tosspos, viewpos;
 	trace_t	tr;
 
-	if(!G_NITMOD_NormalPackCharge(ent,qtrue)) {
+	if(ent->client->sess.sessionTeam >= TEAM_AXIS && ent->client->sess.sessionTeam <= TEAM_ALLIES && !G_NITMOD_NormalPackCharge(ent,qtrue,suppliedOrigin != NULL)) {
 	if (level.time - ent->client->ps.classWeaponTime > level.medicChargeTime[ent->client->sess.sessionTeam-1]) {
 		ent->client->ps.classWeaponTime = level.time - level.medicChargeTime[ent->client->sess.sessionTeam-1];
 	}
@@ -354,6 +366,11 @@ void Weapon_Medic( gentity_t *ent ) {
 
 	}
 	item = BG_FindItemForClassName("item_health");
+	if(suppliedOrigin) {
+		VectorCopy(suppliedOrigin, viewpos);
+		VectorCopy(suppliedOrigin, tosspos);
+		VectorCopy(suppliedVelocity, velocity);
+	} else {
 	VectorCopy( ent->client->ps.viewangles, angles );
 
 	// clamp pitch
@@ -375,6 +392,8 @@ void Weapon_Medic( gentity_t *ent ) {
 	VectorCopy( muzzleEffect, tosspos );
 	VectorMA( tosspos, 48, forward, tosspos );
 	VectorCopy( ent->client->ps.origin, viewpos );
+
+	}
 
 	VectorSet( mins, -(ITEM_RADIUS + 8), -(ITEM_RADIUS+8), 0 );
 	VectorSet( maxs, (ITEM_RADIUS + 8), (ITEM_RADIUS+8), 2*(ITEM_RADIUS+8) );
@@ -405,6 +424,14 @@ void Weapon_Medic( gentity_t *ent ) {
 	//ent2->count = 20;
 }
 
+void Weapon_Medic(gentity_t *ent) {
+	Weapon_MedicInternal(ent, NULL, NULL);
+}
+
+void Weapon_MedicAdmin(gentity_t *ent, const vec3_t origin, const vec3_t velocity) {
+	Weapon_MedicInternal(ent, origin, velocity);
+}
+
 /*
 ==========
 G_PlaceTripmine
@@ -425,7 +452,7 @@ int G_NITMOD_CountTeamTripmines(team_t team) {
 
 void G_PlaceTripmine(gentity_t* ent) {
 	vec3_t start, end;
-	trace_t trace;
+	trace_t trace, beamTrace;
 	gentity_t* bomb;
 	vec3_t forward;
 	team_t team;
@@ -453,34 +480,49 @@ void G_PlaceTripmine(gentity_t* ent) {
 	VectorMA(start, 64, forward, end);
 
 	trap_Trace(&trace, start, NULL, NULL, end, ent->s.number, MASK_SHOT);
+	/* Original nitrox_tripmine requires world surfaces at both beam ends. */
+	if(trace.fraction == 1.f || trace.entityNum != ENTITYNUM_WORLD ||
+	   (trace.surfaceFlags & (SURF_SKY | SURF_NOIMPACT))) return;
+	VectorMA(trace.endpos, 512, trace.plane.normal, end);
+	trap_Trace(&beamTrace, trace.endpos, NULL, NULL, end, ent->s.number, MASK_SHOT);
+	if(beamTrace.fraction == 1.f || beamTrace.entityNum != ENTITYNUM_WORLD ||
+	   (beamTrace.surfaceFlags & (SURF_SKY | SURF_NOIMPACT))) return;
+
 
 	bomb = G_Spawn();
 	bomb->r.svFlags	= SVF_BROADCAST;
+	bomb->classname = "tripmine";
 	bomb->s.eType = ET_BOMB;
 	bomb->s.eFlags = 0;
 	bomb->s.weapon = WP_TRIPMINE;
-	bomb->s.teamNum = team;
+	bomb->s.teamNum = team + 4;
 	bomb->parent = ent;
-	bomb->think = G_TripMinePrime;
-	bomb->nextthink = level.time + 2000;
+	/* Original placement is unarmed; pliers replace this expiry on completion. */
+	bomb->think = G_FreeEntity;
+	bomb->nextthink = level.time + 15000;
+	bomb->damage = G_GetWeaponDamage(WP_TRIPMINE);
 	bomb->splashDamage = 300;
 	bomb->splashRadius = 300;
+	G_NITMOD_WeaponDamageOverrides(WP_TRIPMINE, &bomb->damage, &bomb->splashDamage, &bomb->splashRadius);
 	bomb->methodOfDeath = MOD_TRIPMINE;
 	bomb->splashMethodOfDeath = MOD_TRIPMINE;
 	bomb->r.contents = CONTENTS_CORPSE;	// (player can walk through)
 
-	VectorSet(bomb->r.mins, -12, -12, 0);
+	VectorSet(bomb->r.mins, -4, -4, -3);
 	VectorCopy(bomb->r.mins, bomb->r.absmin);
-	VectorSet(bomb->r.maxs, 12, 12, 20);
+	VectorSet(bomb->r.maxs, 4, 4, 3);
 	VectorCopy(bomb->r.maxs, bomb->r.absmax);
 
-	VectorMA(trace.endpos, 1, trace.plane.normal, start);
+	VectorMA(trace.endpos, -1, trace.plane.normal, start);
 	G_SetOrigin(bomb, start);
 	G_SetAngle(bomb, vec3_origin);
 
 	VectorCopy(trace.plane.normal, bomb->s.origin2);
 
 	trap_LinkEntity(bomb);
+	/* Only a successful server placement may request the switch to pliers.
+	 * Rejected geometry or a full team limit leaves the selected tool alone. */
+	G_AddEvent(ent, EV_NOAMMO, 0);
 }
 
 /*void Weapon_SatchelCharge(gentity_t *ent) {
@@ -531,7 +573,7 @@ void G_PlaceTripmine(gentity_t* ent) {
 Weapon_MagicAmmo
 ==================
 */
-void Weapon_MagicAmmo( gentity_t *ent )  {
+static void Weapon_MagicAmmoInternal( gentity_t *ent, const vec3_t suppliedOrigin, const vec3_t suppliedVelocity )  {
 	gitem_t *item;
 	gentity_t *ent2;
 	vec3_t	velocity, offset;
@@ -539,7 +581,7 @@ void Weapon_MagicAmmo( gentity_t *ent )  {
 	vec3_t	angles,mins,maxs;
 	trace_t	tr;
 
-	if(!G_NITMOD_NormalPackCharge(ent,qfalse)) {
+	if(ent->client->sess.sessionTeam >= TEAM_AXIS && ent->client->sess.sessionTeam <= TEAM_ALLIES && !G_NITMOD_NormalPackCharge(ent,qfalse,suppliedOrigin != NULL)) {
 	if (level.time - ent->client->ps.classWeaponTime > level.lieutenantChargeTime[ent->client->sess.sessionTeam-1])
 		ent->client->ps.classWeaponTime = level.time - level.lieutenantChargeTime[ent->client->sess.sessionTeam-1];
 
@@ -553,6 +595,11 @@ void Weapon_MagicAmmo( gentity_t *ent )  {
 	/* Original Weapon_MagicAmmo_Ext reads the Signals reward mask at client
 	 * +0xedc, not its numeric level. Bit 32 takes precedence over bit 2. */
 	item = BG_FindItem( (ent->client->sess.nitmodSkillMasks[SK_SIGNALS] & 32u) ? "Huge Ammo Pack" : (ent->client->sess.nitmodSkillMasks[SK_SIGNALS] & 2u) ? "Mega Ammo Pack" : "Ammo Pack" );
+	if(suppliedOrigin) {
+		VectorCopy(suppliedOrigin, viewpos);
+		VectorCopy(suppliedOrigin, tosspos);
+		VectorCopy(suppliedVelocity, velocity);
+	} else {
 	VectorCopy( ent->client->ps.viewangles, angles );
 
 	// clamp pitch
@@ -570,6 +617,8 @@ void Weapon_MagicAmmo( gentity_t *ent )  {
 	VectorCopy( muzzleEffect, tosspos );
 	VectorMA( tosspos, 48, forward, tosspos );
 	VectorCopy( ent->client->ps.origin, viewpos );
+
+	}
 
 	VectorSet( mins, -(ITEM_RADIUS + 8), -(ITEM_RADIUS+8), 0 );
 	VectorSet( maxs, (ITEM_RADIUS + 8), (ITEM_RADIUS+8), 2*(ITEM_RADIUS+8) );
@@ -605,6 +654,14 @@ void Weapon_MagicAmmo( gentity_t *ent )  {
 		ent2->count = 1;
 		ent2->s.density = 1;
 	}
+}
+
+void Weapon_MagicAmmo(gentity_t *ent) {
+	Weapon_MagicAmmoInternal(ent, NULL, NULL);
+}
+
+void Weapon_MagicAmmoAdmin(gentity_t *ent, const vec3_t origin, const vec3_t velocity) {
+	Weapon_MagicAmmoInternal(ent, origin, velocity);
 }
 // jpw
 
@@ -671,7 +728,7 @@ qboolean ReviveEntity(gentity_t *ent, gentity_t *traceEnt)
 	// copy some stuff out that we'll wanna restore
 	VectorCopy(traceEnt->client->ps.origin, org);
 	headshot = traceEnt->client->ps.eFlags & EF_HEADSHOT;
-	if( ent->client->sess.skill[SK_FIRST_AID] >= 3 )
+	if( !ent || ent->client->sess.skill[SK_FIRST_AID] >= 3 )
 		healamt = traceEnt->client->ps.stats[STAT_MAX_HEALTH];
 	else
 		healamt = traceEnt->client->ps.stats[STAT_MAX_HEALTH] * 0.5;
@@ -714,13 +771,15 @@ qboolean ReviveEntity(gentity_t *ent, gentity_t *traceEnt)
 	}
 
 	traceEnt->r.contents = CONTENTS_CORPSE;
-	trap_LinkEntity( ent );
+	if(ent) trap_LinkEntity( ent );
 
 
 	// DHM - Nerve :: Let the person being revived know about it
+	if(ent) {
 	trap_SendServerCommand( traceEnt-g_entities, va("cp \"You have been revived by [lof]%s[lon] [lof]%s!\n\"", ent->client->sess.sessionTeam == TEAM_ALLIES ? rankNames_Allies[ ent->client->sess.rank ] : rankNames_Axis[ ent->client->sess.rank ], ent->client->pers.netname) );
 	traceEnt->client->pers.nitmodLastReviverClient = ent - g_entities;
 	traceEnt->props_frame_state = ent->s.number;
+	}
 
 	// DHM - Nerve :: Mark that the medicine was indeed dispensed
 	usedSyringe = qtrue;
@@ -739,7 +798,7 @@ qboolean ReviveEntity(gentity_t *ent, gentity_t *traceEnt)
 		traceEnt->client->ps.pm_time = 2100;
 	}
 
-	G_NITMOD_RecordRevive(ent);
+	if(ent) G_NITMOD_RecordRevive(ent);
 
 	// Tell the caller if we actually used a syringe
 	return usedSyringe;
@@ -1714,6 +1773,51 @@ void trap_EngineerTrace( trace_t *results, const vec3_t start, const vec3_t mins
 }
 
 // DHM - Nerve
+/* Original Weapon_Engineer tripmine arm/disarm branch. The progress word
+ * is independent of health because primed tripmines have 20 destructible HP. */
+void G_NITMOD_EngineerTripmine(gentity_t *engineer, gentity_t *mine) {
+	float speed;
+	team_t team = engineer->client->sess.sessionTeam;
+	unsigned int skills = engineer->client->sess.nitmodSkillMasks[SK_EXPLOSIVES_AND_CONSTRUCTION];
+	if(mine->s.teamNum < 4) {
+		if(mine->timestamp > level.time || mine->nitmodMineProgress >= 255) return;
+		NITMOD_GameplayTableValue(NITMOD_TABLE_ARM_DYNAMITE, skills, &speed);
+		mine->nitmodMineProgress += (int)speed;
+		G_PrintClientSpammyCenterPrint(engineer-g_entities, "Disarming tripmine...");
+		if(mine->nitmodMineProgress >= 255) {
+			mine->nitmodMineProgress = 255;
+			mine->think = G_FreeEntity;
+			mine->nextthink = level.time;
+			if(team != G_LandmineTeam(mine)) {
+				G_AddSkillPoints(engineer, SK_EXPLOSIVES_AND_CONSTRUCTION, 4.f);
+				G_DebugAddSkillPoints(engineer, SK_EXPLOSIVES_AND_CONSTRUCTION, 4.f, "defusing an enemy tripmine");
+			}
+			G_PrintClientSpammyCenterPrint(engineer-g_entities, "Tripmine disarmed...");
+		}
+		return;
+	}
+	if(team != G_LandmineTeam(mine)) {
+		G_PrintClientSpammyCenterPrint(engineer-g_entities, "You cannot arm an enemy tripmine...");
+		return;
+	}
+	if(G_NITMOD_CountTeamTripmines(team) >= G_NITMOD_LegacyCvarInteger("team_maxTripmines", 5)) {
+		G_PrintClientSpammyCenterPrint(engineer-g_entities, "Your team has too many tripmines placed...");
+		G_FreeEntity(mine);
+		return;
+	}
+	G_PrintClientSpammyCenterPrint(engineer-g_entities, "Arming tripmine...");
+	NITMOD_GameplayTableValue(NITMOD_TABLE_ARM_LANDMINE, skills, &speed);
+	mine->nitmodMineProgress += (int)speed;
+	if(mine->nitmodMineProgress >= 255) {
+		mine->nitmodMineProgress = 0;
+		mine->timestamp = mine->nextthink = level.time + 1000;
+		mine->think = G_TripMinePrime;
+		mine->s.effect1Time = 1;
+		mine->s.teamNum = team;
+		G_PrintClientSpammyCenterPrint(engineer-g_entities, "Tripmine armed...");
+	}
+}
+
 void Weapon_Engineer( gentity_t *ent ) {
 	trace_t		tr;
 	gentity_t	*traceEnt, *hit;
@@ -1996,24 +2100,8 @@ evilbanigoto:
 			} else {
 				return;
 			}
-//bani - no tripmine...
-#if 0
 		} else if ( traceEnt->methodOfDeath == MOD_TRIPMINE ) {
-			// Give health until it is full, don't continue
-			traceEnt->health += 3;
-
-			G_PrintClientSpammyCenterPrint(ent-g_entities, "Disarming tripmine...");
-
-			if ( traceEnt->health >= 250 ) {
-				traceEnt->health = 255;
-				traceEnt->think = G_FreeEntity;
-				traceEnt->nextthink = level.time + FRAMETIME;
-
-				Add_Ammo(ent, WP_TRIPMINE, 1, qfalse);
-			} else {
-				return;
-			}
-#endif
+			G_NITMOD_EngineerTripmine(ent, traceEnt);
 		} else
 		if ( traceEnt->methodOfDeath == MOD_DYNAMITE ) {
 
@@ -2831,6 +2919,7 @@ void weapon_callAirStrike( gentity_t *ent ) {
 			}
 
 			VectorCopy( bomb->s.pos.trBase, bomb->r.currentOrigin );
+			G_NITMOD_RegisterAirstrike( bomb );
 
 			// move pos for next bomb
 			VectorAdd( pos, bombaxis, pos );
@@ -2937,7 +3026,7 @@ void Weapon_Artillery(gentity_t *ent) {
 	if( (g_gametype.integer == GT_WOLF_TDM &&
 		 (G_NITMOD_LegacyCvarInteger("g_TDMOptions", 0) & 4)) ||
 		(g_gametype.integer == GT_WOLF_DM &&
-		 (G_NITMOD_LegacyCvarInteger("g_DMOptions", 0) & 32)) ) {
+		 (g_DMOptions.integer & 32)) ) {
 		return;
 	}
 
@@ -3989,13 +4078,16 @@ LIGHTNING GUN
 
 void G_BurnMeGood( gentity_t *self, gentity_t *body )
 {
+	gentity_t *attacker=self->client?self:self->parent;
+	int damage=5;
+	G_NITMOD_WeaponDamageOverrides(WP_FLAMETHROWER,&damage,NULL,NULL);
 	// add the new damage
 	body->flameQuota += 5;
 	body->flameQuotaTime = level.time;
 	
 	// JPW NERVE -- yet another flamethrower damage model, trying to find a feels-good damage combo that isn't overpowered
 	if (body->lastBurnedFrameNumber != level.framenum) {
-		G_Damage( body, self->parent, self->parent, vec3_origin, self->r.currentOrigin, 5, 0, MOD_FLAMETHROWER ); // was 2 dmg in release ver, hit avg. 2.5 times per frame
+		G_Damage( body, attacker, attacker, vec3_origin, self->r.currentOrigin, damage, 0, MOD_FLAMETHROWER );
 		body->lastBurnedFrameNumber = level.framenum;
 	}
 	// jpw
@@ -4006,7 +4098,7 @@ void G_BurnMeGood( gentity_t *self, gentity_t *body )
 			body->s.onFireStart = level.time;
 
 		body->s.onFireEnd = level.time + FIRE_FLASH_TIME;
-		body->flameBurnEnt = self->r.ownerNum;
+		body->flameBurnEnt = self->client?self->s.number:self->r.ownerNum;
 		// add to playerState for client-side effect
 		body->client->ps.onFireStart = level.time;
 	}
@@ -4597,3 +4689,22 @@ qboolean IsSilencedWeapon
 //
 // IsSilencedWeapon
 //
+
+/* Original G_createClusterNade: integer angular spacing, inherited velocity,
+ * team grenade and 650 ms admin / 2500 ms ordinary fuse. */
+void G_NITMOD_CreateClusterNade(gentity_t *ent,int count,qboolean admin) {
+    int i,step,weapon;vec3_t velocity;
+    if(!ent || !ent->client) return;
+    if(count<1) count=1;else if(count>32) count=32;
+    step=360/count;
+    weapon=ent->client->sess.sessionTeam==TEAM_AXIS?WP_GRENADE_LAUNCHER:WP_GRENADE_PINEAPPLE;
+    for(i=0;i<count;++i) {
+        double angle=(double)(i*step)*3.141592653589793/180.0;
+        gentity_t *grenade;
+        velocity[0]=ent->client->ps.velocity[0]-(float)cos(angle)*200.0f;
+        velocity[1]=ent->client->ps.velocity[1]-(float)sin(angle)*200.0f;
+        velocity[2]=ent->client->ps.velocity[2]-30.0f;
+        grenade=fire_grenade(ent,ent->r.currentOrigin,velocity,weapon);
+        grenade->nextthink=level.time+(admin?650:2500);
+    }
+}

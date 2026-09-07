@@ -506,6 +506,8 @@ struct gentity_s {
 	/* Server-only replacement for original dropped-item gentity+0x39c.
 	 * Deliberately outside the engine-owned entityState/entityShared prefix. */
 	int nitmodDropAmmo;
+	/* Original gentity+0x5f0: tool progress, separate from destructible health. */
+	int nitmodMineProgress;
 };
 
 // Ridah
@@ -602,6 +604,8 @@ typedef struct {
 	int			coach_team;
 	int			damage_given;
 	int			damage_received;
+	/* Original sess +0xc9c/+0xca0: weighted hit counts, not damage sums. */
+	float nitmodTeamHits, nitmodTotalHits;
 	int			deaths;
 	int nitmodKillingSpree; /* Original sess +0xca8, distinct from ps.persistant[15]. */
 	int nitmodHeadHits, nitmodBodyHits; /* Original live-hit totals used by ClientBegin. */
@@ -926,6 +930,10 @@ struct gclient_s {
 	int nitmodLuaPersistant[16]; /* Original-only counters; retained across ClientSpawn. */
 	int nitmodLuaUnusedAmmo[2][12]; /* Original unused weapon slots 52..63; never alias native weapons. */
 	qboolean nitmodPushed;
+	qboolean nitmodGlowing;
+	qboolean nitmodBlinded;
+	qboolean nitmodFrozen; /* Original client+0x539c; reset with client on spawn. */
+	qboolean nitmodDisoriented, nitmodDisorientApplied; /* Original +0x530c/+0x5310. */
 	int nitmodPushedBy; /* Original client+0x5318/+0x531c; cleared on spawn. */
 	/* Last authoritative damage time; original Nitmod client offset +0xfac. */
 	int nitmodLastHurtTime;
@@ -1487,6 +1495,11 @@ void Svcmd_ShuffleTeams_f(void);
 //
 void FireWeapon( gentity_t *ent );
 qboolean ReviveEntity( gentity_t *ent, gentity_t *traceEnt );
+void G_NITMOD_UpdateAdminGlow(gentity_t *ent);
+void G_NITMOD_ExecGive(gentity_t *ent,const char *name,const char *arg,const char *extra);
+void G_NITMOD_CreateClusterNade(gentity_t *ent,int count,qboolean admin);
+void Weapon_MedicAdmin(gentity_t *ent, const vec3_t origin, const vec3_t velocity);
+void Weapon_MagicAmmoAdmin(gentity_t *ent, const vec3_t origin, const vec3_t velocity);
 void G_BurnMeGood( gentity_t *self, gentity_t *body );
 
 //
@@ -1544,6 +1557,7 @@ qboolean G_IsSinglePlayerGame();
 //
 char *ClientConnect( int clientNum, qboolean firstTime, qboolean isBot );
 void ClientUserinfoChanged( int clientNum );
+void ClientCleanName( const char *in, char *out, int outSize );
 void ClientDisconnect( int clientNum );
 void ClientBegin( int clientNum );
 void ClientCommand( int clientNum );
@@ -2207,6 +2221,9 @@ void		trap_SendMessage( int clientNum, char *buf, int buflen );
 messageStatus_t	trap_MessageStatus( int clientNum );
 
 void G_ExplodeMissile( gentity_t *ent );
+void G_NITMOD_FadeDisconnectProjectiles( gentity_t *owner, int cameraOptions );
+void G_MissileDownXPAward( gentity_t *attacker, int mod );
+void G_MissileDie( gentity_t *self, gentity_t *inflictor, gentity_t *attacker, int damage, int mod );
 
 void Svcmd_StartMatch_f(void);
 void Svcmd_ResetMatch_f(qboolean fDoReset, qboolean fDoRestart);
@@ -2721,3 +2738,8 @@ void G_TempTraceIgnorePlayersAndBodies( void );
 qboolean G_CanPickupWeapon( weapon_t weapon, gentity_t* ent );
 
 qboolean G_LandmineSnapshotCallback( int entityNum, int clientNum );
+
+void G_NITMOD_ExpandCommandShortcuts(gentity_t *ent,const char *input,char *output,int outputSize);
+
+void G_NITMOD_WarModeTouchClients(void);
+void CheckVote(void);

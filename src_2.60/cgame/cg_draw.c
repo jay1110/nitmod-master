@@ -2621,7 +2621,7 @@ static void CG_DrawSpectatorMessageContent(void) {
 		return;
 
 	if ( !( cg.snap->ps.pm_flags & PMF_LIMBO || cg.snap->ps.persistant[PERS_TEAM] == TEAM_SPECTATOR ||
-		(NITMOD_UsesOriginalProtocol() && (cg.snap->ps.pm_flags & PMF_FOLLOW)) ) )
+		(NITMOD_UsesNitmodHud() && (cg.snap->ps.pm_flags & PMF_FOLLOW)) ) )
 		return;
 
 	if(cg.time - lastconfigGet > 1000) {
@@ -2640,12 +2640,12 @@ static void CG_DrawSpectatorMessageContent(void) {
 		str2 = "ESCAPE";
 	}
 	str = va( CG_TranslateString( "Press %s to open Limbo Menu" ), str2 );
-	if(NITMOD_UsesOriginalProtocol()) CG_NitmodDrawSpectatorInstruction(0, str);
+	if(NITMOD_UsesNitmodHud()) CG_NitmodDrawSpectatorInstruction(0, str);
 	else CG_DrawStringExt( 8, 154, str, colorWhite, qtrue, qtrue, TINYCHAR_WIDTH, TINYCHAR_HEIGHT, 0 );
 
 	str2 = BindingFromName( "+attack" );
 	str = va( CG_TranslateString( "Press %s to follow next player" ), str2 );
-	if(NITMOD_UsesOriginalProtocol()) CG_NitmodDrawSpectatorInstruction(1, str);
+	if(NITMOD_UsesNitmodHud()) CG_NitmodDrawSpectatorInstruction(1, str);
 	else CG_DrawStringExt( 8, 172, str, colorWhite, qtrue, qtrue, TINYCHAR_WIDTH, TINYCHAR_HEIGHT, 0 );
 
 #ifdef MV_SUPPORT
@@ -2704,7 +2704,7 @@ static void CG_DrawLimboMessageContent(void) {
 	const char *str; 
 	playerState_t *ps;
 	int y = 118;
-	qboolean original = NITMOD_UsesOriginalProtocol();
+	qboolean original = NITMOD_UsesNitmodHud();
 
 
 	ps = &cg.snap->ps;
@@ -2766,7 +2766,7 @@ qboolean CG_NitmodDrawFollow(void) {
 	float x = 8;
 	int skill;
 	nitmodHudAnchor_t previous;
-	if(!NITMOD_UsesOriginalProtocol() || !cg.snap || !(cg.snap->ps.pm_flags & PMF_FOLLOW)) return qfalse;
+	if(!NITMOD_UsesNitmodHud() || !cg.snap || !(cg.snap->ps.pm_flags & PMF_FOLLOW)) return qfalse;
 	ps = &cg.snap->ps;
 	if(ps->clientNum < 0 || ps->clientNum >= MAX_CLIENTS) return qtrue;
 	ci = &cgs.clientinfo[ps->clientNum];
@@ -2810,7 +2810,7 @@ qboolean CG_NitmodDrawFollow(void) {
 static qboolean CG_DrawFollow(void)
 {
 	char deploytime[128];
-	if(NITMOD_UsesOriginalProtocol()) return CG_NitmodDrawFollow();
+	if(NITMOD_UsesNitmodHud()) return CG_NitmodDrawFollow();
 
 	// MV following info for mainview
 	if(CG_ViewingDraw()) {
@@ -2888,7 +2888,9 @@ static void CG_DrawWarmupContent(void) {
 
 			s1 = va( CG_TranslateString( "^3WARMUP:^7 Waiting on ^2%i^7 %s" ), cgs.minclients, cgs.minclients == 1 ? "player" : "players" );
 			w = CG_DrawStrlen( s1 );
-			CG_DrawStringExt(320 - w * 12/2, 188, s1, colorWhite, qfalse, qtrue, 12, 18, 0);
+			if(NITMOD_UsesNitmodHud())
+				CG_DrawStringExt(340 - w * 6, 86, s1, colorWhite, qfalse, qtrue, 10, 14, 0);
+			else CG_DrawStringExt(320 - w * 12/2, 188, s1, colorWhite, qfalse, qtrue, 12, 18, 0);
 
 			if(!cg.demoPlayback && cg.snap->ps.persistant[PERS_TEAM] != TEAM_SPECTATOR &&
 			  (!(cg.snap->ps.pm_flags & PMF_FOLLOW) || (cg.snap->ps.pm_flags & PMF_LIMBO))) {
@@ -2901,7 +2903,9 @@ static void CG_DrawWarmupContent(void) {
 					s2 = CG_TranslateString( s2 );
 				}				
 				w = CG_DrawStrlen( s2 );
-				CG_DrawStringExt(320 - w * cw/2, 208, s2, colorWhite, qfalse, qtrue, cw, (int)(cw * 1.5), 0);
+				if(NITMOD_UsesNitmodHud())
+					CG_DrawStringExt(325 - w * 9/2, 98, s2, colorWhite, qfalse, qtrue, 9, 11, 0);
+				else CG_DrawStringExt(320 - w * cw/2, 208, s2, colorWhite, qfalse, qtrue, cw, (int)(cw * 1.5), 0);
 			}
 	
 /*	if ( !sec ) {
@@ -2940,7 +2944,10 @@ static void CG_DrawWarmupContent(void) {
 		s = va( "%s %i", CG_TranslateString( "(WARMUP) Match begins in:" ), sec + 1 );
 
 	w = CG_DrawStrlen( s );
-	CG_DrawStringExt( 320 - w * 6, 120, s, colorYellow, qfalse, qtrue, 12, 18, 0 );
+	/* Original CG_Draw2D warmup: y=65, glyph 9x14, separate from follow y=134. */
+	if(NITMOD_UsesNitmodHud())
+		CG_DrawStringExt(340 - w * 6, 65, s, colorYellow, qfalse, qtrue, 9, 14, 0);
+	else CG_DrawStringExt(320 - w * 6, 120, s, colorYellow, qfalse, qtrue, 12, 18, 0);
 
 	// NERVE - SMF - stopwatch stuff
 	s1 = "";
@@ -3061,7 +3068,8 @@ void CG_DrawFlashFade( void ) {
 	/* Original shrubbot blind flag follows the normal speclock writeback.
 	 * Keep fBlackout from the already-read cvar: rendering changes next frame,
 	 * exactly like the original UI/cgame synchronization. */
-	if(NITMOD_UsesOriginalProtocol() && (cg.snap->ps.eFlags & NITMOD_EF_BLINDED))
+	if((NITMOD_UsesOriginalProtocol() && (cg.snap->ps.eFlags & NITMOD_EF_BLINDED)) ||
+	   (!NITMOD_UsesOriginalProtocol() && (cg.snap->ps.powerups[PW_BLACKOUT] & NITMOD_BLACKOUT_ADMIN)))
 		trap_Cvar_Set("ui_blackout", "1");
 
 	// now draw the fade
