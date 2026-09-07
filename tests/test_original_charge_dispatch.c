@@ -1573,6 +1573,7 @@ static int CheckNotification(void) {
 }
 extern struct pmStackItem_s *cg_pmWaitingList, *cg_pmOldList;
 static int graphicPopupTest, graphicFirstGlyph, graphicIcons, graphicPrints;
+static int graphicPopupOriginalOnNative;
 static float graphicIconWidth;
 static int CheckGraphicPopups(void) {
     static cgs_t savedCgs;
@@ -1583,7 +1584,7 @@ static int CheckGraphicPopups(void) {
     int oldCount = cg_numPopups.integer, oldFlags = cg_HUDFlags.integer;
     savedCgs = cgs; savedWeapon = cg_weapons[WP_MP40];
     cgs.gameState.stringOffsets[CS_SERVERINFO] = 1;
-    strcpy(cgs.gameState.stringData + 1, "\\gamename\\nitmod");
+    strcpy(cgs.gameState.stringData + 1, graphicPopupOriginalOnNative ? "\\gamename\\etmain" : "\\gamename\\nitmod");
     strcpy(cgs.clientinfo[1].name, "A"); strcpy(cgs.clientinfo[2].name, "B");
     cgs.clientinfo[1].team = TEAM_AXIS; cgs.clientinfo[2].team = TEAM_ALLIES;
     cgs.glconfig.vidWidth = 640; cgs.glconfig.vidHeight = 480;
@@ -1603,7 +1604,7 @@ static int CheckGraphicPopups(void) {
         es.eventParm = cause ? 63 : 8;
         CG_InitPM(); cg_obituary.integer = mode;
         graphicPrints = graphicIcons = graphicFirstGlyph = 0;
-        CG_NitmodObituaryPrint("test kill", 789, &es);
+        if(graphicPopupOriginalOnNative) CG_NitmodObituaryPrintForProtocol("test kill",789,&es,qtrue); else CG_NitmodObituaryPrint("test kill",789,&es);
         CG_DrawPMItems();
         if(graphicPrints != 1 || graphicIcons != 1 || graphicIconWidth != 32 ||
            graphicFirstGlyph != (mode == 3 ? 701 : 700)) ++errors;
@@ -1614,7 +1615,7 @@ static int CheckGraphicPopups(void) {
         es.eventParm = cause == 2 ? 65 : 26;
         es.otherEntityNum2 = cause == 0 ? ENTITYNUM_WORLD : cause == 1 ? 1 : 2;
         graphicPrints = graphicIcons = graphicFirstGlyph = 0;
-        CG_NitmodObituaryPrint("world/self/private", 789, &es);
+        if(graphicPopupOriginalOnNative) CG_NitmodObituaryPrintForProtocol("world/self/private",789,&es,qtrue); else CG_NitmodObituaryPrint("world/self/private",789,&es);
         CG_DrawPMItems();
         if(graphicPrints != 1 || graphicIcons != 1 || graphicIconWidth != 16 ||
            graphicFirstGlyph != (cause == 2 && mode == 3 ? 701 : 700)) ++errors;
@@ -2025,12 +2026,19 @@ static int CheckGlobalAwardLifecycle(void) {
     saved = cgs; memcpy(oldFields, fields, sizeof(fields));
     cgs.clientinfo[0].infoValid = qtrue;
     strcpy(cgs.clientinfo[0].name, "Winner");
-    for(i = 0; i < 11; ++i) {
+    for(i = 0; i < 12; ++i) {
         CG_NitmodGlobalAwardClear();
         fields[0] = "popaw"; fields[1] = "0";
         Com_sprintf(award, sizeof(award), "%d", i); fields[2] = award;
         argcValue = 3; cg.time = 100;
         CG_NitmodGlobalAwardCommand();
+        if(i == 2) {
+            /* Both original binaries retain this blank row. Rendering clears
+             * it without a popup, unless zero fade pauses the renderer. */
+            if(CG_NitmodGlobalAwardAlpha(100,1500,0)!=0 || !CG_NitmodGlobalAwardActive()) ++errors;
+            if(CG_NitmodGlobalAwardAlpha(100,1500,250)!=0 || CG_NitmodGlobalAwardActive()) ++errors;
+            continue;
+        }
         if(!CG_NitmodGlobalAwardActive() || !CG_NitmodNotificationActive()) ++errors;
         if(CG_NitmodGlobalAwardAlpha(100, 1500, 250) != 0 ||
            CG_NitmodGlobalAwardAlpha(225, 1500, 250) != .5f) ++errors;
@@ -2676,11 +2684,11 @@ static int CheckObituaryAudio(void) {
     cg.snap = &snap; es.otherEntityNum = 1; es.otherEntityNum2 = 2;
     cgs.gameState.stringOffsets[CS_SERVERINFO] = 1;
     CG_NitmodObituaryReset(); obituaryAudioTest = 1;
-    for(protocol = 0; protocol < 2; ++protocol) for(cause = 0; cause < 11; ++cause)
+    for(protocol = 0; protocol < 3; ++protocol) for(cause = 0; cause < 11; ++cause)
     for(flags = 0; flags < 4; ++flags) for(team = 0; team < 2; ++team)
     for(listener = 1; listener <= 3; ++listener) for(game = 0; game < 2; ++game) {
         int goat, gib, tk;
-        strcpy(cgs.gameState.stringData + 1, protocol ? "\\gamename\\nitmod" : "\\gamename\\etmain");
+        strcpy(cgs.gameState.stringData + 1, protocol == 1 ? "\\gamename\\nitmod" : "\\gamename\\etmain");
         cg_goatSound.integer = flags; cg_tkSounds.integer = flags & 1;
         cgs.gametype = game ? 8 : 2;
         cgs.clientinfo[1].team = TEAM_AXIS; cgs.clientinfo[2].team = team ? TEAM_AXIS : TEAM_ALLIES;
@@ -2689,7 +2697,7 @@ static int CheckObituaryAudio(void) {
         gib = protocol && listener != 3 && es.eventParm == 58;
         tk = protocol && (flags & 1) && team && !game &&
             (es.eventParm == 5 || es.eventParm == 21 || es.eventParm == 58 || es.eventParm == 63 || es.eventParm == 68);
-        obituaryAudioCount = 0; CG_NitmodObituarySounds(&es);
+        obituaryAudioCount = 0; if(protocol==2) CG_NitmodObituarySoundsForProtocol(&es,qtrue); else CG_NitmodObituarySounds(&es);
         expected = goat * 2 + gib + tk;
         if(obituaryAudioCount != expected) ++errors;
         i = 0;
@@ -5199,7 +5207,7 @@ static int CheckPlayerDebug(void) {
         int demo, enabled, team;
         SetTestConfig(CS_SERVERINFO, mode ? "\\gamename\\nitmod" : "\\gamename\\etmain");
         debugRegistrations = 0; CG_NitmodRegisterDebugMedia();
-        if(debugRegistrations != (mode ? 2 : 0)) ++errors;
+        if(debugRegistrations != (mode ? 5 : 0)) ++errors;
         {
             nitmodSimpleConfig_t *simple = (nitmodSimpleConfig_t *)NITMOD_SimpleConfig();
             int savedMisc = simple->misc, bits;
@@ -5837,6 +5845,9 @@ static int QDECL Engine(int command, ...) {
         int shader;
         if(!strcmp(path, "textures/sfx/transgunRed")) shader = 801;
         else if(!strcmp(path, "textures/sfx/transgunBlue")) shader = 802;
+        else if(!strcmp(path, "textures/sfx/transgunWhite")) shader = 803;
+        else if(!strcmp(path, "textures/sfx/transgunGreen")) shader = 804;
+        else if(!strcmp(path, "textures/sfx/construction")) shader = 805;
         else exit(2);
         ++debugRegistrations; va_end(args); return debugMissingShader ? 0 : shader;
     }
@@ -6603,10 +6614,54 @@ static int QDECL Engine(int command, ...) {
 #include "check_round_announcements.h"
 #include "check_camera_shake.h"
 #include "check_goomba_obituary.h"
+static int CheckLuaPowerups(void) {
+    static const int ids[]={PW_NONE,PW_INVULNERABLE,PW_BLACKOUT,PW_BREATHER,PW_NOFATIGUE,PW_REDFLAG,PW_BLUEFLAG,PW_OPS_DISGUISED,PW_OPS_CLASS_1,PW_OPS_CLASS_2,PW_OPS_CLASS_3,PW_ADRENALINE,PW_MVCLIENTLIST};
+    snapshot_t snap;int n,i,errors=0;
+    for(n=0;n<16;++n) {
+        memset(&snap,0,sizeof(snap));snap.ps.powerups[n]=12345;
+        snap.numEntities=1;snap.entities[0].eType=1;snap.entities[0].powerups=1<<n;
+        NITMOD_TranslateSnapshotWeapons(&snap);
+        for(i=0;i<16;++i) if(snap.ps.powerups[i]!=(n<13 && i==ids[n]?12345:0)) ++errors;
+        if(snap.entities[0].powerups!=(n<13?1<<ids[n]:0)) ++errors;
+    }
+    return errors;
+}
 int main(int argc, char **argv) {
     int index, errors = 0;
     static cg_t before;
     dllEntry(Engine);
+    if(argc==2 && !strcmp(argv[1],"--lua-awards")) {
+        SetTestConfig(CS_SERVERINFO,"\\gamename\\nitmod");
+        errors=CheckGlobalAwardLifecycle();
+        printf("Original award client lifecycle: 12 wire rows, blank award, fade/pause/reset/render: %s\n",errors?"FAIL":"PASS");
+        return errors!=0;
+    }
+    if(argc==2 && !strcmp(argv[1],"--lua-sprees")) {
+        errors=CheckSpree();
+        printf("Lua spree client: all tiers, protocol payload, display and expiry: %s\n",errors?"FAIL":"PASS");return errors!=0;
+    }
+    if(argc==2 && !strcmp(argv[1],"--lua-powerups")) {
+        errors=CheckLuaPowerups();printf("Original powerup arrays and entity masks: %s\n",errors?"FAIL":"PASS");return errors!=0;
+    }
+    if(argc==2 && !strcmp(argv[1],"--lua-events")) {
+        SetTestConfig(CS_SERVERINFO,"\\gamename\\etmain");
+        errors=CheckLuaEventRouting();
+        printf("Lua original events: native client dispatch, temp entity and queued once-only delivery: %s\n",errors?"FAIL":"PASS");
+        return errors!=0;
+    }
+    if(argc==2 && !strcmp(argv[1],"--lua-statistics")) {
+        static const char *names[]={"Poison","Bomb","Tripmine","Poison Gas","Poison Gas Mine"};
+        errors=CheckLimboWeaponStatProtocol();
+        for(index=0;index<5;++index) if(strcmp(aWeaponInfo[WS_POISON+index].pszName,names[index])) ++errors;
+        printf("Lua statistics client dependency: original/native weapon rows and extension names: %s\n",errors?"FAIL":"PASS");
+        return errors!=0;
+    }
+    if(argc==2 && !strcmp(argv[1],"--lua-obituary")) {
+        errors=CheckGoombaObituary()+CheckObituaryAudio();
+        graphicPopupOriginalOnNative=1;errors+=CheckGraphicPopups();graphicPopupOriginalOnNative=0;
+        printf("Lua death dependency: normal/stomp/pushed client obituary: %s\n",errors?"FAIL":"PASS");
+        return errors!=0;
+    }
     errors += CheckWidescreenText();
     errors += CheckLagometerLayout();
     errors += CheckBombView();
@@ -6657,14 +6712,14 @@ int main(int argc, char **argv) {
 	}
 	{
 		int i;
-		static const char *titles[] = {"THE BEGINNING", "100 KILLS!", "NEED A MEDIC?",
+		static const char *titles[] = {"THE BEGINNING", "100 KILLS!", "", "NEED A MEDIC?",
 			"WATCH YOUR STEP!", "FAT ASS!", "BOOM HEADSHOT!", "ROASTER!",
 			"I'M AN ENGINEER!", "DESTROYER", "REMOTE KILLER", "BUTCHER"};
-		for(i = 0; i < 11; ++i)
+		for(i = 0; i < 12; ++i)
 			if(!CG_NitmodGlobalAwardTitle(i) || strcmp(CG_NitmodGlobalAwardTitle(i), titles[i]) ||
 			   !CG_NitmodGlobalAwardDescription(i)) ++errors;
-		if(CG_NitmodGlobalAwardTitle(-1) || CG_NitmodGlobalAwardTitle(11) ||
-		   CG_NitmodGlobalAwardDescription(-1) || CG_NitmodGlobalAwardDescription(11)) ++errors;
+		if(CG_NitmodGlobalAwardTitle(-1) || CG_NitmodGlobalAwardTitle(12) ||
+		   CG_NitmodGlobalAwardDescription(-1) || CG_NitmodGlobalAwardDescription(12)) ++errors;
 	}
     errors += CheckDoubleJump();
     errors += CheckLeanMovement();

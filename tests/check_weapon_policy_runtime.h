@@ -55,6 +55,7 @@ static int QDECL PolicyRuntimeEngine(int command, ...) {
     va_start(args,command); name=va_arg(args,const char *);
     output=va_arg(args,char *); size=va_arg(args,int); va_end(args);
     if(!strcmp(name,"g_medics")) { Com_sprintf(output,size,"%d",policyMedicOptions); return 0; }
+    if(!strcmp(name,"g_weaponScriptsDir")) { Q_strncpyz(output,"",size);return 0; }
     for(i=0;i<11;++i) if(!strcmp(name,policyNames[i])) {
         if(policyBadInput) Q_strncpyz(output,"invalid",size);
         else Com_sprintf(output,size,"%d",policyValues[i]);

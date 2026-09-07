@@ -1,26 +1,10 @@
 #include "g_local.h"
 #include "g_nitmod_restrictions.h"
+#include "nitmod_class_primaries.h"
 
 int G_NITMOD_IsClassPrimary( const gentity_t *entity, int nativeWeapon,
     int pickupContext, int pickAnyWeapon ) {
-    /* Original ELF class records: axis 0x2a79c0, allies 0x2a7ac0,
-     * 48 bytes each; six primary slots at +16. Map IDs by item identity. */
-    static const int primaries[2][5][6] = {
-        {
-            { WP_MP40, WP_MOBILE_MG42, WP_FLAMETHROWER, WP_PANZERFAUST, WP_MORTAR, WP_NONE },
-            { WP_MP40, WP_THOMPSON, WP_STEN, WP_NONE, WP_NONE, WP_NONE },
-            { WP_MP40, WP_THOMPSON, WP_KAR98, WP_NONE, WP_NONE, WP_NONE },
-            { WP_MP40, WP_THOMPSON, WP_STEN, WP_NONE, WP_NONE, WP_NONE },
-            { WP_STEN, WP_FG42, WP_K43, WP_NONE, WP_NONE, WP_NONE }
-        }, {
-            { WP_THOMPSON, WP_MOBILE_MG42, WP_FLAMETHROWER, WP_PANZERFAUST, WP_MORTAR, WP_NONE },
-            { WP_THOMPSON, WP_MP40, WP_STEN, WP_NONE, WP_NONE, WP_NONE },
-            { WP_THOMPSON, WP_MP40, WP_CARBINE, WP_NONE, WP_NONE, WP_NONE },
-            { WP_THOMPSON, WP_MP40, WP_STEN, WP_NONE, WP_NONE, WP_NONE },
-            { WP_STEN, WP_FG42, WP_GARAND, WP_NONE, WP_NONE, WP_NONE }
-        }
-    };
-    int team, cls, i;
+    int team, cls;
     if( !entity || !entity->client || nativeWeapon < WP_NONE ||
         nativeWeapon >= WP_NUM_WEAPONS ) return 0;
     team = entity->client->sess.sessionTeam;
@@ -29,9 +13,7 @@ int G_NITMOD_IsClassPrimary( const gentity_t *entity, int nativeWeapon,
     if( pickupContext && pickAnyWeapon ) return 1;
     cls = entity->client->sess.playerType;
     if( nativeWeapon == WP_NONE || cls < PC_SOLDIER || cls > PC_COVERTOPS ) return 0;
-    for( i = 0; i < 6; i++ )
-        if( primaries[team == TEAM_ALLIES][cls][i] == nativeWeapon ) return 1;
-    return 0;
+    return NITMOD_ClassHasPrimary(team, cls, nativeWeapon);
 }
 
 int G_NITMOD_StenAllowed( const gentity_t *entity, int pickupContext,

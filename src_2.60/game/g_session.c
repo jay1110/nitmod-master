@@ -27,6 +27,9 @@ void G_WriteClientSessionData( gclient_t *client, qboolean restart )
 	int mvc = G_smvGenerateClientList(g_entities + (client - level.clients));
 	const char	*s;
 
+	/* Original G_WriteClientSessionData resets this distinct session statistic. */
+	client->sess.nitmodKillingSpree = 0;
+
 	// OSP -- stats reset check
 	if(level.fResetStats) G_deleteStats(client - level.clients);
 
@@ -67,6 +70,13 @@ void G_WriteClientSessionData( gclient_t *client, qboolean restart )
 		);
 
 	trap_Cvar_Set( va( "session%i", client - level.clients ), s );
+	/* Separate key keeps existing 26-column sessions readable unchanged. */
+	trap_Cvar_Set(va("nitmod_newton%i", client - level.clients),
+		va("%i", client->sess.nitmodNewton));
+	trap_Cvar_Set(va("nitmod_shoutcaster%i", client - level.clients), va("%i", client->sess.shoutcaster));
+	trap_Cvar_Set(va("nitmod_headhits%i", client - level.clients), va("%i", client->sess.nitmodHeadHits));
+	trap_Cvar_Set(va("nitmod_bodyhits%i", client - level.clients), va("%i", client->sess.nitmodBodyHits));
+	trap_Cvar_Set(va("nitmod_killingspree%i", client-level.clients), "0");
 	G_NITMOD_WriteEquipment( client, client - level.clients );
 
 	// Arnout: store the clients stats (7) and medals (7)
@@ -156,6 +166,12 @@ void G_ReadSessionData( gclient_t *client )
 	qboolean test;
 
 	G_NITMOD_ReadEquipment( client, client - level.clients );
+	client->sess.nitmodNewton = trap_Cvar_VariableIntegerValue(
+		va("nitmod_newton%i", client - level.clients));
+	client->sess.shoutcaster = trap_Cvar_VariableIntegerValue(va("nitmod_shoutcaster%i", client - level.clients));
+	client->sess.nitmodKillingSpree=trap_Cvar_VariableIntegerValue(va("nitmod_killingspree%i", client-level.clients));
+	client->sess.nitmodHeadHits=trap_Cvar_VariableIntegerValue(va("nitmod_headhits%i", client-level.clients));
+	client->sess.nitmodBodyHits=trap_Cvar_VariableIntegerValue(va("nitmod_bodyhits%i", client-level.clients));
 
 	trap_Cvar_VariableStringBuffer( va( "session%i", client - level.clients ), s, sizeof(s) );
 
@@ -303,6 +319,9 @@ void G_InitSessionData( gclient_t *client, char *userinfo ) {
 	sess->coach_team = 0;
 	sess->referee = (client->pers.localClient) ? RL_REFEREE : RL_NONE;
 	sess->spec_invite = 0;
+	sess->shoutcaster = 0;
+	sess->nitmodKillingSpree = 0;
+	sess->nitmodHeadHits = sess->nitmodBodyHits = 0;
 	sess->spec_team = 0;
 	G_deleteStats(client - level.clients);
 	// OSP

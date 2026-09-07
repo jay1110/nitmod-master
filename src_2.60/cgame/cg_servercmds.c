@@ -2243,11 +2243,11 @@ static void CG_ServerCommand( void ) {
 	}
 
 	if ( NITMOD_DisplayCommand( cmd ) ) return;
-	if ( !strcmp( cmd, "glstats" ) && NITMOD_UsesOriginalProtocol() ) {
+	if ( !strcmp( cmd, "glstats" ) && NITMOD_UsesNitmodHud() ) {
 		CG_NitmodGlobalStatsCommand();
 		return;
 	}
-	if ( !strcmp( cmd, "popaw" ) && NITMOD_UsesOriginalProtocol() ) {
+	if ( !strcmp( cmd, "popaw" ) && NITMOD_UsesNitmodHud() ) {
 		CG_NitmodGlobalAwardCommand();
 		return;
 	}
@@ -2549,7 +2549,9 @@ static void CG_ServerCommand( void ) {
 		CG_ParseWeaponStats();
 		return;
 	}
-	if( !Q_stricmp( cmd, "getnguid" ) && NITMOD_UsesOriginalProtocol() ) {
+	/* NGUID identity is also required by the reconstructed local server,
+	 * independently of its ET 2.60 configstring layout. */
+	if( !Q_stricmp( cmd, "getnguid" ) && NITMOD_UsesNitmodHud() ) {
 		NITMOD_ReadNKey();
 		return;
 	}

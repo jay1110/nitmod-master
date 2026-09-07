@@ -1,3 +1,5 @@
+#include "g_nitmod_lua.h"
+#include "g_nitmod_accounts.h"
 
 
 
@@ -1295,10 +1297,66 @@ ConsoleCommand
 
 =================
 */
+#include "g_nitmod_integrity.h"
+#include "g_nitmod_database.h"
+#include "g_nitmod_admin.h"
+static int NITMOD_ParseDatabaseLevel(const char *text,int *result) {
+	int value=0;
+	if(!*text) return 0;
+	for(;*text;++text) {
+		if(*text<'0' || *text>'9' || value>(2147483647-(*text-'0'))/10) return 0;
+		value=value*10+(*text-'0');
+	}
+	*result=value; return 1;
+}
 qboolean	ConsoleCommand( void ) {
 	char	cmd[MAX_TOKEN_CHARS];
 
 	trap_Argv( 0, cmd, sizeof( cmd ) );
+	if(G_NITMOD_LuaCommand(-1,cmd)) return qtrue;
+	if(G_NITMOD_ShoutcasterCommand(-1,cmd)) return qtrue;
+	if(!Q_stricmp(cmd,"lua_status")) { G_NITMOD_LuaStatus(-1); return qtrue; }
+	if(!Q_stricmp(cmd,"writexp")) {
+		int clientNum;
+		G_NITMOD_AccountsSaveAllXP();
+		for(clientNum=0;clientNum<level.maxclients && clientNum<MAX_CLIENTS;++clientNum)
+			G_NITMOD_GlobalStatsUpload(clientNum);
+		return qtrue;
+	}
+	if(G_NITMOD_AdminCommand(-1,cmd)) return qtrue;
+	if(!Q_stricmp(cmd,"nitmod_nxac_reload")) { G_NITMOD_LoadChecksums(); return qtrue; }
+	if(!Q_stricmp(cmd,"nitmod_db_reload")) {
+		G_NITMOD_UpdateLegacyGameplayCvars();
+		if(G_NITMOD_DatabaseFlush()) {
+			int clientNum;
+			G_NITMOD_LoadDatabase();
+			if(NITMOD_DBUserCount()>=0) {
+				G_NITMOD_LoadAdminLevels();
+				for(clientNum=0;clientNum<level.maxclients;++clientNum)
+					if(g_entities[clientNum].client && g_entities[clientNum].client->pers.connected!=CON_DISCONNECTED)
+						ClientUserinfoChanged(clientNum);
+			}
+		}
+		else G_Printf("[SQLite] Reload refused: unsaved database changes\n");
+		return qtrue;
+	}
+	if(!Q_stricmp(cmd,"nitmod_db_status")) { G_NITMOD_DatabaseStatus(); return qtrue; }
+	if(!Q_stricmp(cmd,"nitmod_db_saveas")) {
+		char path[MAX_STRING_CHARS];
+		if(trap_Argc()!=2) { G_Printf("usage: nitmod_db_saveas <new-path.sqlite>\n"); return qtrue; }
+		trap_Argv(1,path,sizeof(path));
+		if(!G_NITMOD_DatabaseSaveAs(path)) G_Printf("[SQLite] Database not saved\n");
+		return qtrue;
+	}
+	if(!Q_stricmp(cmd,"nitmod_db_migratelevel")) {
+		char source[64],target[64],path[MAX_STRING_CHARS]; int from,to;
+		trap_Argv(1,source,sizeof(source)); trap_Argv(2,target,sizeof(target)); trap_Argv(3,path,sizeof(path));
+		if(trap_Argc()!=4 || !NITMOD_ParseDatabaseLevel(source,&from) || !NITMOD_ParseDatabaseLevel(target,&to)) {
+			G_Printf("usage: nitmod_db_migratelevel <old-level> <new-level> <new-path.sqlite>\n"); return qtrue;
+		}
+		if(!G_NITMOD_DatabaseMigrateLevel(from,to,path)) G_Printf("[SQLite] Level migration not saved\n");
+		return qtrue;
+	}
 
 	if ( Q_stricmp( cmd, "crazygravity" ) == 0 ) {
 		return Svcmd_CrazyGravity_f();

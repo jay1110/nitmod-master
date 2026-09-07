@@ -50,7 +50,7 @@ static const weap_ws_convert_t aWeapID[WP_NUM_WEAPONS] = {
 	{ WP_LANDMINE,			WS_LANDMINE },		// 35
 	{ WP_SATCHEL,			WS_MAX },
 	{ WP_SATCHEL_DET,		WS_SATCHEL },
-	{ WP_TRIPMINE,			WS_LANDMINE },
+	{ WP_TRIPMINE,			WS_TRIPMINE },
 	{ WP_SMOKE_BOMB,		WS_SMOKE },
 
 	{ WP_MOBILE_MG42,		WS_MG42 },			// 40
@@ -74,6 +74,10 @@ static const weap_ws_convert_t aWeapID[WP_NUM_WEAPONS] = {
 	{ WP_AKIMBO_SILENCEDLUGER,	WS_LUGER	},
 	{ WP_AKIMBO_COLT,			WS_COLT		},
 	{ WP_AKIMBO_LUGER,			WS_LUGER	},
+	{ WP_BOMB, WS_BOMB },
+	{ WP_POISON_SYRINGE, WS_POISON },
+	{ WP_POISON_BOMB, WS_POISON_GAS },
+	{ WP_POISON_MINE, WS_POISON_MINE },
 };
 
 

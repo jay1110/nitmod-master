@@ -819,6 +819,7 @@ void CG_PredictPlayerState( void ) {
 		cg_pmove.nitmodLeanEnabled = NITMOD_UsesOriginalProtocol();
 		cg_pmove.nitmodReloadEnabled = !Q_stricmp(Info_ValueForKey(CG_ConfigString(CS_SERVERINFO), "gamename"), "nitmod");
 		cg_pmove.nitmodAuthoritativeWeapons = NITMOD_UsesOriginalProtocol();
+		NITMOD_PackPredictionInputs(&cg_pmove,cg.snap->ps.clientNum);
 		if(cg_pmove.ps->weapon > WP_NONE && cg_pmove.ps->weapon < WP_NUM_WEAPONS) {
 			weaponInfo_t *wi=&cg_weapons[cg_pmove.ps->weapon];
 			cg_pmove.nitmodCustomRecoilEnabled=wi->customRecoilEnabled;
@@ -870,6 +871,7 @@ void CG_PredictPlayerState( void ) {
 	cg_pmove.nitmodLeanEnabled = NITMOD_UsesOriginalProtocol();
 	cg_pmove.nitmodReloadEnabled = !Q_stricmp(Info_ValueForKey(CG_ConfigString(CS_SERVERINFO), "gamename"), "nitmod");
 	cg_pmove.nitmodAuthoritativeWeapons = NITMOD_UsesOriginalProtocol();
+	NITMOD_PackPredictionInputs(&cg_pmove,cg.snap->ps.clientNum);
 	if(cg_pmove.ps->weapon > WP_NONE && cg_pmove.ps->weapon < WP_NUM_WEAPONS) {
 		weaponInfo_t *wi=&cg_weapons[cg_pmove.ps->weapon];
 		cg_pmove.nitmodCustomRecoilEnabled=wi->customRecoilEnabled;

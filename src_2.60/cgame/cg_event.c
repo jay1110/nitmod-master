@@ -1,6 +1,7 @@
 // cg_event.c -- handle entity events at snapshot or playerstate transitions
 
 #include "cg_local.h"
+#include "../game/nitmod_lua_events.h"
 #include "cg_nitmod_config.h"
 #include "cg_nitmod_hud.h"
 #include "cg_nitmod_events.h"
@@ -26,6 +27,12 @@ static void CG_Obituary( entityState_t *ent ) {
 	clientInfo_t	*ci, *ca; // JPW NERVE ca = attacker
 	qhandle_t	deathShader = cgs.media.pmImages[PM_DEATH];
 	if(NITMOD_UsesOriginalProtocol()) { CG_NitmodObituary(ent); return; }
+	if(ent->effect3Time >= NITMOD_OBITUARY_EXTRA && ent->effect3Time < NITMOD_OBITUARY_EXTRA+4) {
+		static const int originalCause[]={60,61,63,64};
+		entityState_t original=*ent;
+		original.eventParm=originalCause[ent->effect3Time-NITMOD_OBITUARY_EXTRA];
+		CG_NitmodObituary(&original);return;
+	}
 
 	target = ent->otherEntityNum;
 	attacker = ent->otherEntityNum2;
@@ -35,6 +42,7 @@ static void CG_Obituary( entityState_t *ent ) {
 	if(mod == MOD_SMOKEBOMB && ent->effect3Time == NITMOD_OBITUARY_POISON_GAS) mod = MOD_POISON_GAS;
 	if(mod == MOD_LANDMINE && ent->effect3Time == NITMOD_OBITUARY_POISON_GAS_MINE) mod = MOD_POISON_GAS_MINE;
 	if(mod == MOD_SYRINGE && ent->effect3Time == NITMOD_OBITUARY_POISON) mod = MOD_POISON;
+	if(mod == MOD_FALLING && ent->effect3Time == NITMOD_OBITUARY_SHOVE) mod = MOD_SHOVE;
 	if(NITMOD_UsesOriginalProtocol()) mod = CG_NitmodDeathCause(mod);
 
 	if ( target < 0 || target >= MAX_CLIENTS ) {
@@ -89,6 +97,9 @@ static void CG_Obituary( entityState_t *ent ) {
 
 	if( attacker == target ) {
 		switch (mod) {
+		case MOD_SHOVE:
+			message = "fell to his death";
+			break;
 		case MOD_DYNAMITE:
 			message = "dynamited himself to pieces";
 			break;
@@ -226,6 +237,10 @@ static void CG_Obituary( entityState_t *ent ) {
 
 		case MOD_GOOMBA:
 			message = "was stomped by";
+			message2 = "";
+			break;
+		case MOD_SHOVE:
+			message = "was pushed too far by";
 			message2 = "";
 			break;
 		case MOD_BOMB:
@@ -1774,6 +1789,13 @@ static void CG_EntityEventForProtocol( centity_t *cent, vec3_t position, qboolea
 
 	es = &cent->currentState;
 	event = es->event & ~EV_EVENT_BITS;
+    if(NITMOD_LuaEventDecode(event)>=0) {
+        int saved=es->event;
+        es->event=(saved&EV_EVENT_BITS)|NITMOD_LuaEventDecode(event);
+        CG_EntityEventForProtocol(cent,position,qtrue);
+        es->event=saved;
+        return;
+    }
 	wireEvent = event;
 	/* Prediction produces our internal knife event even on original servers.
 	 * Route that event to its existing handler without interpreting native
@@ -2568,7 +2590,8 @@ static void CG_EntityEventForProtocol( centity_t *cent, vec3_t position, qboolea
 
 	case EV_OBITUARY:
 		DEBUGNAME("EV_OBITUARY");
-		CG_Obituary( es );
+		if(original) CG_NitmodObituary(es);
+		else CG_Obituary(es);
 		break;
 
 	// JPW NERVE -- swiped from SP/Sherman
@@ -2994,6 +3017,9 @@ void CG_CheckEvents( centity_t *cent ) {
 
 		cent->previousEvent = 1;
 
+        /* Lua temp events retain an eight-bit eType and use the existing
+         * event field for their complete original identity. */
+        if(cent->currentState.eType!=ET_EVENTS+EV_NITMOD_LUA_FIRST)
 		cent->currentState.event = cent->currentState.eType - ET_EVENTS;
 	} else {
 

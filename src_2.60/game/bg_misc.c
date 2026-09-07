@@ -3994,7 +3994,8 @@ char *eventnames[] = {
 	"EV_ARTYMESSAGE",
 	"EV_AIRSTRIKEMESSAGE",
 	"EV_MEDIC_CALL",
-	"EV_MAX_EVENTS",
+	"EV_NITMOD_SOUND",
+	"EV_NITMOD_THROW_KNIFE",
 };
 
 /*
@@ -4015,9 +4016,11 @@ void BG_AddPredictableEventToPlayerstate( int newEvent, int eventParm, playerSta
 		trap_Cvar_VariableStringBuffer("showevents", buf, sizeof(buf));
 		if ( atof(buf) != 0 ) {
 #ifdef QAGAME
-			Com_Printf(" game event svt %5d -> %5d: num = %20s parm %d\n", ps->pmove_framecount/*ps->commandTime*/, ps->eventSequence, eventnames[newEvent], eventParm);
+			Com_Printf(" game event svt %5d -> %5d: num = %20s parm %d\n", ps->pmove_framecount/*ps->commandTime*/, ps->eventSequence, (newEvent>=EV_NITMOD_LUA_FIRST && newEvent<=EV_NITMOD_LUA_LAST)?"EV_LUA_ORIGINAL":
+                (newEvent>=0 && newEvent<(int)(sizeof(eventnames)/sizeof(eventnames[0]))?eventnames[newEvent]:"UNKNOWN"), eventParm);
 #else
-			Com_Printf("Cgame event svt %5d -> %5d: num = %20s parm %d\n", ps->pmove_framecount/*ps->commandTime*/, ps->eventSequence, eventnames[newEvent], eventParm);
+			Com_Printf("Cgame event svt %5d -> %5d: num = %20s parm %d\n", ps->pmove_framecount/*ps->commandTime*/, ps->eventSequence, (newEvent>=EV_NITMOD_LUA_FIRST && newEvent<=EV_NITMOD_LUA_LAST)?"EV_LUA_ORIGINAL":
+                (newEvent>=0 && newEvent<(int)(sizeof(eventnames)/sizeof(eventnames[0]))?eventnames[newEvent]:"UNKNOWN"), eventParm);
 #endif
 		}
 	}
@@ -4302,6 +4305,7 @@ gitem_t* BG_ValidStatWeapon( weapon_t weap ) {
 
 weapon_t BG_WeaponForMOD( int MOD ) {
 	weapon_t i;
+	if(MOD == MOD_THROWKNIFE) return WP_KNIFE;
 
 	for(i = 0; i < WP_NUM_WEAPONS; i++) {
 		if(GetAmmoTableData(i)->mod == MOD) {
@@ -4969,7 +4973,12 @@ const weap_ws_t aWeaponInfo[WS_MAX] = {
 	{ qfalse,	"LNMN", "Landmine"	},	// 18
 	{ qtrue,	"MG42",	"MG-42 Gun"	},	// 19
 	{ qtrue,	"GARN",	"Garand"	},	// 20
-	{ qtrue,	"K-43",	"K43 Rifle"	}	// 21
+	{ qtrue,	"K-43",	"K43 Rifle"	},	// 21
+	{ qfalse, "POIS", "Poison" },
+	{ qfalse, "BOMB", "Bomb" },
+	{ qfalse, "TPMN", "Tripmine" },
+	{ qfalse, "PGAS", "Poison Gas" },
+	{ qfalse, "PGASMINE", "Poison Gas Mine" }
 };
 
 // Multiview: Convert weaponstate to simpler format

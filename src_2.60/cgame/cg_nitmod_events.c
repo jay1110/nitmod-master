@@ -24,8 +24,8 @@ int CG_NitmodDeathCause(int wireCause) {
         MOD_CRUSH_CONSTRUCTIONDEATH, MOD_CRUSH_CONSTRUCTIONDEATH_NOATTACKER,
         MOD_K43, MOD_K43_SCOPE, MOD_MORTAR, MOD_AKIMBO_COLT, MOD_AKIMBO_LUGER,
         MOD_AKIMBO_SILENCEDCOLT, MOD_AKIMBO_SILENCEDLUGER, MOD_SMOKEGRENADE,
-        MOD_SWITCHTEAM, MOD_GOOMBA, MOD_POISON, MOD_UNKNOWN, MOD_UNKNOWN,
-        MOD_UNKNOWN, MOD_UNKNOWN, MOD_UNKNOWN, MOD_BOMB, MOD_TRIPMINE,
+        MOD_SWITCHTEAM, MOD_GOOMBA, MOD_POISON, MOD_FEAR, MOD_CENSORED,
+        MOD_SHOVE, MOD_THROWKNIFE, MOD_GIBME, MOD_BOMB, MOD_TRIPMINE,
         MOD_POISON_GAS, MOD_POISON_GAS_MINE
     };
     return wireCause >= 0 && wireCause < sizeof(causes)/sizeof(causes[0]) ? causes[wireCause] : MOD_UNKNOWN;
@@ -50,10 +50,10 @@ void CG_NitmodSpecialObituary(int cause, char **message, char **suffix) {
     }
 }
 
-void CG_NitmodObituaryPrint(const char *text, qhandle_t shader, const entityState_t *event) {
+void CG_NitmodObituaryPrintForProtocol(const char *text, qhandle_t shader, const entityState_t *event, qboolean original) {
     nitmodObituaryPlan_t plan;
     if(!event || !text || !*text) return;
-    if(!NITMOD_UsesOriginalProtocol()) { CG_AddPMItem(PM_DEATH, text, shader); return; }
+    if(!original) { CG_AddPMItem(PM_DEATH, text, shader); return; }
     if(CG_NitmodPlanGraphicObituary(event, cg_obituary.integer, shader, &plan) &&
        CG_NitmodAddGraphicObituary(plan.first, plan.second, plan.shader, plan.scale, plan.color)) {
         CG_Printf("%s\n", text);
@@ -68,10 +68,14 @@ void CG_NitmodObituaryPrint(const char *text, qhandle_t shader, const entityStat
     } else CG_Printf("%s\n", text);
 }
 
-void CG_NitmodObituarySounds(const entityState_t *es) {
+void CG_NitmodObituaryPrint(const char *text, qhandle_t shader, const entityState_t *event) {
+    CG_NitmodObituaryPrintForProtocol(text,shader,event,NITMOD_UsesOriginalProtocol());
+}
+
+void CG_NitmodObituarySoundsForProtocol(const entityState_t *es, qboolean original) {
     int target, attacker, listener, cause;
     qboolean goat, gib, tk;
-    if(!es || !cg.snap || !NITMOD_UsesOriginalProtocol()) return;
+    if(!es || !cg.snap || !original) return;
     target = es->otherEntityNum; attacker = es->otherEntityNum2;
     listener = cg.snap->ps.clientNum; cause = es->eventParm;
     if(target < 0 || target >= MAX_CLIENTS || attacker < 0 || attacker >= MAX_CLIENTS ||
@@ -96,6 +100,10 @@ void CG_NitmodObituarySounds(const entityState_t *es) {
         trap_S_StartSound(cg.snap->ps.origin, attacker, CHAN_WEAPON, obituaryGoat);
     }
     if(tk && obituaryTK > 0) trap_S_StartSound(NULL, listener, CHAN_AUTO, obituaryTK);
+}
+
+void CG_NitmodObituarySounds(const entityState_t *es) {
+    CG_NitmodObituarySoundsForProtocol(es,NITMOD_UsesOriginalProtocol());
 }
 
 /* Original CG_EntityEvent cases 94, 95, 97, 100, 102, 103. The sound table

@@ -1,3 +1,7 @@
+#include "g_nitmod_lua.h"
+#include "g_nitmod_accounts.h"
+#include "g_nitmod_admin.h"
+#include "g_nitmod_integrity.h"
 #include "g_local.h"
 #include "g_nitmod_mapvote.h"
 #include "g_nitmod_legacy_cvars.h"
@@ -1755,7 +1759,7 @@ void G_Say( gentity_t *ent, gentity_t *target, int mode, const char *chatText ) 
 
 /* Recovered ClientIsFlooding contract: a 30-second accounting window plus
  * the configured inter-message wait and a short continuing penalty. */
-static qboolean G_NITMOD_ClientIsFlooding( gentity_t *ent )
+qboolean G_NITMOD_ClientIsFlooding( gentity_t *ent )
 {
 	int threshold;
 	int wait;
@@ -2179,6 +2183,9 @@ qboolean Cmd_CallVote_f( gentity_t *ent, unsigned int dwCommand, qboolean fRefCo
 	}
 
 	// make sure it is a valid command to vote on
+	if(!fRefCommand && G_NITMOD_AdminPrivilege((int)(ent-g_entities),"novote")) {
+		trap_SendServerCommand((int)(ent-g_entities),"ncp 32"); return qfalse;
+	}
 	trap_Argv( 1, arg1, sizeof( arg1 ) );
 	trap_Argv( 2, arg2, sizeof( arg2 ) );
 
@@ -2903,6 +2910,9 @@ qboolean Do_Activate2_f(gentity_t *ent, gentity_t *traceEnt) {
 
 						G_AddSkillPoints( ent, SK_MILITARY_INTELLIGENCE_AND_SCOPED_WEAPONS, 5.f );
 						G_DebugAddSkillPoints( ent, SK_MILITARY_INTELLIGENCE_AND_SCOPED_WEAPONS, 5, "stealing uniform" ); 
+						if(traceEnt->s.clientNum>=0 && traceEnt->s.clientNum<MAX_CLIENTS &&
+						   !(g_entities[traceEnt->s.clientNum].r.svFlags&SVF_BOT))
+							G_NITMOD_GlobalStatsEvent(ent->s.number,14);
 
 						Q_strncpyz( ent->client->disguiseNetname, g_entities[traceEnt->s.clientNum].client->pers.netname, sizeof(ent->client->disguiseNetname) );
 						ent->client->disguiseRank = g_entities[traceEnt->s.clientNum].client ? g_entities[traceEnt->s.clientNum].client->sess.rank : 0;
@@ -3213,7 +3223,7 @@ qboolean G_PushPlayer(gentity_t *actor, gentity_t *target) {
 	int i;
 	if(!actor || !actor->client || !target || !target->client || actor == target ||
 	   !g_shove.integer || actor->health <= 0 || target->health <= 0 ||
-	   actor->client->ps.persistant[PERS_HWEAPON_USE] ||
+	   actor->client->ps.powerups[PW_INVULNERABLE] ||
 	   (double)level.time - actor->client->nitmodLastShoveTime < 500.0) return qfalse;
 	actor->client->nitmodLastShoveTime = level.time;
 	AngleVectors(actor->client->ps.viewangles, impulse, NULL, NULL);
@@ -3224,6 +3234,8 @@ qboolean G_PushPlayer(gentity_t *actor, gentity_t *target) {
 		vertical > fabs(impulse[1]) ? vertical * .8f : 64.0f;
 	VectorAdd(target->s.pos.trDelta, impulse, target->s.pos.trDelta);
 	VectorAdd(target->client->ps.velocity, impulse, target->client->ps.velocity);
+	target->client->nitmodPushed = qtrue;
+	target->client->nitmodPushedBy = (int)(actor - g_entities);
 	target->client->ps.pm_time = 100;
 	target->client->ps.pm_flags |= PMF_TIME_KNOCKBACK;
 	/* Event 96 belongs to the original wire layout, not native ET. */
@@ -3795,6 +3807,7 @@ static void G_NITMOD_CleanPrivateMessage(const char *input, char *output, int ou
 }
 
 qboolean G_NITMOD_ClientMuted(gentity_t *ent) {
+	if(ent && ent->client && G_NITMOD_AccountMuted((int)(ent-g_entities))) return qtrue;
 	if(!ent || !ent->client || !ent->client->sess.muted) return qfalse;
 	if(ent->client->nitmodMuteUntil > 0 && level.time >= ent->client->nitmodMuteUntil) {
 		ent->client->sess.muted = qfalse;
@@ -3837,6 +3850,9 @@ static void G_NITMOD_PrivateMessage(gentity_t *ent, const char *targetName, cons
 		trap_SendServerCommand(ent - g_entities,
 			"chat \"^9usage: ^g/m [name|slot#] [message]\" -2");
 		return;
+	}
+	if(G_NITMOD_AdminPrivilege((int)(ent-g_entities),"nopm")) {
+		trap_SendServerCommand((int)(ent-g_entities),"ncp 56"); return;
 	}
 	targetNum = ClientNumberFromString(ent, (char *)targetName);
 	if(targetNum < 0) return;
@@ -4012,6 +4028,13 @@ void ClientCommand( int clientNum ) {
 	}
 
 	trap_Argv( 0, cmd, sizeof( cmd ) );
+	if(G_NITMOD_ChecksumCommand(clientNum,cmd)) return;
+	if(G_NITMOD_LuaCommand(clientNum,cmd)) return;
+	if(G_NITMOD_GlobalStatsCommand(clientNum,cmd)) return;
+	if(G_NITMOD_ShoutcasterCommand(clientNum,cmd)) return;
+	if(!Q_stricmp(cmd,"lua_status")) { G_NITMOD_LuaStatus(clientNum); return ; }
+	if(G_NITMOD_AdminCommand(clientNum,cmd)) return;
+	if(G_NITMOD_AccountCommand(clientNum,cmd)) return;
 
 	if ( !Q_stricmp( cmd, NITMOD_CAPABILITIES_COMMAND ) ) {
 		char argument[MAX_TOKEN_CHARS];

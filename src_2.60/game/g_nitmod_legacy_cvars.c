@@ -8,6 +8,7 @@ typedef struct {
 } nitmodLegacyCvar_t;
 /* Original qagame gameCvarTable 0x2a7e20: gameplay/progression batch. */
 static nitmodLegacyCvar_t legacyGameplayCvars[] = {
+	{{0},"n_globalStatsBridge","",0},
 	{{0},"g_playDead","1",0}, {{0},"g_classChange","0",0},
 	{{0},"g_privateMessages","1",0}, {{0},"g_fieldOps","0",0},
 	{{0},"g_teamChangeKills","1",0}, {{0},"g_defaultMute","3600",0},
@@ -98,8 +99,16 @@ static qboolean G_NITMOD_LegacyCvarPublishesSnapshot(const char *name) {
 	return qfalse;
 }
 
+static qboolean luaConfigurationChanged;
+qboolean G_NITMOD_ConsumeLuaConfigurationChange(void) {
+    qboolean changed=luaConfigurationChanged;
+    luaConfigurationChanged=qfalse;
+    return changed;
+}
 void G_NITMOD_RegisterLegacyGameplayCvars(void) {
-	unsigned int i; for(i=0;i<sizeof(legacyGameplayCvars)/sizeof(*legacyGameplayCvars);++i) {
+	unsigned int i;
+    luaConfigurationChanged=qfalse;
+	for(i=0;i<sizeof(legacyGameplayCvars)/sizeof(*legacyGameplayCvars);++i) {
 		trap_Cvar_Register(&legacyGameplayCvars[i].value,legacyGameplayCvars[i].name,legacyGameplayCvars[i].defaultValue,legacyGameplayCvars[i].flags);
 		legacyGameplayCvars[i].modificationCount = legacyGameplayCvars[i].value.modificationCount;
 	}
@@ -111,6 +120,8 @@ qboolean G_NITMOD_UpdateLegacyGameplayCvars(void) {
 		trap_Cvar_Update(&legacyGameplayCvars[i].value);
 		if(legacyGameplayCvars[i].modificationCount != legacyGameplayCvars[i].value.modificationCount) {
 			legacyGameplayCvars[i].modificationCount = legacyGameplayCvars[i].value.modificationCount;
+            if(!Q_stricmp(legacyGameplayCvars[i].name,"lua_modules") ||
+               !Q_stricmp(legacyGameplayCvars[i].name,"lua_allowedModules")) luaConfigurationChanged=qtrue;
 			if(G_NITMOD_LegacyCvarPublishesSnapshot(legacyGameplayCvars[i].name))
 				changed = qtrue;
 		}

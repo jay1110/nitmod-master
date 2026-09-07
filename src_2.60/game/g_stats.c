@@ -1,6 +1,8 @@
+#include "g_nitmod_lua.h"
 #include "g_local.h"
 #include "nitmod_skills.h"
 #include "g_nitmod_legacy_cvars.h"
+#include "g_nitmod_abilities.h"
 
 void G_LogDeath( gentity_t* ent, weapon_t weap ) {
 	weap = BG_DuplicateWeapon(weap);
@@ -123,6 +125,7 @@ void G_SetPlayerSkill( gclient_t *client, skillType_t skill ) {
 	int maximum;
 
 	if(!client || skill < 0 || skill >= SK_NUM_SKILLS) return;
+	if(G_NITMOD_LuaSkill("et_SetPlayerSkill",(int)(client-level.clients),skill)) return;
 	NITMOD_DefaultSkillThresholds(&thresholds);
 	trap_Cvar_VariableStringBuffer(thresholdCvars[skill], value, sizeof(value));
 	NITMOD_ParseSkillThresholdRow(value, thresholds.threshold[skill]);
@@ -142,6 +145,7 @@ extern qboolean AddWeaponToPlayer( gclient_t *client, weapon_t weapon, int ammo,
 // TAT 11/6/2002
 //		Local func to actual do skill upgrade, used by both MP skill system, and SP scripted skill system
 static void G_UpgradeSkill( gentity_t *ent, skillType_t skill ) {
+	if(G_NITMOD_LuaSkill("et_UpgradeSkill",(int)(ent-g_entities),skill)) return;
 	G_DebugAddSkillLevel( ent, skill );
 	/* Match session restoration without recalculating XP or granting another
 	 * skill. The existing userinfo update publishes the new bounded rank. */
@@ -151,12 +155,23 @@ static void G_UpgradeSkill( gentity_t *ent, skillType_t skill ) {
 	ClientUserinfoChanged( ent-g_entities );
 
 	// Give em rightaway
-	if( skill == SK_BATTLE_SENSE && ent->client->sess.skill[skill] == 1 ) {
+	if( skill == SK_BATTLE_SENSE && (ent->client->sess.nitmodSkillMasks[skill] & 2u) ) {
 		if( AddWeaponToPlayer( ent->client, WP_BINOCULARS, 1, 0, qfalse ) ) {
 			ent->client->ps.stats[STAT_KEYS] |= ( 1 << INV_BINOCS );
 		}
-	} else if( skill == SK_FIRST_AID && ent->client->sess.playerType == PC_MEDIC && ent->client->sess.skill[skill] == 4 ) {
-		AddWeaponToPlayer( ent->client, WP_MEDIC_ADRENALINE, ent->client->ps.ammo[BG_FindAmmoForWeapon(WP_MEDIC_ADRENALINE)], ent->client->ps.ammoclip[BG_FindClipForWeapon(WP_MEDIC_ADRENALINE)], qfalse );
+		return; /* Original binocular branch bypasses the adrenaline grant. */
+	}
+	if( G_NITMOD_GrantAdrenalineUpgrade(ent->client,
+		G_NITMOD_FirstAidUnlocks(ent->client),
+		(unsigned int)G_NITMOD_LegacyCvarInteger("g_adrenClasses", 2),
+		(unsigned int)G_NITMOD_LegacyCvarInteger("g_adrenaline", 0),
+		G_NITMOD_LegacyCvarInteger("g_war", 0)) ) return;
+	if( skill == SK_EXPLOSIVES_AND_CONSTRUCTION &&
+		ent->client->sess.playerType == PC_ENGINEER &&
+		(ent->client->sess.nitmodSkillMasks[skill] & 16u) ) {
+		/* Original client+0x158: powerup slot 2, also used by Nitmod's flak HUD.
+		 * The shared ET enum retains the historic PW_FIRE name for this slot. */
+		ent->client->ps.powerups[PW_FIRE] = 0x7fffffff;
 	}
 }
 
@@ -164,7 +179,7 @@ void G_LoseSkillPoints( gentity_t *ent, skillType_t skill, float points ) {
 	int oldskill;
 	float oldskillpoints;
 	
-	if( !ent->client ) {
+	if( !ent || !ent->client || skill < 0 || skill >= SK_NUM_SKILLS ) {
 		return;
 	}
 
@@ -187,12 +202,12 @@ void G_LoseSkillPoints( gentity_t *ent, skillType_t skill, float points ) {
 	// see if player increased in skill
 	oldskill = ent->client->sess.skill[skill];
 	G_SetPlayerSkill( ent->client, skill );
-	if( oldskill != ent->client->sess.skill[skill] ) {
-		ent->client->sess.skill[skill] = oldskill;
-		ent->client->sess.skillpoints[skill] = skillLevels[oldskill];
+	/* Original Nitmod allows a level to fall. Connected players run the same
+	 * upgrade hook/userinfo path even on a downgrade; connecting clients only
+	 * update their numeric progression. The stock ET level floor is absent. */
+	if( oldskill != ent->client->sess.skill[skill] && ent->client->pers.connected == CON_CONNECTED ) {
+		G_UpgradeSkill(ent, skill);
 	}
-
-	G_Printf( "%s just lost %f skill points for skill %s\n", ent->client->pers.netname, oldskillpoints - ent->client->sess.skillpoints[skill], skillNames[skill] );
 
 	trap_PbStat ( ent - g_entities , "loseskill" , 
 		va ( "%d %d %d %f" , ent->client->sess.sessionTeam , ent->client->sess.playerType , 
@@ -206,7 +221,6 @@ void G_AddSkillPoints( gentity_t *ent, skillType_t skill, float points ) {
 	int oldskill;
 	int maxXP;
 	int oldScore;
-	int i;
 	
 	if( !ent->client ) {
 		return;
@@ -229,21 +243,24 @@ void G_AddSkillPoints( gentity_t *ent, skillType_t skill, float points ) {
 	 * per-skill clamp. Reaching (not merely exceeding) it resets all XP. */
 	maxXP = G_NITMOD_LegacyCvarInteger("g_maxXP", -1);
 	oldScore = ent->client->ps.persistant[PERS_SCORE];
+	level.teamXP[skill][ent->client->sess.sessionTeam - TEAM_AXIS] += points;
+	ent->client->sess.skillpoints[skill] += points;
 	if( maxXP >= 0 && (float)oldScore + points >= (float)maxXP ) {
-		for( i = 0; i < SK_NUM_SKILLS; ++i ) {
-			level.teamXP[i][ent->client->sess.sessionTeam - TEAM_AXIS] -=
-				ent->client->sess.skillpoints[i];
-			if( level.teamXP[i][ent->client->sess.sessionTeam - TEAM_AXIS] < 0.f )
-				level.teamXP[i][ent->client->sess.sessionTeam - TEAM_AXIS] = 0.f;
-		}
-		level.teamScores[ent->client->ps.persistant[PERS_TEAM]] -= oldScore;
-		if( level.teamScores[ent->client->ps.persistant[PERS_TEAM]] < 0 )
-			level.teamScores[ent->client->ps.persistant[PERS_TEAM]] = 0;
 		memset(ent->client->sess.skillpoints, 0, sizeof(ent->client->sess.skillpoints));
 		memset(ent->client->sess.skill, 0, sizeof(ent->client->sess.skill));
-		memset(ent->client->sess.medals, 0, sizeof(ent->client->sess.medals));
-		ent->client->sess.rank = 0;
+		/* Original G_ResetXP recalculates all seven skills (and Lua hooks).
+		 * Team XP already includes this award; team score and medals survive. */
+		G_CalcRank(ent->client);
+		ent->client->ps.stats[STAT_XP] = 0;
 		ent->client->ps.persistant[PERS_SCORE] = 0;
+		/* G_ResetXP.part.1 clears the first weapon word outside war 1..4.
+		 * Its SetWolfSpawnWeapons(client, 1) only refreshes class/team metadata;
+		 * it does not grant a loadout or alter ammunition and charge time. */
+		if( (unsigned int)G_NITMOD_LegacyCvarInteger("g_war", 0) - 1u > 3u ) {
+			ent->client->ps.weapons[0] = 0;
+			ent->client->ps.stats[STAT_PLAYER_CLASS] = ent->client->sess.playerType;
+			ent->client->ps.teamNum = ent->client->sess.sessionTeam;
+		}
 		ClientUserinfoChanged(ent - g_entities);
 		if( maxXP != 0 ) {
 			trap_SendServerCommand(ent - g_entities,
@@ -251,10 +268,6 @@ void G_AddSkillPoints( gentity_t *ent, skillType_t skill, float points ) {
 		}
 		return;
 	}
-
-	level.teamXP[ skill ][ ent->client->sess.sessionTeam - TEAM_AXIS ] += points;
-
-	ent->client->sess.skillpoints[skill] += points;
 
 	/* Original Nitmod g_TDMOptions bit 1 changes the TDM team score from
 	 * accumulated XP to one point per kill. Personal skill progression and
@@ -346,6 +359,7 @@ void G_LoseKillSkillPoints( gentity_t *tker, meansOfDeath_t mod, hitRegion_t hr,
 		// light weapons
 		case MOD_KNIFE:
 		case MOD_LUGER:
+		case MOD_THROWKNIFE:
 		case MOD_COLT:
 		case MOD_MP40:
 		case MOD_THOMPSON:
@@ -430,6 +444,7 @@ void G_AddKillSkillPoints( gentity_t *attacker, meansOfDeath_t mod, hitRegion_t 
 	switch( mod ) {
 		// light weapons
 		case MOD_KNIFE:
+		case MOD_THROWKNIFE:
 			G_AddSkillPoints( attacker, SK_LIGHT_WEAPONS, 3.f ); G_DebugAddSkillPoints( attacker, SK_LIGHT_WEAPONS, 3.f, "knife kill" ); 
 			break;
 
@@ -484,6 +499,11 @@ void G_AddKillSkillPoints( gentity_t *attacker, meansOfDeath_t mod, hitRegion_t 
 		case MOD_GOOMBA:
 			G_AddSkillPoints( attacker, SK_BATTLE_SENSE, 5.f );
 			G_DebugAddSkillPoints( attacker, SK_BATTLE_SENSE, 5.f, "goomba kill" );
+			if(attacker && attacker->client) attacker->client->nitmodLuaPersistant[13]++;
+			break;
+		case MOD_SHOVE:
+			G_AddSkillPoints( attacker, SK_BATTLE_SENSE, 5.f );
+			G_DebugAddSkillPoints( attacker, SK_BATTLE_SENSE, 5.f, "shove kill" );
 			break;
 		case MOD_TRIPMINE:
 			G_AddSkillPoints( attacker, SK_EXPLOSIVES_AND_CONSTRUCTION, 4.f );
@@ -585,8 +605,9 @@ void G_AddKillSkillPointsForDestruction( gentity_t *attacker, meansOfDeath_t mod
 			G_DebugAddSkillPoints( attacker, SK_MILITARY_INTELLIGENCE_AND_SCOPED_WEAPONS, constructibleStats->destructxpbonus, "destroying a constructible/explosive" ); 
 			break;
 		default:
-			break;
+			return;
 	}
+	if(attacker && attacker->client) G_NITMOD_GlobalStatsEvent(attacker->s.number,10);
 }
 
 /////// SKILL DEBUGGING ///////

@@ -1,3 +1,7 @@
+#include "g_nitmod_lua.h"
+#include "g_nitmod_accounts.h"
+#include "g_nitmod_admin.h"
+#include "g_nitmod_integrity.h"
 #include "g_local.h"
 #include "g_nitmod_omnibot.h"
 #include "g_nitmod_etbot_lifecycle.h"
@@ -657,6 +661,7 @@ void QDECL G_Printf( const char *fmt, ... ) {
 	Q_vsnprintf (text, sizeof(text), fmt, argptr);
 	va_end (argptr);
 
+	G_NITMOD_LuaPrint(text);
 	trap_Printf( text );
 }
 //bani
@@ -1424,6 +1429,7 @@ void G_UpdateCvars( void )
 	if(G_NITMOD_UpdateLegacyGameplayCvars()) {
 		nitmodSettingsChanged = qtrue;
 	}
+	if(G_NITMOD_ConsumeLuaConfigurationChange()) G_NITMOD_LuaUnload();
 
 	for ( i = 0, cv = gameCvarTable ; i < gameCvarTableSize ; i++, cv++ ) {
 		if ( cv->vmCvar ) {
@@ -1785,6 +1791,8 @@ void G_NITMOD_LoadMapCycleConfig(void) {
 	trap_SendConsoleCommand(EXEC_APPEND, command);
 }
 
+#include "g_nitmod_database.h"
+#include "nitmod_database.h"
 void G_InitGame( int levelTime, int randomSeed, int restart ) {
 	int					i;
 	char				cs[MAX_INFO_STRING];
@@ -1823,6 +1831,9 @@ void G_InitGame( int levelTime, int randomSeed, int restart ) {
 	G_NITMOD_ResetTeamPopulation();
 	G_NITMOD_ResetPickupDefinitions();
 	G_NITMOD_LoadMapWeaponDefinitions();
+	G_NITMOD_LoadChecksums();
+	G_NITMOD_LoadDatabase();
+	if(NITMOD_DBUserCount()>=0) G_NITMOD_LoadAdminLevels();
 	/* Seed the capability handshake with registered cvars; a client may
 	 * negotiate before the first G_RunFrame refresh. */
 	nitmod_RefreshBaseSettings();
@@ -1965,6 +1976,7 @@ void G_InitGame( int levelTime, int randomSeed, int restart ) {
 
 	G_NITMOD_LoadMapConfigs();
 	G_InitWorldSession();
+	G_NITMOD_AccountsMapStart();
 	G_NITMOD_LoadMapCycleConfig();
 
 	// DHM - Nerve :: Clear out spawn target config strings
@@ -2111,6 +2123,10 @@ void G_InitGame( int levelTime, int randomSeed, int restart ) {
 	// Reinstate any MV views for clients -- need to do this after all init is complete
 	// --- maybe not the best place to do this... seems to be some race conditions on map_restart
 	G_spawnPrintf(DP_MVSPAWN, level.time + 2000, NULL);
+	G_NITMOD_GeoIPLoad();
+	G_NITMOD_GlobalStatsInit();
+	G_NITMOD_LuaInit(levelTime, randomSeed, restart);
+	trap_NITMOD_DemoSupport();
 }
 
 
@@ -2121,6 +2137,12 @@ G_ShutdownGame
 =================
 */
 void G_ShutdownGame( int restart ) {
+	G_NITMOD_LuaShutdown(restart);
+	G_NITMOD_GlobalStatsShutdown();
+	G_NITMOD_GeoIPClose();
+	G_NITMOD_ClearChecksums();
+	G_NITMOD_AccountsSaveAllXP();
+	G_NITMOD_DatabaseShutdown();
 
 	// Arnout: gametype latching
 	if	( 
@@ -2590,6 +2612,7 @@ void FindIntermissionPoint( void ) {
 BeginIntermission
 ==================
 */
+#include "g_nitmod_records.h"
 void BeginIntermission( void ) {
 	int			i;
 	gentity_t	*client;
@@ -2599,6 +2622,7 @@ void BeginIntermission( void ) {
 	}
 
 	level.intermissiontime = level.time;
+	G_NITMOD_SaveMapRecords();
 	trap_SetConfigstring( CS_INTERMISSION_START_TIME, va( "%i", NITMOD_IntermissionDisplayStart(level.time, g_intermissionTime.integer) ) );
 	trap_Cvar_Set("gamestate", va( "%i", GS_INTERMISSION));
 	trap_Cvar_Update( &g_gamestate );
@@ -2798,6 +2822,10 @@ void LogExit( const char *string ) {
 		if ( cl->pers.connected == CON_CONNECTING ) {
 			continue;
 		}
+
+        /* Original G_UpdateKillingSpreeForMapEnd, before score logging. */
+        if(cl->nitmodLuaPersistant[15]>cl->nitmodLuaPersistant[14]) cl->nitmodLuaPersistant[14]=cl->nitmodLuaPersistant[15];
+        cl->nitmodLuaPersistant[15]=0;
 
 		ping = cl->ps.ping < 999 ? cl->ps.ping : 999;
 
@@ -4062,6 +4090,8 @@ void G_RunFrame( int levelTime ) {
 		}
 	}
 
+	G_NITMOD_LuaFrame(levelTime);
+	G_NITMOD_GlobalStatsFrame();
 	level.frameTime = trap_Milliseconds();
 
 	level.framenum++;

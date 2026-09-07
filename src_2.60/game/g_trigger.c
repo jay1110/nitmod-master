@@ -25,6 +25,20 @@ void multi_wait( gentity_t *ent ) {
 // so wait for the delay time before firing
 void multi_trigger( gentity_t *ent, gentity_t *activator ) {
 	ent->activator = activator;
+	/* Original excludes players who are playing dead. Script activators
+	 * without clients remain supported instead of dereferencing NULL. */
+	if (activator && activator->client &&
+		(activator->client->ps.eFlags & EF_SPARE0)) return;
+	if (ent->numPlayers > 1) {
+		int entities[MAX_GENTITIES], count, i, players = 0;
+		count = trap_EntitiesInBox(ent->r.absmin, ent->r.absmax,
+			entities, MAX_GENTITIES);
+		/* Original counts all entities with a client, without team/health filters. */
+		for (i = 0; i < count; ++i) {
+			if (g_entities[entities[i]].client) ++players;
+		}
+		if (players < ent->numPlayers) return;
+	}
 
 	G_Script_ScriptEvent( ent, "activate", NULL );
 
@@ -123,6 +137,7 @@ so, the basic time between firing is a random time between
 void SP_trigger_multiple( gentity_t *ent ) {
 	G_SpawnFloat( "wait", "0.5", &ent->wait );
 	G_SpawnFloat( "random", "0", &ent->random );
+	G_SpawnInt( "numPlayers", "1", &ent->numPlayers );
 
 	if ( ent->random >= ent->wait && ent->wait >= 0 ) {
 		ent->random = ent->wait - (FRAMETIME * 0.001f);

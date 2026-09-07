@@ -3,6 +3,34 @@
 #include "nitmod_protocol.h"
 #include "nitmod_skills.h"
 
+int NITMOD_ApplyChargeCost(int now, int duration, float fraction,
+    int noCharge, int war, int *timestamp) {
+    double elapsed, cost, candidate;
+    long long normalized;
+    if(!timestamp) return -1;
+    if(noCharge || war == 1 || war == 3) return 1;
+    /* Avoid signed time overflow and undefined float-to-int conversion.
+     * Original x87 retains the binary32 fraction in extended arithmetic;
+     * double avoids rounding each intermediate to binary32 on WASM. */
+    if(duration < 0 || !(fraction >= 0.0f) || fraction > 1.0f) return -1;
+    normalized = *timestamp;
+    elapsed = (double)now - normalized;
+    if(elapsed > duration) {
+        normalized = (long long)now - duration;
+        if(normalized < (-2147483647LL - 1) || normalized > 2147483647LL) return -1;
+        elapsed = duration;
+    }
+    cost = (double)duration * fraction;
+    if(cost > elapsed) {
+        *timestamp = (int)normalized;
+        return 0;
+    }
+    candidate = (double)normalized + cost;
+    if(candidate < -2147483648.0 || candidate >= 2147483648.0) return -1;
+    *timestamp = (int)candidate; /* original FISTP uses truncate, not round */
+    return 1;
+}
+
 int NITMOD_SelectSkillTable( const float row[NITMOD_SKILL_LEVEL_COUNT],
 	unsigned int unlocked, float *output ) {
 	float value;

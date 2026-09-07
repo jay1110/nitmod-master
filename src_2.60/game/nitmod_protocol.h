@@ -48,6 +48,9 @@ int NITMOD_BuildChatCommand( const char *command, const char *text,
 #define NITMOD_FEATURE_CLASS_HEALTH      ( 1u << 13 )
 /* kd0/kd1 after score pages and immediate "fu" refresh. */
 #define NITMOD_FEATURE_SCORE_KD          ( 1u << 14 )
+/* Server spawn supports the recovered six-slot class primary lists. */
+#define NITMOD_FEATURE_CLASS_PRIMARIES   ( 1u << 15 )
+#define NITMOD_FEATURE_PACK_CHARGE       ( 1u << 16 )
 
 /* Complete original ncp/SrvMsgs table; out-of-range reasons return NULL. */
 const char *NITMOD_ServerMessageText(int reason);
@@ -61,7 +64,7 @@ const char *NITMOD_WeaponLimitText( int reason );
 	NITMOD_FEATURE_SIMPLE_CS | NITMOD_FEATURE_OBJECTIVES | NITMOD_FEATURE_FIRETEAMS | \
 	NITMOD_FEATURE_TEAM_SCORES | NITMOD_FEATURE_MAP_END_STATS | NITMOD_FEATURE_SPREE_EVENTS | \
 	NITMOD_FEATURE_HIT_SOUNDS | NITMOD_FEATURE_WEAPON_MESSAGES | NITMOD_FEATURE_RELOAD_PREFS | NITMOD_FEATURE_SHOVE_SOUND | \
-	NITMOD_FEATURE_CLASS_HEALTH | NITMOD_FEATURE_SCORE_KD )
+	NITMOD_FEATURE_CLASS_HEALTH | NITMOD_FEATURE_SCORE_KD | NITMOD_FEATURE_CLASS_PRIMARIES | NITMOD_FEATURE_PACK_CHARGE )
 #define NITMOD_FEATURES_SERVER NITMOD_FEATURES_CLIENT
 
 /* Recovered extended-configstring layout; this differs from native ET CS. */

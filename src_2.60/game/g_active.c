@@ -1,5 +1,6 @@
 
 #include "g_local.h"
+#include "nitmod_lua_events.h"
 #include "nitmod_weapon_recoil.h"
 #include "g_nitmod_weapon_definition.h"
 #include "g_nitmod_air.h"
@@ -806,7 +807,7 @@ void ClientEvents( gentity_t *ent, int oldEventSequence ) {
 		oldEventSequence = client->ps.eventSequence - MAX_EVENTS;
 	}
 	for ( i = oldEventSequence ; i < client->ps.eventSequence ; i++ ) {
-		event = client->ps.events[ i & (MAX_EVENTS-1) ];
+		event = NITMOD_LuaEventServerDispatch(client->ps.events[ i & (MAX_EVENTS-1) ]);
 
 		switch ( event ) {
 		case EV_FALL_NDIE:
@@ -819,6 +820,7 @@ void ClientEvents( gentity_t *ent, int oldEventSequence ) {
 		//case EV_FALL_DMG_75:
 		
 			G_NITMOD_FallDamage(ent, event);
+			client->nitmodPushed = qfalse; /* Original clears after the fall damage/death call. */
 			break;
 
 		case EV_FIRE_WEAPON_MG42:
@@ -1094,7 +1096,7 @@ void ClientThink_real( gentity_t *ent ) {
 	/* Original G_CheckClientWeapons revokes adrenaline immediately when its
 	 * configured class/unlock eligibility changes. It never grants here; the
 	 * spawn/skill paths remain responsible for assignment. */
-	G_NITMOD_CheckAdrenaline(ent, qfalse, G_NITMOD_FirstAidUnlocks(client),
+	G_NITMOD_CheckAdrenaline(ent, client->pers.nitmodDemoClient, G_NITMOD_FirstAidUnlocks(client),
 		(unsigned int)G_NITMOD_LegacyCvarInteger("g_adrenClasses", 2));
 
 	if(G_NITMOD_IsViewingCamera(client) || level.match_pause != PAUSE_NONE
@@ -1221,6 +1223,10 @@ void ClientThink_real( gentity_t *ent ) {
 	// -NERVE - SMF
 
 	pm.skill = client->sess.skill;
+	pm.nitmodPackChargeEnabled=G_NITMOD_ClientSupports(ent->s.number,NITMOD_FEATURE_PACK_CHARGE);
+	pm.nitmodPackChargeBypass=G_NITMOD_LegacyCvarInteger("g_noCharge",0) ||
+		G_NITMOD_LegacyCvarInteger("g_war",0)==1 || G_NITMOD_LegacyCvarInteger("g_war",0)==3;
+	memcpy(pm.nitmodPackSkillMasks,client->sess.nitmodSkillMasks,sizeof(pm.nitmodPackSkillMasks));
 
 	client->pmext.airleft = NITMOD_AirRemaining( ent->client->airOutTime, level.time );
 
@@ -1348,6 +1354,8 @@ void ClientThink_real( gentity_t *ent ) {
 	// execute client events
 	if(level.match_pause == PAUSE_NONE) {
 		ClientEvents( ent, oldEventSequence );
+		if(client->ps.groundEntityNum != ENTITYNUM_NONE && !(client->ps.pm_flags & PMF_TIME_LAND))
+			client->nitmodPushed = qfalse;
 	}
 
 	// link entity now, after any personal teleporters have been used

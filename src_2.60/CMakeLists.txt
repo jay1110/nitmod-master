@@ -122,6 +122,13 @@ if(NITMOD_BUILD_QAGAME)
         botai/ai_cmd.c botai/ai_dmgoal_mp.c botai/ai_dmnet_mp.c botai/ai_dmq3.c
         botai/ai_main.c botai/ai_script.c botai/ai_script_actions.c botai/ai_team.c)
     set(NITMOD_QAGAME_SRC
+        game/g_nitmod_lua.c
+        game/g_nitmod_global_stats.c game/nitmod_stats_transport.c
+        game/g_nitmod_shoutcaster.c
+        game/g_nitmod_geoip.c
+        lua51/lapi.c lua51/lauxlib.c lua51/lbaselib.c lua51/lcode.c lua51/ldblib.c lua51/ldebug.c lua51/ldo.c lua51/ldump.c lua51/lfunc.c lua51/lgc.c lua51/linit.c lua51/liolib.c lua51/llex.c lua51/lmathlib.c lua51/lmem.c lua51/loadlib.c lua51/lobject.c lua51/lopcodes.c lua51/loslib.c lua51/lparser.c lua51/lstate.c lua51/lstring.c lua51/lstrlib.c lua51/ltable.c lua51/ltablib.c lua51/ltm.c lua51/lundump.c lua51/lvm.c lua51/lzio.c
+        game/g_nitmod_accounts.c game/nitmod_sha1.c game/nitmod_xp.c game/g_nitmod_records.c game/g_nitmod_admin.c
+        sqlite/sqlite3.c game/nitmod_database.c game/g_nitmod_database.c
         game/nitmod_weapon_reload_feedback.c
         game/bg_animation.c game/bg_animgroup.c game/bg_campaign.c game/bg_character.c
         game/bg_classes.c game/bg_misc.c game/bg_pmove.c game/bg_slidemove.c
@@ -152,10 +159,12 @@ if(NITMOD_BUILD_QAGAME)
         game/g_nitmod_weapon_config.c game/g_nitmod_legacy_cvars.c game/g_nitmod_banners.c game/g_nitmod_omnibot.c game/g_nitmod_weapon_adapter.c game/g_nitmod_class_command.c game/g_nitmod_campaign_vote.c game/g_nitmod_team_vote.c game/g_nitmod_mapvote.c game/g_nitmod_surrender.c
         game/g_nitmod_etbot_interface.cpp omnibot/common/BotLoadLibrary.cpp
         game/g_nitmod_loadout.c game/g_nitmod_pickup.c game/nitmod_weapon_definition.c game/g_nitmod_canister.c game/g_nitmod_poison.c
-        game/g_nitmod_weapon_definition.c game/g_nitmod_weapon_registry.c
+        game/g_nitmod_integrity.c game/g_nitmod_weapon_definition.c game/g_nitmod_weapon_registry.c
         game/nitmod_weapon_paths.c game/nitmod_weapon_recoil.c game/nitmod_weapon_defaults.c
         game/nitmod_weapon_consumption.c game/nitmod_weapon_akimbo.c game/nitmod_weapon_clip.c game/nitmod_weapon_inventory.c game/nitmod_weapon_reload.c)
     nitmod_module(qagame qagame GAMEDLL ${NITMOD_QAGAME_SRC} ${NITMOD_BOTAI_SRC})
+    set_source_files_properties(sqlite/sqlite3.c PROPERTIES COMPILE_DEFINITIONS
+        "SQLITE_THREADSAFE=0;SQLITE_OMIT_LOAD_EXTENSION=1;SQLITE_OS_OTHER=1;SQLITE_OMIT_WAL=1")
 endif()
 
 if(NITMOD_BUILD_UI)
@@ -183,6 +192,8 @@ if(BUILD_TESTING)
         add_test(NAME nitmod_original_charge_dispatch COMMAND nitmod_original_charge_dispatch_test
             "${CMAKE_CURRENT_SOURCE_DIR}/../pak/animations/scripts/human_base.script"
             "${CMAKE_CURRENT_SOURCE_DIR}/../pak")
+        add_test(NAME nitmod_lua_global_awards COMMAND nitmod_original_charge_dispatch_test --lua-awards)
+        add_test(NAME nitmod_lua_obituary COMMAND nitmod_original_charge_dispatch_test --lua-obituary)
     endif()
     if(TARGET ui AND NOT CMAKE_CROSSCOMPILING)
         get_target_property(nitmod_ui_test_sources ui SOURCES)
@@ -298,6 +309,20 @@ if(BUILD_TESTING)
         target_include_directories(nitmod_pickup_test PRIVATE game)
         set_target_properties(nitmod_pickup_test PROPERTIES C_STANDARD 90 C_STANDARD_REQUIRED ON)
         add_test(NAME nitmod_pickup COMMAND nitmod_pickup_test)
+        add_executable(nitmod_integrity_test ../tests/test_nitmod_integrity.c
+            game/g_nitmod_integrity.c game/q_shared.c game/q_math.c)
+        target_include_directories(nitmod_integrity_test PRIVATE game)
+        if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+            target_link_libraries(nitmod_integrity_test PRIVATE m)
+        endif()
+        add_test(NAME nitmod_integrity COMMAND nitmod_integrity_test)
+        add_executable(nitmod_database_test ../tests/test_nitmod_database.c
+            game/nitmod_database.c game/g_nitmod_database.c sqlite/sqlite3.c game/q_shared.c game/q_math.c)
+        target_include_directories(nitmod_database_test PRIVATE game)
+        if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+            target_link_libraries(nitmod_database_test PRIVATE m)
+        endif()
+        add_test(NAME nitmod_database COMMAND nitmod_database_test)
         add_executable(nitmod_loadout_test ../tests/test_nitmod_loadout.c game/g_nitmod_loadout.c)
         target_include_directories(nitmod_loadout_test PRIVATE game)
         set_target_properties(nitmod_loadout_test PROPERTIES C_STANDARD 90 C_STANDARD_REQUIRED ON)
@@ -480,6 +505,7 @@ if(BUILD_TESTING)
             get_target_property(nitmod_damage_game_sources qagame SOURCES)
             add_executable(nitmod_projectile_damage_test ../tests/test_nitmod_projectile_damage.c ${nitmod_damage_game_sources})
             target_include_directories(nitmod_projectile_damage_test PRIVATE game cgame ui)
+            target_include_directories(nitmod_projectile_damage_test PRIVATE omnibot/common omnibot/et)
             target_compile_definitions(nitmod_projectile_damage_test PRIVATE GAMEDLL=1)
             set_target_properties(nitmod_projectile_damage_test PROPERTIES C_STANDARD 90 C_STANDARD_REQUIRED ON)
             if(CMAKE_SYSTEM_NAME STREQUAL "Linux")

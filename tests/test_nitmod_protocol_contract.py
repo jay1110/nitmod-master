@@ -141,8 +141,14 @@ def main() -> None:
             r'void NITMOD_SendHitSound\(.*?NITMOD_HIT_SOUND_TEAM.*?NITMOD_HIT_SOUND_HEAD.*?NITMOD_FEATURE_HIT_SOUNDS.*?"nhs %i"',
             "server no longer capability-gates recovered hit-sound classifications")
     require(client,
-            r'void NITMOD_PlayHitSound\(.*?"cg_hitSounds".*?"sound/nit/hs\.wav".*?"sound/hitsounds/team\.wav".*?trap_Cvar_Update\( &nitmodHitSounds \).*?void NITMOD_HitSoundCommand\(.*?NITMOD_HasArgumentCount\("nhs", 2\)',
-            "client no longer validates hit-sound commands or registers the recovered assets")
+            r'void NITMOD_RegisterHitSounds\(.*?"sound/hitsounds/head\.wav".*?"sound/nit/hs\.wav".*?"sound/hitsounds/body\.wav".*?"sound/hitsounds/team\.wav"',
+            "client no longer eagerly registers the four recovered hit samples")
+    require(read(root, "cgame/cg_main.c"),
+            r'"cg_hitSounds", "1", CVAR_ARCHIVE.*?NITMOD_RegisterHitSounds\(\)',
+            "hit-sound cvar/default or startup media hook is missing")
+    require(client,
+            r'static void NITMOD_PlayHitSound\(.*?trap_Cvar_Update\( &nitmodHitSounds \).*?void NITMOD_HitSoundCommand\(.*?NITMOD_HasArgumentCount\("nhs", 2\)',
+            "client no longer updates hit-sound preference or validates commands")
 
     require(game_commands,
             r'NITMOD_CAPABILITIES_COMMAND\s*\).*?trap_Argc\(\)\s*!=\s*3.*?G_NITMOD_ClientCapabilities',
@@ -160,7 +166,7 @@ def main() -> None:
             r'ClientUserinfoChanged.*?Info_ValueForKey\( userinfo, "ip" \).*?G_NITMOD_CacheClientAddress\( ent, s \)',
             "userinfo changes no longer refresh the typed Nitmod address cache")
     require(server,
-            r'qboolean NITMOD_ValidateNGuid\(.*?strlen\( nguid \) != 33.*?character >= \'0\'.*?character <= \'9\'.*?checksum % 100 != 0',
+            r'qboolean NITMOD_ValidateNGuid\(.*?strlen\( nguid \) != 32.*?checksum % 100 != 0.*?character >= \'0\'.*?character <= \'9\'',
             "NGUID validation no longer enforces length, alphanumeric bytes and checksum")
     require(server,
             r'void NITMOD_SendChunkedPrint\(.*?!text \|\| !text\[0\].*?character == \'\\n\'.*?character == \'"\'.*?character == \'\\\\\'.*?trap_SendServerCommand',
@@ -178,7 +184,7 @@ def main() -> None:
             r'qboolean NITMOD_BuildFilePath\(.*?directoryLength > 0.*?directory\[directoryLength - 1\] != \'/\'.*?!= \'\\\\\'.*?Q_strcat\( path, pathSize, name \).*?Q_strcat\( path, pathSize, extension \)',
             "Nitmod path construction no longer preserves the recovered separator and suffix behavior")
     require(server,
-            r'void nitrox_ClampFloat\(.*?\*value < minimum.*?\*value > maximum.*?void nitrox_ClampInt\(.*?minimum >= 0\.0f.*?maximum >= 0\.0f.*?void nitrox_stripLeadingSpaces\(.*?while\( \*first == \' \' \).*?memmove',
+            r'void nitrox_ClampFloat\(.*?NITMOD_ClampFloating\(value, minimum, maximum\).*?void nitrox_ClampInt\(.*?NITMOD_ClampInteger\(value, minimum, maximum\).*?void nitrox_stripLeadingSpaces\(.*?while\( \*first == \' \' \).*?memmove',
             "typed Nitmod clamp and leading-space helpers no longer preserve their recovered behavior")
     require(game_main,
             r'nitmodSettingsChanged.*?cv->vmCvar == &g_filtercams.*?cv->vmCvar == &g_heavyWeaponRestriction.*?cv->vmCvar == &team_maxPanzers.*?cv->vmCvar == &g_gravity.*?if\( nitmodSettingsChanged \) \{\s*nitmod_RefreshBaseSettings\(\);',

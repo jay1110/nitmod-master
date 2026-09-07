@@ -28,20 +28,7 @@ static const char *const globalStatNames2[13] = {
 static const int globalStatPositions[13] = {
 	0, 44, 88, 132, 176, 220, 264, 308, 352, 396, 440, 484, 528
 };
-typedef struct { const char *title, *description; } nitmodGlobalAward_t;
-static const nitmodGlobalAward_t globalAwards[] = {
-	{"THE BEGINNING", "Made his first kill!"},
-	{"100 KILLS!", ""},
-	{"NEED A MEDIC?", "Made his first revive!"},
-	{"WATCH YOUR STEP!", "First Tripmine Kill"},
-	{"FAT ASS!", "First Goomba Kill"},
-	{"BOOM HEADSHOT!", "First scoped headshot"},
-	{"ROASTER!", "First Flamethrower kill"},
-	{"I'M AN ENGINEER!", "Constructed his first objective"},
-	{"DESTROYER", "Destroyed his first objective"},
-	{"REMOTE KILLER", "First satchel kill"},
-	{"BUTCHER", "100 Backstabs"}
-};
+#include "../game/nitmod_global_awards.h"
 static int awardClient = -1, awardIndex = -1;
 static qboolean awardLogged;
 
@@ -56,6 +43,7 @@ qboolean CG_NitmodGlobalAwardActive(void) { return awardIndex >= 0; }
 float CG_NitmodGlobalAwardAlpha(int now, float hold, float fade) {
 	float alpha;
 	if(!CG_NitmodGlobalAwardActive()) return 0;
+	if(fade <= 0) return 0;
 	alpha = CG_NitmodNotificationAlpha(now, hold, fade);
 	/* Zero fade pauses the original notification; do not discard the award. */
 	if(alpha <= 0 && !CG_NitmodNotificationActive()) CG_NitmodGlobalAwardClear();
@@ -125,7 +113,7 @@ qboolean CG_NitmodParseGlobalStats(int argc, const char *(*argv)(int),
 	int values[NITMOD_GLOBAL_STAT_COUNT], qboolean *failed) {
 	int next[NITMOD_GLOBAL_STAT_COUNT], i;
 	if(!argv || !values || !failed || argc < 3) return qfalse;
-	if(!strcmp(argv(2), "-")) {
+	if(argc == 3 && (!Q_stricmp(argv(2), "NR") || !strcmp(argv(2), "-"))) {
 		*failed = qtrue;
 		return qtrue;
 	}
@@ -138,7 +126,7 @@ qboolean CG_NitmodParseGlobalStats(int argc, const char *(*argv)(int),
 }
 
 void CG_NitmodGlobalStats_f(void) {
-	if(!NITMOD_UsesOriginalProtocol() || !cg.snap || cg.demoPlayback) {
+	if(!NITMOD_UsesNitmodHud() || !cg.snap || cg.demoPlayback) {
 		globalStats.visible = qfalse;
 		return;
 	}

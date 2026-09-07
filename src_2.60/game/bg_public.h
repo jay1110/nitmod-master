@@ -571,6 +571,9 @@ typedef struct {
 	qboolean nitmodLeanEnabled;
 	qboolean nitmodReloadEnabled;
 	qboolean nitmodAuthoritativeWeapons;
+	qboolean nitmodPackChargeEnabled;
+	qboolean nitmodPackChargeBypass;
+	unsigned int nitmodPackSkillMasks[7]; /* skill enum is declared below pmove_t */
 	int nitmodWarMode;
 	unsigned int nitmodNoReload;
 	int nitmodWeaponFlags;
@@ -1101,7 +1104,11 @@ typedef enum {
 	EV_NITMOD_SOUND,
 	/* Internal reconstructed event. Original Nitmod transports this as 95. */
 	EV_NITMOD_THROW_KNIFE,
-	EV_MAX_EVENTS	// just added as an 'endcap'
+    /* Original Lua event identity travels in the normal eight-bit event slot.
+     * Keep all previous ET event IDs fixed; full eventParm remains available. */
+    EV_NITMOD_LUA_FIRST,
+    EV_NITMOD_LUA_LAST = EV_NITMOD_LUA_FIRST + 106,
+    EV_MAX_EVENTS
 } entity_event_t;
 
 
@@ -1405,6 +1412,11 @@ typedef enum extWeaponStats_s
 	WS_GARAND,				// 20 // Gordon: (carbine and garand)
 	WS_K43,					// 21 // Gordon: (kar98 and k43)
 
+	WS_POISON,
+	WS_BOMB,
+	WS_TRIPMINE,
+	WS_POISON_GAS,
+	WS_POISON_MINE,
 	WS_MAX
 } extWeaponStats_t;
 
@@ -1507,6 +1519,11 @@ typedef enum {
 	MOD_POISON_GAS,
 	MOD_POISON_GAS_MINE,
 	MOD_POISON,
+	MOD_SHOVE,
+	MOD_FEAR,
+	MOD_CENSORED,
+	MOD_THROWKNIFE,
+	MOD_GIBME,
 
 	MOD_NUM_MODS
 
@@ -1517,6 +1534,8 @@ typedef enum {
 #define NITMOD_OBITUARY_POISON_GAS 0x4e470003
 #define NITMOD_OBITUARY_POISON_GAS_MINE 0x4e470004
 #define NITMOD_OBITUARY_POISON 0x4e470005
+#define NITMOD_OBITUARY_SHOVE 0x4e470006
+#define NITMOD_OBITUARY_EXTRA 0x4e470007 /* four original-only causes: 60,61,63,64 */
 
 
 //---------------------------------------------------------

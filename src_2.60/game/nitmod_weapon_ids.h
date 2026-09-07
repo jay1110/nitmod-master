@@ -1,0 +1,26 @@
+#ifndef NITMOD_WEAPON_IDS_H
+#define NITMOD_WEAPON_IDS_H
+/* Original Nitmod weapon numbers, shared by snapshot and Lua boundaries.
+ * Include after bg_public.h. */
+static const int nitmodWireWeapons[52] = {
+	WP_NONE, WP_KNIFE, WP_LUGER, WP_MP40, WP_GRENADE_LAUNCHER,
+	WP_PANZERFAUST, WP_FLAMETHROWER, WP_COLT, WP_THOMPSON, WP_GRENADE_PINEAPPLE,
+	WP_STEN, WP_MEDIC_SYRINGE, WP_AMMO, WP_ARTY, WP_SILENCER, WP_DYNAMITE,
+	WP_SMOKETRAIL, VERYBIGEXPLOSION, WP_MEDKIT, WP_BINOCULARS, WP_PLIERS,
+	WP_SMOKE_MARKER, WP_KAR98, WP_CARBINE, WP_GARAND, WP_LANDMINE,
+	WP_SATCHEL, WP_SATCHEL_DET, WP_SMOKE_BOMB, WP_MOBILE_MG42, WP_K43,
+	WP_FG42, WP_DUMMY_MG42, WP_MORTAR, WP_AKIMBO_COLT, WP_AKIMBO_LUGER,
+	WP_GPG40, WP_M7, WP_SILENCED_COLT, WP_GARAND_SCOPE, WP_K43_SCOPE,
+	WP_FG42SCOPE, WP_MORTAR_SET, WP_MEDIC_ADRENALINE, WP_AKIMBO_SILENCEDCOLT,
+	WP_AKIMBO_SILENCEDLUGER, WP_MOBILE_MG42_SET, WP_POISON_SYRINGE, WP_BOMB, WP_TRIPMINE, WP_POISON_BOMB, WP_POISON_MINE
+};
+
+static int NITMOD_NativeWeaponId(int original) {
+    return original >= 0 && original < 52 ? nitmodWireWeapons[original] : -1;
+}
+static int NITMOD_OriginalWeaponId(int native) {
+    int i;
+    for(i=0;i<52;++i) if(nitmodWireWeapons[i]==native) return i;
+    return 0;
+}
+#endif

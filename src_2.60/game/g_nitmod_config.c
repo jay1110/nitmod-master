@@ -17,6 +17,14 @@ static nitmodSimpleConfig_t nitmodSimpleConfig;
 static nitmodGameState_t nitmodGameState;
 static int nitmodMapCycleCount;
 static nitmodKillSpree_t nitmodKillSpree[MAX_CLIENTS];
+static int nitmodBestKillSpree[MAX_CLIENTS];
+int G_NITMOD_CurrentKillSpree(int clientNum) { return clientNum>=0 && clientNum<MAX_CLIENTS?nitmodKillSpree[clientNum].kills:0; }
+int G_NITMOD_BestKillSpree(int clientNum) {
+    gclient_t *client;
+    if(clientNum<0 || clientNum>=MAX_CLIENTS || !(client=g_entities[clientNum].client)) return 0;
+    return client->nitmodLuaPersistant[14]>client->nitmodLuaPersistant[15]?
+        client->nitmodLuaPersistant[14]:client->nitmodLuaPersistant[15];
+}
 
 static void G_NITMOD_SendConfigString( int clientNum, int index, qboolean sendEmpty );
 
@@ -42,12 +50,14 @@ void G_NITMOD_ClearConfigStrings( void ) {
 	memset( &nitmodSimpleConfig, 0, sizeof( nitmodSimpleConfig ) );
 	memset( &nitmodGameState, 0, sizeof( nitmodGameState ) );
 	memset( nitmodKillSpree, 0, sizeof( nitmodKillSpree ) );
+	memset( nitmodBestKillSpree, 0, sizeof( nitmodBestKillSpree ) );
 }
 
 void G_NITMOD_ResetClient( int clientNum ) {
 	if ( G_NITMOD_IsValidClient( clientNum ) ) {
 		nitmodClientCapabilities[clientNum] = 0;
 		NITMOD_ResetKillSpree( &nitmodKillSpree[clientNum] );
+		nitmodBestKillSpree[clientNum]=0;
 	}
 }
 
@@ -74,20 +84,24 @@ void G_NITMOD_CacheClientAddress( gentity_t *ent, const char *address ) {
 	}
 }
 
-/* The original NGUID guard sums exactly 33 identifier bytes, accepts only
- * ASCII alphanumerics, and requires the sum to be divisible by 100.  Keep
- * the same validation rule while rejecting short input before reading it. */
+/* ClientUserinfoChanged requires 32 characters. The original checksum reads
+ * 33 bytes INCLUDING the terminating zero, not 33 identifier characters. */
 qboolean NITMOD_ValidateNGuid( const char *nguid, char *reason, int reasonSize ) {
 	int checksum = 0;
 	int index;
 	unsigned char character;
 
-	if( !nguid || strlen( nguid ) != 33 ) {
+	if( !nguid || strlen( nguid ) != 32 ) {
 		NITMOD_SetValidationReason( reason, reasonSize, "Invalid NGUID length" );
 		return qfalse;
 	}
 
-	for( index = 0; index < 33; index++ ) {
+	for( index = 0; index < 32; index++ ) checksum += (unsigned char)nguid[index];
+	if( checksum % 100 != 0 ) {
+		NITMOD_SetValidationReason( reason, reasonSize, "Corrupted NGUID" );
+		return qfalse;
+	}
+	for( index = 0; index < 32; index++ ) {
 		character = (unsigned char)nguid[index];
 		if( !( ( character >= '0' && character <= '9' ) ||
 			( character >= 'A' && character <= 'Z' ) ||
@@ -95,12 +109,6 @@ qboolean NITMOD_ValidateNGuid( const char *nguid, char *reason, int reasonSize )
 			NITMOD_SetValidationReason( reason, reasonSize, "NGUID contains invalid characters" );
 			return qfalse;
 		}
-		checksum += character;
-	}
-
-	if( checksum % 100 != 0 ) {
-		NITMOD_SetValidationReason( reason, reasonSize, "Corrupted NGUID" );
-		return qfalse;
 	}
 
 	if( reason && reasonSize > 0 ) {
@@ -254,14 +262,13 @@ void nitmod_Announce( int actor, int detail, int type ) {
 	}
 }
 
-/* The recovered G_UpdateKillingSpree advances a positive streak for enemy
- * kills, resets it on death, and emits type 1 on tiers 5, 10, ... 30.  Its
- * negative death-spree and revive-spree branches require custom option Cvars
- * that have no typed ET 2.60 owner, so they are deliberately not inferred. */
+/* Original persistent spree transitions, including negative death sequences.
+ * Existing positive announcement transport stays at tiers 5..30. */
 void NITMOD_UpdateKillSpree( gentity_t *victim, gentity_t *attacker ) {
 	int victimNum;
 	int attackerNum;
 	int detail;
+	int flags = trap_Cvar_VariableIntegerValue("g_announcer");
 
 	if( !victim || !victim->client ) {
 		return;
@@ -270,6 +277,20 @@ void NITMOD_UpdateKillSpree( gentity_t *victim, gentity_t *attacker ) {
 	if( !G_NITMOD_IsValidClient( victimNum ) ) {
 		return;
 	}
+    {
+        int previous=victim->client->nitmodLuaPersistant[15];
+        int next=previous>0?0:(int)((unsigned int)previous-1u);
+        if(previous>=5 && (flags&32)) {
+            if(attacker && attacker->client && attacker!=victim)
+                trap_SendServerCommand(-1,va("chat \"%s^g's killing spree ended by %s%s ^gafter ^2%d ^gkills!\" -2",
+                    victim->client->pers.netname,OnSameTeam(victim,attacker)?"^1TEAMMATE ^7":"^7",attacker->client->pers.netname,previous));
+            else trap_SendServerCommand(-1,va("chat \"%s ^gended his own killing spree after ^2%d ^gkills!\" -2",victim->client->pers.netname,previous));
+        }
+        if((flags&2) && next>=-30 && next<=-10 && next%10==0)
+            nitmod_Announce(victimNum,-next/10-1,2);
+        victim->client->nitmodLuaPersistant[15]=next;
+        if(previous>0 && previous>victim->client->nitmodLuaPersistant[14]) victim->client->nitmodLuaPersistant[14]=previous;
+    }
 	NITMOD_ResetKillSpree( &nitmodKillSpree[victimNum] );
 
 	if( !attacker || !attacker->client || attacker == victim || OnSameTeam( victim, attacker ) ) {
@@ -279,8 +300,19 @@ void NITMOD_UpdateKillSpree( gentity_t *victim, gentity_t *attacker ) {
 	if( !G_NITMOD_IsValidClient( attackerNum ) ) {
 		return;
 	}
+    if(attacker->client->nitmodLuaPersistant[15]<=-10 && (flags&64)) {
+        /* Unsigned magnitude also preserves the original INT_MIN edge. */
+        trap_SendServerCommand(-1,va("chat \"%s^g's death spree ended after ^1%d ^gdeaths!\" -2",
+            attacker->client->pers.netname,(int)(0u-(unsigned int)attacker->client->nitmodLuaPersistant[15])));
+    }
+    /* Lua can modify the original persistent spree directly. */
+    nitmodKillSpree[attackerNum].kills=attacker->client->nitmodLuaPersistant[15];
+    if(nitmodKillSpree[attackerNum].kills<0) nitmodKillSpree[attackerNum].kills=0;
 	detail = NITMOD_RecordSpreeKill( &nitmodKillSpree[attackerNum],
-		trap_Cvar_VariableIntegerValue( "g_announcer" ) );
+		flags );
+	attacker->client->nitmodLuaPersistant[15]=nitmodKillSpree[attackerNum].kills;
+	if(nitmodKillSpree[attackerNum].kills>nitmodBestKillSpree[attackerNum])
+		nitmodBestKillSpree[attackerNum]=nitmodKillSpree[attackerNum].kills;
 	if( detail >= 0 ) {
 		nitmod_Announce( attackerNum, detail, 1 );
 	}
@@ -511,6 +543,10 @@ void nitmod_SendChargeTimes( int clientNum ) {
 	}
 
 	for( i = firstClient; i <= lastClient; i++ ) {
+		if(G_NITMOD_ClientSupports(i,NITMOD_FEATURE_PACK_CHARGE)) {
+			int war=G_NITMOD_ConfiguredWarMode();
+			trap_SendServerCommand(i,va("npcc %i",G_NITMOD_LegacyCvarInteger("g_noCharge",0)!=0 || war==1 || war==3));
+		}
 		if( G_NITMOD_ClientSupports( i, NITMOD_FEATURE_CHARGE_TIMES ) ) {
 			trap_SendServerCommand( i, va( "ct %i %i %i %i %i %i %i %i %i %i",
 				level.soldierChargeTime[0], level.soldierChargeTime[1],
@@ -579,6 +615,9 @@ void nitmod_SetGameState( const nitmodGameState_t *state ) {
 void nitmod_RefreshBaseSettings( void ) {
 	nitmodSimpleConfig_t simple = nitmodSimpleConfig;
 	nitmodGameState_t state = nitmodGameState;
+	/* Legacy settings updates include noCharge/war; resend negotiated pack
+	 * bypass together with the existing charge-time snapshot. */
+	nitmod_SendChargeTimes(-1);
 
 	simple.filterCams = g_filtercams.integer;
 	simple.spectatorNames = g_spectatorNames.integer;

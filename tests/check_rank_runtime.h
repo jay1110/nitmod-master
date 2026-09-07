@@ -1,6 +1,6 @@
 static int CheckRankRuntime(void) {
     static const int expected[] = {0,1,2,3,4,5,5,6,6,7,7,8,8,8,9,9,9,
-        10,10,10,10,10,10,10,10,10,10,10,10};
+        10,10,10,10,10,10,10,10,10,10,10,10,10,10,10,10,10,10,10};
     static gclient_t client;
     int code, rest, skill, total, cases = 1, errors = 0;
     memset(&client, 0, sizeof(client));

@@ -23,6 +23,8 @@ void CG_NitmodSpecialObituary(int cause, char **message, char **suffix);
 void CG_NitmodObituaryPrint(const char *text, qhandle_t shader, const entityState_t *event);
 qboolean CG_NitmodAddGraphicObituary(const char *first, const char *second, qhandle_t shader, int scale, const vec3_t color);
 void CG_NitmodObituarySounds(const entityState_t *es);
+void CG_NitmodObituarySoundsForProtocol(const entityState_t *es, qboolean original);
+void CG_NitmodObituaryPrintForProtocol(const char *text, qhandle_t shader, const entityState_t *event, qboolean original);
 void CG_NitmodObituaryReset(void);
 
 #endif

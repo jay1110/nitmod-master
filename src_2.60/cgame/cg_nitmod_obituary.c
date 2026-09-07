@@ -210,7 +210,7 @@ void CG_NitmodObituary(const entityState_t *es) {
         }
         if(es->otherEntityNum == listener)
             Q_strncpyz(cg.killerName, attackerName, sizeof(cg.killerName));
-        CG_NitmodObituarySounds(es);
+        CG_NitmodObituarySoundsForProtocol(es,qtrue);
     }
-    CG_NitmodObituaryPrint(text, cgs.media.pmImages[PM_DEATH], es);
+    CG_NitmodObituaryPrintForProtocol(text, cgs.media.pmImages[PM_DEATH], es,qtrue);
 }

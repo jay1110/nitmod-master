@@ -14,6 +14,7 @@
 
 static char nitmodConfigStrings[NITMOD_MAX_CONFIGSTRINGS][NITMOD_CONFIGSTRING_CHARS];
 static unsigned int nitmodServerCapabilities;
+static qboolean nitmodPackBypass, nitmodPackSettingsReady;
 static nitmodSimpleConfig_t nitmodSimpleConfig;
 static nitmodGameState_t nitmodGameState;
 static qboolean nitmodClassLimitsReceived;
@@ -131,22 +132,11 @@ void NITMOD_TranslateSnapshotPersistant(snapshot_t *snapshot) {
 
 /* Original Nitmod weapon_t, distinct from ET's enum. Extensions have independent
  * typed inventories; original-server bomb/poison firing stays authoritative. */
-static const int nitmodWireWeapons[52] = {
-	WP_NONE, WP_KNIFE, WP_LUGER, WP_MP40, WP_GRENADE_LAUNCHER,
-	WP_PANZERFAUST, WP_FLAMETHROWER, WP_COLT, WP_THOMPSON, WP_GRENADE_PINEAPPLE,
-	WP_STEN, WP_MEDIC_SYRINGE, WP_AMMO, WP_ARTY, WP_SILENCER, WP_DYNAMITE,
-	WP_SMOKETRAIL, VERYBIGEXPLOSION, WP_MEDKIT, WP_BINOCULARS, WP_PLIERS,
-	WP_SMOKE_MARKER, WP_KAR98, WP_CARBINE, WP_GARAND, WP_LANDMINE,
-	WP_SATCHEL, WP_SATCHEL_DET, WP_SMOKE_BOMB, WP_MOBILE_MG42, WP_K43,
-	WP_FG42, WP_DUMMY_MG42, WP_MORTAR, WP_AKIMBO_COLT, WP_AKIMBO_LUGER,
-	WP_GPG40, WP_M7, WP_SILENCED_COLT, WP_GARAND_SCOPE, WP_K43_SCOPE,
-	WP_FG42SCOPE, WP_MORTAR_SET, WP_MEDIC_ADRENALINE, WP_AKIMBO_SILENCEDCOLT,
-	WP_AKIMBO_SILENCEDLUGER, WP_MOBILE_MG42_SET, WP_POISON_SYRINGE, WP_BOMB, WP_TRIPMINE, WP_POISON_BOMB, WP_POISON_MINE
-};
+#include "../game/nitmod_weapon_ids.h"
 
 int NITMOD_WeaponFromWire(int weapon) {
-	return weapon >= 0 && weapon < 52 && nitmodWireWeapons[weapon] >= 0
-		? nitmodWireWeapons[weapon] : WP_NONE;
+	int native = NITMOD_NativeWeaponId(weapon);
+	return native < 0 ? WP_NONE : native;
 }
 
 /* Original CG_DrawCursorhint switch; not the ET 2.60 hintType_t layout. */
@@ -165,10 +155,7 @@ int NITMOD_HintFromWire(int hint) {
 	return hint >= 0 && hint < (int)(sizeof(hints) / sizeof(hints[0])) ? hints[hint] : HINT_ACTIVATE;
 }
 int NITMOD_WeaponToWire(int weapon) {
-	int i;
-	if(weapon < 0) return 0;
-	for(i = 0; i < 52; ++i) if(nitmodWireWeapons[i] == weapon) return i;
-	return 0;
+	return NITMOD_OriginalWeaponId(weapon);
 }
 
 /* Original aWeapID (ELF VA 0x1004a0), indexed here by wire weapon.
@@ -277,30 +264,23 @@ int NITMOD_ItemFromWire(int item) {
 	return 0;
 }
 
+#include "../game/nitmod_entity_ids.h"
+#include "../game/nitmod_powerup_ids.h"
 int NITMOD_EntityTypeFromWire(int type) {
-	static const int types[] = {
-		ET_GENERAL, ET_PLAYER, ET_ITEM, ET_MISSILE, ET_MOVER, ET_BEAM,
-		ET_PORTAL, ET_SPEAKER, ET_PUSH_TRIGGER, ET_TELEPORT_TRIGGER,
-		ET_INVISIBLE, ET_CONCUSSIVE_TRIGGER, ET_OID_TRIGGER, ET_EXPLOSIVE_INDICATOR,
-		ET_EXPLOSIVE, ET_ALARMBOX, ET_CORONA, ET_TRAP, ET_GAMEMODEL, ET_FOOTLOCKER,
-		ET_FLAMEBARREL, ET_FP_PARTS, ET_FIRE_COLUMN, ET_FIRE_COLUMN_SMOKE,
-		ET_RAMJET, ET_FLAMETHROWER_CHUNK, ET_EXPLO_PART, ET_PROP, ET_AI_EFFECT,
-		ET_CAMERA, ET_MOVERSCALED, ET_CONSTRUCTIBLE_INDICATOR, ET_CONSTRUCTIBLE,
-		ET_CONSTRUCTIBLE_MARKER, ET_BOMB, ET_BEAM_2, ET_TANK_INDICATOR,
-		ET_TANK_INDICATOR_DEAD, ET_CORPSE, ET_SMOKER, ET_TEMPHEAD, ET_MG42_BARREL,
-		ET_TEMPLEGS, ET_TRIGGER_MULTIPLE, ET_TRIGGER_FLAGONLY, ET_TRIGGER_FLAGONLY_MULTIPLE,
-		ET_GAMEMANAGER, ET_CABINET_H, ET_CABINET_A, ET_HEALER, ET_SUPPLIER,
-		ET_LANDMINE_HINT, ET_ATTRACTOR_HINT, ET_SNIPER_HINT, ET_LANDMINESPOT_HINT,
-		ET_COMMANDMAP_MARKER
-	};
-	if(type >= 59 && type <= 59 + 255) return ET_EVENTS + type - 59;
-	return type >= 0 && type < sizeof(types)/sizeof(types[0]) ? types[type] : ET_INVISIBLE;
+    int native;
+    if(type>=59 && type<=59+255) return ET_EVENTS+type-59;
+    native=NITMOD_NativeEntityType(type);
+    return native<0?ET_INVISIBLE:native;
 }
 
 void NITMOD_TranslateSnapshotWeapons(snapshot_t *snapshot) {
 	playerState_t *ps = &snapshot->ps;
 	int ammo[MAX_WEAPONS], clip[MAX_WEAPONS], heat[MAX_WEAPONS];
+    int powerups[MAX_POWERUPS];
 	int owned[MAX_WEAPONS / 32], i, target;
+    memcpy(powerups,ps->powerups,sizeof(powerups));
+    memset(ps->powerups,0,sizeof(ps->powerups));
+    for(i=0;i<13;++i) ps->powerups[nitmodPowerupIds[i]]=powerups[i];
 	memcpy(ammo, ps->ammo, sizeof(ammo));
 	memcpy(clip, ps->ammoclip, sizeof(clip));
 	memcpy(heat, ps->weapHeat, sizeof(heat));
@@ -334,6 +314,7 @@ void NITMOD_TranslateSnapshotWeapons(snapshot_t *snapshot) {
 		entityState_t *es = &snapshot->entities[i];
 		int event;
 		es->eType = NITMOD_EntityTypeFromWire(es->eType);
+        if(es->eType==ET_PLAYER || es->eType==ET_CORPSE) es->powerups=NITMOD_NativePowerupBits((unsigned int)es->powerups);
 		if(es->eType == ET_ITEM) es->modelindex = NITMOD_ItemFromWire(es->modelindex);
 		event = es->eType >= ET_EVENTS ? es->eType - ET_EVENTS : es->event & ~EV_EVENT_BITS;
 		/* Effects such as rubble overload weapon with gravity flags. */
@@ -903,6 +884,7 @@ void NITMOD_ClearConfigStrings( void ) {
 	nitmodPrivateMessageSound = 0;
 	memset( nitmodConfigStrings, 0, sizeof( nitmodConfigStrings ) );
 	nitmodServerCapabilities = 0;
+	nitmodPackBypass=nitmodPackSettingsReady=qfalse;
 	memset( &nitmodSimpleConfig, 0, sizeof( nitmodSimpleConfig ) );
 	memset( &nitmodGameState, 0, sizeof( nitmodGameState ) );
 	nitmodGameState.dmWinnerClient = -1;
@@ -951,9 +933,54 @@ qboolean NITMOD_ServerSupports( unsigned int feature ) {
 	return ( nitmodServerCapabilities & feature ) == feature;
 }
 
+void NITMOD_PackPredictionInputs(pmove_t *move, int clientNum) {
+	unsigned int masks[SK_NUM_SKILLS];
+	const char *cursor;
+	int i;
+	if(!move) return;
+	move->nitmodPackChargeEnabled=qfalse;
+	move->nitmodPackChargeBypass=qfalse;
+	memset(move->nitmodPackSkillMasks,0,sizeof(move->nitmodPackSkillMasks));
+	if(clientNum<0 || clientNum>=MAX_CLIENTS) return;
+	if(NITMOD_UsesOriginalProtocol()) {
+		memcpy(move->nitmodPackSkillMasks,cgs.clientinfo[clientNum].nitmodSkillMasks,sizeof(masks));
+		move->nitmodPackChargeEnabled=qtrue;
+		return;
+	}
+	if(!NITMOD_ServerSupports(NITMOD_FEATURE_PACK_CHARGE) || !nitmodPackSettingsReady) return;
+	move->nitmodPackChargeBypass=nitmodPackBypass;
+	/* Read current CS_PLAYERS even when ACK arrives after clientinfo parsing. */
+	cursor=Info_ValueForKey(CG_ConfigString(CS_PLAYERS+clientNum),"xp");
+	for(i=0;i<SK_NUM_SKILLS;++i) {
+		char number[16];
+		int length=0;
+		while(*cursor==' ') ++cursor;
+		while(*cursor && *cursor!=' ') {
+			if(length>=sizeof(number)-1) return;
+			number[length++]=*cursor++;
+		}
+		number[length]=0;
+		if(!NITMOD_ParseProtocolUnsigned(number,&masks[i])) return;
+	}
+	while(*cursor==' ') ++cursor;
+	if(*cursor) return;
+	memcpy(move->nitmodPackSkillMasks,masks,sizeof(masks));
+	move->nitmodPackChargeEnabled=qtrue;
+}
+
 qboolean NITMOD_ProtocolCommand( const char *command ) {
 	int protocolVersion;
 	unsigned int capabilities;
+	if(!Q_stricmp(command,"npcc")) {
+		int bypass;
+		if(NITMOD_ServerSupports(NITMOD_FEATURE_PACK_CHARGE) &&
+			NITMOD_HasArgumentCount("npcc",2) &&
+			NITMOD_ParseProtocolInteger(CG_Argv(1),&bypass) && bypass>=0 && bypass<=1) {
+			nitmodPackBypass=bypass!=0;
+			nitmodPackSettingsReady=qtrue;
+		}
+		return qtrue;
+	}
 
 	if ( Q_stricmp( command, NITMOD_CAPABILITIES_ACK_COMMAND ) ) {
 		return qfalse;
@@ -967,10 +994,12 @@ qboolean NITMOD_ProtocolCommand( const char *command ) {
 	}
 	if ( protocolVersion != NITMOD_PROTOCOL_VERSION ) {
 		CG_Printf( "Nitmod: server protocol %i is unsupported\n", protocolVersion );
+		nitmodPackBypass=nitmodPackSettingsReady=qfalse;
 		nitmodServerCapabilities = 0;
 		CG_setClientFlags();
 		return qtrue;
 	}
+	nitmodPackBypass=nitmodPackSettingsReady=qfalse;
 	nitmodServerCapabilities = capabilities & NITMOD_FEATURES_CLIENT;
 	CG_setClientFlags();
 	return qtrue;

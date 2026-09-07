@@ -84,14 +84,14 @@ static int nitmodEventSoundCalls, nitmodEventSoundEntity, nitmodEventSoundHandle
 static int QDECL NitmodEventSoundEngine(int command, ...) {
     va_list args;
     va_start(args, command);
-    if(command == CG_S_STARTSOUNDVCONTROL) {
+    if(command == CG_S_STARTSOUND) {
         (void)va_arg(args, const float *);
         nitmodEventSoundEntity = va_arg(args, int);
         (void)va_arg(args, int);
         nitmodEventSoundHandle = va_arg(args, int);
         (void)va_arg(args, int);
         ++nitmodEventSoundCalls;
-    } else { va_end(args); exit(2); }
+    } else if(command != CG_S_UPDATEENTITYPOSITION) { va_end(args); exit(2); }
     va_end(args); return 0;
 }
 
@@ -113,5 +113,36 @@ static int CheckNitmodEventSound(void) {
     cgs.gameSounds[5] = saved;
     dllEntry(Engine);
     if(errors) fprintf(stderr, "Nitmod event sound failures: %d\n", errors);
+    return errors;
+}
+
+static int CheckLuaEventRouting(void) {
+    centity_t cent;
+    snapshot_t snap, *savedSnap=cg.snap;
+    sfxHandle_t saved=cgs.gameSounds[5];
+    int errors=0, encoded=EV_NITMOD_LUA_FIRST+100;
+    memset(&snap,0,sizeof(snap)); cg.snap=&snap;
+    memset(&cent,0,sizeof(cent));
+    cent.currentState.number=17; cent.currentState.eventParm=5;
+    cent.currentState.event=encoded|EV_EVENT_BIT1;
+    cgs.gameSounds[5]=731; nitmodEventSoundCalls=0;
+    dllEntry(NitmodEventSoundEngine);
+    CG_NativeEntityEvent(&cent,cent.lerpOrigin);
+    if(nitmodEventSoundCalls!=1 || nitmodEventSoundHandle!=731 ||
+       nitmodEventSoundEntity!=17 || cent.currentState.event!=(encoded|EV_EVENT_BIT1)) ++errors;
+    memset(&cent,0,sizeof(cent));
+    cent.currentState.number=17; cent.currentState.eventParm=5;
+    cent.currentState.eType=ET_EVENTS+EV_NITMOD_LUA_FIRST;
+    cent.currentState.event=encoded; nitmodEventSoundCalls=0;
+    CG_CheckEvents(&cent); CG_CheckEvents(&cent);
+    if(nitmodEventSoundCalls!=1 || cent.currentState.event!=encoded) ++errors;
+    memset(&cent,0,sizeof(cent));
+    cent.currentState.number=17; cent.currentState.eType=ET_GENERAL;
+    cent.currentState.events[0]=cent.currentState.events[1]=encoded;
+    cent.currentState.eventParms[0]=cent.currentState.eventParms[1]=5;
+    cent.currentState.eventSequence=2; nitmodEventSoundCalls=0;
+    CG_CheckEvents(&cent); CG_CheckEvents(&cent);
+    if(nitmodEventSoundCalls!=2 || nitmodEventSoundHandle!=731) ++errors;
+    cgs.gameSounds[5]=saved; cg.snap=savedSnap; dllEntry(Engine);
     return errors;
 }

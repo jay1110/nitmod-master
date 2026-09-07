@@ -1324,6 +1324,10 @@ void UI_LoadMenus( const char *menuFile, qboolean reset ) {
 		trap_PC_AddGlobalDefine( "FUI" );
 	}
 
+    /* Original menu assets use these globals before parsing any menu. */
+    trap_PC_AddGlobalDefine(va("_WINDOW_WIDTH %f",uiInfo.uiDC.glconfig.vidHeight>0?
+        480.0*(double)uiInfo.uiDC.glconfig.vidWidth/uiInfo.uiDC.glconfig.vidHeight:640.0));
+    trap_PC_AddGlobalDefine("_WINDOW_HEIGHT 480");
 	handle = trap_PC_LoadSource( menuFile );
 	if (!handle) {
 		trap_Error( va( S_COLOR_YELLOW "menu file not found: %s, using default\n", menuFile ) );

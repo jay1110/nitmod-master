@@ -1,5 +1,10 @@
 /* Full qagame link: real G_Damage and production handlers, no map/engine. */
 #include "g_local.h"
+#include "g_nitmod_legacy_cvars.h"
+extern int Pickup_Weapon(gentity_t *ent,gentity_t *other);
+extern qboolean G_ScriptAction_GlobalAccum(gentity_t *ent,char *params);
+extern void Cmd_Vote_f(gentity_t *ent);
+extern void ClientEvents(gentity_t *ent,int oldEventSequence);
 #include <stdio.h>
 #include <stdlib.h>
 #include <stddef.h>
@@ -103,7 +108,42 @@ static int inactivityTest, inactivityWarnings, inactivityDrops, inactivityPrivat
 extern qboolean ClientInactivityTimer(gclient_t *client);
 static int goombaXpFixture;
 static int QDECL EngineCallback(int command, ...) {
+    if(command == G_LOCATE_GAME_DATA) {
+        va_list args;gentity_t *entities;playerState_t *clients;int count,entitySize,clientSize;
+        va_start(args,command);entities=va_arg(args,gentity_t *);count=va_arg(args,int);
+        entitySize=va_arg(args,int);clients=va_arg(args,playerState_t *);clientSize=va_arg(args,int);va_end(args);
+        if(entities!=level.gentities || count!=level.num_entities || count<0 || count>MAX_GENTITIES ||
+           entitySize!=sizeof(gentity_t) || clients!=(playerState_t *)level.clients || clientSize!=sizeof(gclient_t)) {
+            fprintf(stderr,"Invalid game-data registration\n");exit(2);
+        }
+        return 0;
+    }
+    if(command == G_CVAR_REGISTER) {
+        va_list args;vmCvar_t *cvar;const char *value;
+        va_start(args,command);cvar=va_arg(args,vmCvar_t *);(void)va_arg(args,const char *);value=va_arg(args,const char *);va_end(args);
+        memset(cvar,0,sizeof(*cvar));Q_strncpyz(cvar->string,value,sizeof(cvar->string));
+        cvar->integer=atoi(value);cvar->value=(float)atof(value);return 0;
+    }
+    /* String lookups select each production helper's default. Numeric legacy
+     * cvars receive their registered defaults above. */
+    if(command == G_CVAR_VARIABLE_STRING_BUFFER) {
+        va_list args;char *out;int size;
+        va_start(args,command);(void)va_arg(args,const char *);out=va_arg(args,char *);size=va_arg(args,int);va_end(args);
+        if(size<=0 || !out) exit(2);*out=0;return 0;
+    }
+    if(command == G_CVAR_SET) {
+        va_list args;const char *name,*value;int slot=-1;
+        va_start(args,command);name=va_arg(args,const char *);value=va_arg(args,const char *);va_end(args);
+        if(sscanf(name,"wstats%d",&slot)==1 && slot>=0 && slot<MAX_CLIENTS && atoi(value)==slot) return 0;
+        fprintf(stderr,"Unexpected cvar write %s=%s\n",name,value);exit(2);
+    }
     if(goombaXpFixture && command == PB_STAT_REPORT) return 0;
+    if(goombaXpFixture && command == G_LINKENTITY) {
+        va_list args;gentity_t *entity;
+        va_start(args,command);entity=va_arg(args,gentity_t *);va_end(args);
+        if(entity<g_entities+MAX_CLIENTS || entity>=g_entities+MAX_GENTITIES || entity->s.eType!=ET_EVENTS+EV_NITMOD_SOUND) exit(2);
+        entity->r.linked=qtrue;return 0;
+    }
     if(kickTest && command == G_ENTITIES_IN_BOX) {
         va_list args;
         const float *mins, *maxs;
@@ -304,6 +344,16 @@ static int QDECL EngineCallback(int command, ...) {
             ++shakeCalls;
         } else exit(2);
         return 0;
+    }
+    if(command==G_SEND_SERVER_COMMAND) {
+        va_list args;int client;const char *text;
+        va_start(args,command);client=va_arg(args,int);text=va_arg(args,const char *);va_end(args);
+        fprintf(stderr,"Unexpected server command to %d: %s\n",client,text);
+    }
+    if(command==G_LINKENTITY) {
+        va_list args;gentity_t *entity;
+        va_start(args,command);entity=va_arg(args,gentity_t *);va_end(args);
+        fprintf(stderr,"Unhandled link: entity=%d type=%d classname=%s goomba=%d\n",entity->s.number,entity->s.eType,entity->classname?entity->classname:"",goombaXpFixture);
     }
     fprintf(stderr, "Unexpected engine syscall %d\n", command);
     exit(2);
@@ -1858,6 +1908,7 @@ int main(void) {
     int kind, enabled, gate, bypass, splash, i, admitted, damageFlags, profiles = 0, errors = 0;
     if(strcmp(GAMEVERSION, "nitmod")) ++errors;
     dllEntry(EngineCallback);
+    G_NITMOD_RegisterLegacyGameplayCvars();
     errors += CheckRankRuntime();
     errors += CheckVoteDispatch();
     errors += CheckPollVote();

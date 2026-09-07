@@ -1,5 +1,25 @@
 # Building Nitmod
 
+## Source-only Git checkout
+
+The repository keeps module sources (including Lua and SQLite), build tools,
+GitHub workflows, test sources and the complete `pak/` directory belonging to the mod.
+Original binaries, decompiler output and analysis reports remain local and
+are ignored. The mod assets in `pak/` stay versioned.
+
+For a module-only build matching CI, configure with `-DBUILD_TESTING=OFF`:
+
+```sh
+cmake -S src_2.60 -B build/native -DBUILD_TESTING=OFF
+cmake --build build/native --config Release --target cgame qagame ui
+```
+
+For WebAssembly, activate Emscripten and run `python tools/run_wasm_build.py`.
+The forensic/parity test tools described below additionally require the local
+original binaries and reference files. Those forensic inputs are deliberately
+not part of the Git checkout.
+Ignoring them does not delete existing local copies or change Git history.
+
 The historical 2.60 build remains `src_2.60/SConstruct`.  The CMake entrypoint
 is `src_2.60/CMakeLists.txt` and is the supported route for modern native and
 WASM module builds.

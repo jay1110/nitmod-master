@@ -15,7 +15,7 @@ assert "nitmodPoisonAttacker = -1;" in POISON
 assert "nitmodPoisonStacks = 0;" in POISON
 assert "G_NITMOD_CurePoisonFromHealth(other, ent->parent, qfalse);" in ITEMS
 assert "G_NITMOD_CurePoisonFromHealth(touchClients[i], NULL, qtrue);" in TRIGGER
-assert "if(g_poison.integer && (G_NITMOD_FirstAidUnlocks(client) & 16u))" in CLIENT
+assert "if(g_poison.integer && (client->sess.nitmodSkillMasks[SK_LIGHT_WEAPONS] & 16u))" in CLIENT
 assert "AddWeaponToPlayer(client, WP_POISON_SYRINGE" in CLIENT
 assert "poisonAmmo->defaultStartingAmmo" in CLIENT
 assert "poisonAmmo->defaultStartingClip" in CLIENT

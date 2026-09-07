@@ -23,6 +23,7 @@ static int CheckClassHealth(void) {
         memset(&client, 0, sizeof(client));
         client.sess.playerType = client.ps.teamNum = client.ps.stats[STAT_PLAYER_CLASS] = cls;
         client.sess.skill[SK_BATTLE_SENSE] = skill ? 3 : 0;
+        client.sess.nitmodSkillMasks[SK_BATTLE_SENSE] = skill ? 14u : 0;
         AddMedicTeamBonus(&client);
         expected = override ? override : 100 + skill * 15;
         if(client.pers.maxHealth != expected || client.ps.stats[STAT_MAX_HEALTH] != expected) ++errors;
@@ -50,6 +51,7 @@ static int CheckClassHealth(void) {
         for(war = -1; war <= 5; ++war) for(dm = 0; dm < 2; ++dm)
         for(override = 0; override <= 1; ++override) {
             client.sess.playerType = cls; client.sess.skill[SK_BATTLE_SENSE] = skill;
+            client.sess.nitmodSkillMasks[SK_BATTLE_SENSE] = (1u << (skill + 1)) - 2u;
             client.ps.stats[STAT_HEALTH] = 43; client.timeResidual = 57;
             maximum = war || dm ? 100 : (medics >= 3 ? 125 : 100 + medics * 10) + (skill >= 3 ? 15 : 0);
             if(override) maximum = 175;

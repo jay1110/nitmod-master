@@ -11,23 +11,19 @@
 #include "cg_nitmod_config.h"
 #include "cg_nitmod_stats.h"
 #include "cg_nitmod_mapvote.h"
+#include "../game/nitmod_class_primaries.h"
 
 bg_playerclass_t *CG_NitmodPlayerClass(int team, int cls) {
 	static bg_playerclass_t originalClasses[2][NUM_PLAYER_CLASSES];
-	static const weapon_t originalChoices[2][5][MAX_WEAPS_PER_CLASS] = {
-		{{WP_MP40, WP_MOBILE_MG42, WP_FLAMETHROWER, WP_PANZERFAUST, WP_MORTAR},
-		 {WP_MP40, WP_THOMPSON, WP_STEN}, {WP_MP40, WP_THOMPSON, WP_KAR98},
-		 {WP_MP40, WP_THOMPSON, WP_STEN}, {WP_STEN, WP_FG42, WP_K43}},
-		{{WP_THOMPSON, WP_MOBILE_MG42, WP_FLAMETHROWER, WP_PANZERFAUST, WP_MORTAR},
-		 {WP_THOMPSON, WP_MP40, WP_STEN}, {WP_THOMPSON, WP_MP40, WP_CARBINE},
-		 {WP_THOMPSON, WP_MP40, WP_STEN}, {WP_STEN, WP_FG42, WP_GARAND}}
-	};
+	int slot;
 	bg_playerclass_t *base = BG_GetPlayerClassInfo(team, cls), *result;
-	if(!NITMOD_UsesOriginalProtocol() || (team != TEAM_AXIS && team != TEAM_ALLIES) ||
+	if((!NITMOD_UsesOriginalProtocol() && !NITMOD_ServerSupports(NITMOD_FEATURE_CLASS_PRIMARIES)) ||
+		(team != TEAM_AXIS && team != TEAM_ALLIES) ||
 		cls < 0 || cls >= NUM_PLAYER_CLASSES) return base;
 	result = &originalClasses[team - TEAM_AXIS][cls];
 	*result = *base;
-	memcpy(result->classWeapons, originalChoices[team - TEAM_AXIS][cls], sizeof(result->classWeapons));
+	for(slot = 0; slot < MAX_WEAPS_PER_CLASS; ++slot)
+		result->classWeapons[slot] = NITMOD_ClassPrimaryAt(team, cls, slot);
 	return result;
 }
 

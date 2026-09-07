@@ -27,6 +27,7 @@ void NITMOD_BeginOriginalSession(void);
 qboolean NITMOD_OriginalSessionCommand(const char *command);
 qboolean NITMOD_ProtocolCommand( const char *command );
 qboolean NITMOD_ServerSupports( unsigned int feature );
+void NITMOD_PackPredictionInputs(pmove_t *move, int clientNum);
 const nitmodSimpleConfig_t *NITMOD_SimpleConfig( void );
 const nitmodGameState_t *NITMOD_GameState( void );
 const nitmodMapEndStats_t *NITMOD_MapEndStats( void );

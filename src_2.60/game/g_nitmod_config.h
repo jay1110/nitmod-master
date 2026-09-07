@@ -60,4 +60,5 @@ void nitmod_TeamScores( void );
  * command; it is zero when an event has no weapon attribution. */
 void nitmod_ObjectiveEvent( int type, int detail, int objective, int actor, int meansOfDeath );
 
+int G_NITMOD_CurrentKillSpree(int clientNum);
 #endif

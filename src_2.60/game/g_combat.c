@@ -1,3 +1,4 @@
+#include "g_nitmod_lua.h"
 /*
  * name:		g_combat.c
  *
@@ -393,6 +394,11 @@ char *modNames[] =
 	,"MOD_POISON_GAS"
 	,"MOD_POISON_GAS_MINE"
 	,"MOD_POISON"
+	,"MOD_SHOVE"
+	,"MOD_FEAR"
+	,"MOD_CENSORED"
+	,"MOD_THROWKNIFE"
+	,"MOD_GIBME"
 };
 
 /*
@@ -462,6 +468,7 @@ static void G_NITMOD_EndReviveSpree( gentity_t *victim, gentity_t *attacker ) {
 
 	if( !victim || !victim->client ) return;
 	count = victim->client->nitmodReviveSpree;
+	if(count>victim->client->nitmodBestReviveSpree) victim->client->nitmodBestReviveSpree=count;
 	options = G_NITMOD_LegacyCvarInteger("n_reviveSpreeOptions", 1);
 	if( (options & 8) && count > 4 ) {
 		if( attacker && attacker->client && attacker != victim ) {
@@ -497,7 +504,20 @@ void player_die( gentity_t *self, gentity_t *inflictor, gentity_t *attacker, int
 	weapon_t	weap = BG_WeaponForMOD( meansOfDeath );
 
 	G_NITMOD_AwardKillAssists(self, attacker, meansOfDeath);
-	G_NITMOD_EndReviveSpree(self, attacker);
+	if(self->client && meansOfDeath == MOD_FEAR)
+		weap = BG_WeaponForMOD(self->client->lasthurt_mod);
+	/* Original resolves pushed falls before death statistics and Lua obituary.
+	 * Keep the producer's slot; never dereference a corrupt/out-of-range slot. */
+	if(self->client && meansOfDeath == MOD_FALLING && self->client->nitmodPushed &&
+	   self->client->nitmodPushedBy >= 0 && self->client->nitmodPushedBy < MAX_CLIENTS) {
+		attacker = &g_entities[self->client->nitmodPushedBy];
+		meansOfDeath = MOD_SHOVE;
+		weap = WP_NONE;
+	}
+	/* Original player_die updates this before the obituary callback. */
+	if (self->client && meansOfDeath == MOD_FALLING) {
+		++self->client->sess.nitmodNewton;
+	}
 
 //	G_Printf( "player_die\n" );
 
@@ -603,12 +623,18 @@ void player_die( gentity_t *self, gentity_t *inflictor, gentity_t *attacker, int
 	}
 
 	// OSP - death stats handled out-of-band of G_Damage for external calls
-	G_addStats(self, attacker, damage, meansOfDeath);
+	G_addStats(self, attacker, damage, meansOfDeath == MOD_FEAR ? self->client->lasthurt_mod : meansOfDeath);
+	if(meansOfDeath == MOD_FEAR && attacker && attacker->client)
+		G_AddKillSkillPoints(attacker, self->client->lasthurt_mod, HR_HEAD, qfalse);
+	if(meansOfDeath == MOD_SHOVE && attacker && attacker->client && !OnSameTeam(self,attacker))
+		G_AddKillSkillPoints(attacker, MOD_SHOVE, HR_HEAD, qfalse);
 	// OSP
 
 	self->client->ps.pm_type = PM_DEAD;
+	G_NITMOD_GlobalStatsDeath(self->s.number,attacker ? attacker->s.number : -1,meansOfDeath);
 	/* Only a new death advances the series; repeated corpse/intermission
 	 * calls have returned above. The adapter excludes self and team kills. */
+	G_NITMOD_EndReviveSpree(self, attacker);
 	NITMOD_UpdateKillSpree( self, attacker );
 
 	G_AddEvent( self, EV_STOPSTREAMINGSOUND, 0);
@@ -646,6 +672,7 @@ void player_die( gentity_t *self, gentity_t *inflictor, gentity_t *attacker, int
 	}
 
 	// broadcast the death event to everyone
+	if(!G_NITMOD_LuaObituary(self->s.number,killer,meansOfDeath)) {
 	ent = G_TempEntity( self->r.currentOrigin, EV_OBITUARY );
 	ent->s.eventParm = meansOfDeath;
 	if(meansOfDeath == MOD_GOOMBA) {
@@ -668,9 +695,18 @@ void player_die( gentity_t *self, gentity_t *inflictor, gentity_t *attacker, int
 		ent->s.eventParm = MOD_SYRINGE;
 		ent->s.effect3Time = NITMOD_OBITUARY_POISON;
 	}
+	if(meansOfDeath == MOD_SHOVE) {
+		ent->s.eventParm = MOD_FALLING;
+		ent->s.effect3Time = NITMOD_OBITUARY_SHOVE;
+	}
+	if(meansOfDeath >= MOD_FEAR && meansOfDeath <= MOD_GIBME) {
+		ent->s.eventParm = MOD_UNKNOWN;
+		ent->s.effect3Time = NITMOD_OBITUARY_EXTRA + meansOfDeath - MOD_FEAR;
+	}
 	ent->s.otherEntityNum = self->s.number;
 	ent->s.otherEntityNum2 = killer;
 	ent->r.svFlags = SVF_BROADCAST;	// send to everyone
+	}
 
 	self->enemy = attacker;
 
@@ -1519,7 +1555,8 @@ void G_Damage( gentity_t *targ, gentity_t *inflictor, gentity_t *attacker,  vec3
 	if( client && (client->ps.weapon == WP_MORTAR_SET || client->ps.weapon == WP_MOBILE_MG42_SET) )
 		knockback *= 0.5;
 
-	if( targ->client && g_friendlyFire.integer && OnSameTeam(targ, attacker) ) {
+	if( targ->client && attacker && attacker->client && OnSameTeam(targ, attacker) &&
+	    g_gametype.integer != GT_WOLF_DM && !(g_friendlyFire.integer & 17) ) {
 		knockback = 0;
 	}
 	
@@ -1532,6 +1569,11 @@ void G_Damage( gentity_t *targ, gentity_t *inflictor, gentity_t *attacker,  vec3
 
 		VectorScale (dir, g_knockback.value * (float)knockback / mass, kvel);
 		VectorAdd (targ->client->ps.velocity, kvel, targ->client->ps.velocity);
+		if(attacker && attacker->client &&
+		   (targ->client->ps.groundEntityNum != ENTITYNUM_NONE || G_WeaponIsExplosive(mod))) {
+			targ->client->nitmodPushed = qtrue;
+			targ->client->nitmodPushedBy = (int)(attacker - g_entities);
+		}
 
 		/*if( mod == MOD_GRENADE ||
 			mod == MOD_GRENADE_LAUNCHER ||
@@ -1703,6 +1745,8 @@ void G_Damage( gentity_t *targ, gentity_t *inflictor, gentity_t *attacker,  vec3
 #endif
 		  ) {
 			G_addStatsHeadShot(attacker, mod);
+			if(!(targ->r.svFlags&SVF_BOT) && (mod==MOD_GARAND_SCOPE || mod==MOD_K43_SCOPE))
+				G_NITMOD_GlobalStatsEvent(attacker->s.number,7);
 		}
 
 		if( g_debugBullets.integer ) {
@@ -1736,6 +1780,26 @@ void G_Damage( gentity_t *targ, gentity_t *inflictor, gentity_t *attacker,  vec3
 	{
 		G_Printf( "client:%i health:%i damage:%i mod:%s\n", targ->s.number, targ->health, take, modNames[mod] );
 	}
+
+    /* Original G_Damage 0x79b04..0x79c30: hit feedback counts contacts,
+     * while slots 5/6 count live-target head/body contacts. Native PERS_HITS
+     * remains ET's damage counter and must never alias these Lua values. */
+    if(attacker && attacker->client && targ->client && attacker!=targ && !OnSameTeam(targ,attacker)) {
+        int threshold=g_forceLimboHealth.integer;
+        int disguised=targ->client->ps.powerups[PW_OPS_DISGUISED] && ((g_friendlyFire.integer&1) || g_gametype.integer==GT_WOLF_DM);
+        int reveal=(attacker->client->sess.nitmodSkillMasks[SK_SIGNALS]&16) &&
+            (attacker->client->sess.playerType==PC_FIELDOPS || (G_NITMOD_LegacyCvarInteger("jp_keepAwards",0)&2));
+        if(threshold>0) threshold=-threshold;
+        if(!threshold) threshold=-75;
+        if(headShot || (targ->health>threshold && mod!=MOD_SWITCHTEAM && mod!=MOD_SUICIDE && mod!=MOD_POISON && mod!=MOD_FEAR)) {
+            if(!disguised || reveal) ++attacker->client->nitmodLuaPersistant[headShot?1:2];
+            if(targ->health>0) {
+                ++attacker->client->nitmodLuaPersistant[headShot?5:6];
+                if(headShot) ++attacker->client->sess.nitmodHeadHits;
+                else ++attacker->client->sess.nitmodBodyHits;
+            }
+        }
+    }
 
 	// add to the damage inflicted on a player this frame
 	// the total will be turned into screen blends and view angle kicks

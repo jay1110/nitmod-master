@@ -11,6 +11,7 @@ extern void Item_Slider_Paint(itemDef_t *);
 extern int menuCount;
 static float sliderValue, sliderWritten;
 extern void UI_RunMenuScript(char **args);
+extern void UI_ServersSort(int column, qboolean force);
 extern void dllEntry(int (QDECL *)(int, ...));
 #include "check_ui_widescreen.h"
 #include "check_ui_map_preview.h"
@@ -1330,6 +1331,7 @@ static const char *browserGame;
 static int browserNxac;
 static int browserAll, browserClients=3, browserCompare=1, browserPing=50;
 static int browserHumanMode,browserStatusIndex;
+static int browserSortWrites;
 static int QDECL BrowserSyscall(int command, ...) {
     va_list args;
     int result = 0, index, size;
@@ -1337,6 +1339,17 @@ static int QDECL BrowserSyscall(int command, ...) {
     const char *name;
     va_start(args, command);
     switch(command) {
+    case UI_CVAR_SET: {
+        const char *setting;
+        char expected[32];
+        name=va_arg(args,const char *); setting=va_arg(args,const char *);
+        Com_sprintf(expected,sizeof(expected),"%d",SORT_CLIENTS);
+        if(strcmp(name,"ui_browserSortKey") || strcmp(setting,expected)) {
+            fprintf(stderr,"unexpected browser Cvar write %s=%s\n",name,setting); exit(2);
+        }
+        ++browserSortWrites;
+        break;
+    }
     case UI_CVAR_UPDATE: (void)va_arg(args, vmCvar_t *); break;
     case UI_CVAR_VARIABLESTRINGBUFFER:
         name = va_arg(args, const char *);
@@ -1488,7 +1501,9 @@ static int CheckBrowser(void) {
         ui_netSource.integer=savedSource;
     }
     for(i=0;i<8;++i) if(uiInfo.serverStatus.displayServers[i]!=7-i) ++errors;
+    browserSortWrites=0;
     uiInfo.serverStatus.sortDir=1; UI_ServersSort(SORT_CLIENTS,qtrue);
+    if(browserSortWrites!=1) ++errors;
     for(i=0;i<8;++i) if(uiInfo.serverStatus.displayServers[i]!=i) ++errors;
     /* Pending then success, and separately timeout: no duplicated totals. */
     browserCount=1; browserReady=0; uiInfo.uiDC.realTime=100;

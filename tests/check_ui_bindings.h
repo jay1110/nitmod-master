@@ -6,7 +6,11 @@ static char bindingPaint[128];
 static void BindingKeyName(int key, char *out, int size) {
     Com_sprintf(out, size, "key%d", key);
 }
-static const char *BindingTranslate(const char *text) { return text; }
+static char *BindingTranslate(const char *text) {
+    static char translated[1024];
+    Q_strncpyz(translated, text, sizeof(translated));
+    return translated;
+}
 static void BindingPaint(float x, float y, float scale, vec4_t color,
     const char *text, float adjust, int limit, int style) {
     Q_strncpyz(bindingPaint, text, sizeof(bindingPaint));

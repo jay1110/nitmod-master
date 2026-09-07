@@ -244,6 +244,7 @@ void G_addStats(gentity_t *targ, gentity_t *attacker, int dmg_ref, int mod)
 		targ->client->sess.damage_received += dmg;
 		if(targ->health <= 0) {
 			attacker->client->sess.kills++;
+			attacker->client->nitmodLuaPersistant[3]++;
 			targ->client->sess.deaths++;
 		}
 	}
@@ -281,10 +282,13 @@ void G_addStatsHeadShot(gentity_t *attacker, int mod)
 static const weap_ws_convert_t aWeapMOD[MOD_NUM_MODS] = {
 	{ MOD_UNKNOWN,				WS_MAX },
 	{ MOD_MACHINEGUN,			WS_MG42 },
+	{ MOD_BROWNING, WS_MG42 },
+	{ MOD_MG42, WS_MG42 },
 	{ MOD_GRENADE,				WS_GRENADE },
 	{ MOD_ROCKET,				WS_PANZERFAUST },
 
 	{ MOD_KNIFE,				WS_KNIFE },
+	{ MOD_THROWKNIFE,			WS_KNIFE },
 	{ MOD_LUGER,				WS_LUGER },
 	{ MOD_COLT,					WS_COLT },
 	{ MOD_MP40,					WS_MP40 },
@@ -334,7 +338,7 @@ static const weap_ws_convert_t aWeapMOD[MOD_NUM_MODS] = {
 	{ MOD_M7,					WS_GRENADELAUNCHER },
 	{ MOD_LANDMINE,				WS_LANDMINE },
 	{ MOD_SATCHEL,				WS_SATCHEL },
-	{ MOD_TRIPMINE,				WS_LANDMINE },
+	{ MOD_TRIPMINE,				WS_TRIPMINE },
 	{ MOD_SMOKEBOMB,			WS_SMOKE },	// ??
 	{ MOD_SMOKEGRENADE,			WS_AIRSTRIKE }, // rain - airstrike tag
 	{ MOD_MOBILE_MG42,			WS_MG42},
@@ -351,7 +355,11 @@ static const weap_ws_convert_t aWeapMOD[MOD_NUM_MODS] = {
 
 	{ MOD_SWAP_PLACES,			WS_MAX },
 
-	{ MOD_SWITCHTEAM,			WS_MAX }
+	{ MOD_SWITCHTEAM,			WS_MAX },
+	{ MOD_POISON, WS_POISON },
+	{ MOD_BOMB, WS_BOMB },
+	{ MOD_POISON_GAS, WS_POISON_GAS },
+	{ MOD_POISON_GAS_MINE, WS_POISON_MINE }
 
 };
 
@@ -419,6 +427,10 @@ void G_deleteStats(int nClient)
 	cl->sess.damage_given = 0;
 	cl->sess.damage_received = 0;
 	cl->sess.deaths = 0;
+	cl->sess.nitmodNewton = 0;
+	cl->sess.nitmodKillingSpree = 0;
+	cl->sess.nitmodHeadHits = 0;
+	cl->sess.nitmodBodyHits = 0;
 	cl->sess.game_points = 0;
 	cl->sess.rounds = 0;
 	cl->sess.kills = 0;

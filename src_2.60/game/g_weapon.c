@@ -15,6 +15,7 @@
 #include "g_nitmod_etbot_lifecycle.h"
 #include "g_nitmod_legacy_cvars.h"
 #include "g_nitmod_entities.h"
+#include "nitmod_skills.h"
 
 vec3_t	forward, right, up;
 vec3_t	muzzleEffect;
@@ -217,6 +218,8 @@ void Weapon_Knife( gentity_t *ent ) {
 		{
 			damage = 100;	// enough to drop a 'normal' (100 health) human with one jab
 			mod = MOD_KNIFE;
+			if(!(traceEnt->r.svFlags&SVF_BOT) && !OnSameTeam(ent,traceEnt))
+				G_NITMOD_GlobalStatsEvent(ent->s.number,13);
 
 			// rain - only do this if they have a positive health
 			if ( traceEnt->health > 0 && ent->client->sess.skill[SK_MILITARY_INTELLIGENCE_AND_SCOPED_WEAPONS] >= 4 ) {
@@ -261,8 +264,9 @@ int NITMOD_LimboPackCount(int configured, int war, int gameState, int playerClas
 }
 
 void NITMOD_DropLimboPacks(gentity_t *ent) {
-	int war, count, i, team, charge, delay;
-	qboolean healthPack, skilled;
+	int war, count, i, team, charge, delay, noCharge;
+	qboolean healthPack;
+	float chargeFraction;
 	gitem_t *item;
 	if(!ent || !ent->client) return;
 	team = ent->client->sess.sessionTeam;
@@ -274,7 +278,9 @@ void NITMOD_DropLimboPacks(gentity_t *ent) {
 	count = NITMOD_LimboPackCount(healthPack ? g_dropHealth.integer : g_dropAmmo.integer,
 		war, g_gamestate.integer, ent->client->sess.playerType, healthPack ? PC_MEDIC : PC_FIELDOPS);
 	if(!count) return;
-	skilled = healthPack ? ent->client->sess.skill[SK_FIRST_AID] >= 2 : ent->client->sess.skill[SK_SIGNALS] >= 1;
+	NITMOD_GameplayTableValue(healthPack ? NITMOD_TABLE_HEALTH : NITMOD_TABLE_AMMO,
+		ent->client->sess.nitmodSkillMasks[healthPack ? SK_FIRST_AID : SK_SIGNALS], &chargeFraction);
+	noCharge = G_NITMOD_LegacyCvarInteger("g_noCharge", 0);
 	item = healthPack ? BG_FindItemForClassName("item_health") : BG_FindItem((ent->client->sess.nitmodSkillMasks[SK_SIGNALS] & 32u) ? "Huge Ammo Pack" : (ent->client->sess.nitmodSkillMasks[SK_SIGNALS] & 2u) ? "Mega Ammo Pack" : "Ammo Pack");
 	charge = healthPack ? level.medicChargeTime[team-1] : level.lieutenantChargeTime[team-1];
 	delay = NITMOD_PackSinkDelay(healthPack ? n_medPackSinkDelay.integer : n_ammoPackSinkDelay.integer);
@@ -285,6 +291,10 @@ void NITMOD_DropLimboPacks(gentity_t *ent) {
 		velocity[0] = (((rand() & 0x7fff) / 32767.0f - 0.5f) * 2.0f) * 100.0f;
 		velocity[1] = (((rand() & 0x7fff) / 32767.0f - 0.5f) * 2.0f) * 100.0f;
 		velocity[2] = 25;
+		/* Original extended pack functions account before tracing and ignore
+		 * payment failure: configured limbo drops still launch every pack. */
+		NITMOD_ApplyChargeCost(level.time, charge, chargeFraction, noCharge, war,
+			&ent->client->ps.classWeaponTime);
 		VectorCopy(ent->r.currentOrigin, origin); VectorCopy(origin, start);
 		trap_EngineerTrace(&trace, start, mins, maxs, origin, ent->s.number, MASK_MISSILESHOT);
 		if(trace.startsolid) {
@@ -296,15 +306,31 @@ void NITMOD_DropLimboPacks(gentity_t *ent) {
 		} else if(trace.fraction < 1.0f) {
 			VectorCopy(trace.endpos, origin); SnapVectorTowards(origin, start);
 		}
-		/* ET skill-based charge backend; original extended charge tables remain separate. */
-		if(level.time - ent->client->ps.classWeaponTime > charge)
-			ent->client->ps.classWeaponTime = level.time - charge;
-		ent->client->ps.classWeaponTime += charge * (skilled ? 0.15f : 0.25f);
 		pack = LaunchItem(item, origin, velocity, ent->s.number);
 		pack->parent = ent; pack->s.teamNum = team;
 		pack->think = MagicSink; pack->nextthink = level.time + delay;
 		if(!healthPack) pack->count = pack->s.density = (ent->client->sess.nitmodSkillMasks[SK_SIGNALS] & 2u) ? 2 : 1;
 	}
+}
+
+static qboolean G_NITMOD_NormalPackCharge(gentity_t *ent, qboolean health) {
+	int duration, team=ent->client->sess.sessionTeam-1;
+	float fraction;
+	if(!G_NITMOD_ClientSupports(ent->s.number,NITMOD_FEATURE_PACK_CHARGE)) return qfalse;
+	if(team<0 || team>1) return qtrue;
+	switch(ent->client->sess.playerType) {
+	case PC_MEDIC: duration=level.medicChargeTime[team]; break;
+	case PC_ENGINEER: duration=level.engineerChargeTime[team]; break;
+	case PC_FIELDOPS: duration=level.lieutenantChargeTime[team]; break;
+	case PC_COVERTOPS: duration=level.covertopsChargeTime[team]; break;
+	default: duration=level.soldierChargeTime[team]; break;
+	}
+	NITMOD_GameplayTableValue(health ? NITMOD_TABLE_HEALTH : NITMOD_TABLE_AMMO,
+		ent->client->sess.nitmodSkillMasks[health ? SK_FIRST_AID : SK_SIGNALS],&fraction);
+	NITMOD_ApplyChargeCost(level.time,duration,fraction,
+		G_NITMOD_LegacyCvarInteger("g_noCharge",0),G_NITMOD_LegacyCvarInteger("g_war",0),
+		&ent->client->ps.classWeaponTime);
+	return qtrue;
 }
 
 void Weapon_Medic( gentity_t *ent ) {
@@ -315,6 +341,7 @@ void Weapon_Medic( gentity_t *ent ) {
 	vec3_t	tosspos, viewpos;
 	trace_t	tr;
 
+	if(!G_NITMOD_NormalPackCharge(ent,qtrue)) {
 	if (level.time - ent->client->ps.classWeaponTime > level.medicChargeTime[ent->client->sess.sessionTeam-1]) {
 		ent->client->ps.classWeaponTime = level.time - level.medicChargeTime[ent->client->sess.sessionTeam-1];
 	}
@@ -325,6 +352,7 @@ void Weapon_Medic( gentity_t *ent ) {
 		ent->client->ps.classWeaponTime += level.medicChargeTime[ent->client->sess.sessionTeam-1]*0.25;
 	}
 
+	}
 	item = BG_FindItemForClassName("item_health");
 	VectorCopy( ent->client->ps.viewangles, angles );
 
@@ -372,6 +400,8 @@ void Weapon_Medic( gentity_t *ent ) {
 //	ent2->timestamp = level.time + 31200;
 
 	ent2->parent = ent; // JPW NERVE so we can score properly later
+	/* Original Weapon_Medic_Ext 0xf1884 publishes the owner's team. */
+	ent2->s.teamNum = ent->client->sess.sessionTeam;
 	//ent2->count = 20;
 }
 
@@ -509,6 +539,7 @@ void Weapon_MagicAmmo( gentity_t *ent )  {
 	vec3_t	angles,mins,maxs;
 	trace_t	tr;
 
+	if(!G_NITMOD_NormalPackCharge(ent,qfalse)) {
 	if (level.time - ent->client->ps.classWeaponTime > level.lieutenantChargeTime[ent->client->sess.sessionTeam-1])
 		ent->client->ps.classWeaponTime = level.time - level.lieutenantChargeTime[ent->client->sess.sessionTeam-1];
 
@@ -518,6 +549,7 @@ void Weapon_MagicAmmo( gentity_t *ent )  {
 		ent->client->ps.classWeaponTime += level.lieutenantChargeTime[ent->client->sess.sessionTeam-1]*0.25;
 	}
 
+	}
 	/* Original Weapon_MagicAmmo_Ext reads the Signals reward mask at client
 	 * +0xedc, not its numeric level. Bit 32 takes precedence over bit 2. */
 	item = BG_FindItem( (ent->client->sess.nitmodSkillMasks[SK_SIGNALS] & 32u) ? "Huge Ammo Pack" : (ent->client->sess.nitmodSkillMasks[SK_SIGNALS] & 2u) ? "Mega Ammo Pack" : "Ammo Pack" );
@@ -563,6 +595,8 @@ void Weapon_MagicAmmo( gentity_t *ent )  {
 //	ent2->timestamp = level.time + 31200;
 
 	ent2->parent = ent;
+	/* Original Weapon_MagicAmmo_Ext 0xf2033 uses the same team field. */
+	ent2->s.teamNum = ent->client->sess.sessionTeam;
 
 	if( ent->client->sess.nitmodSkillMasks[SK_SIGNALS] & 2u ) {
 		ent2->count = 2;
@@ -755,6 +789,7 @@ void Weapon_Syringe(gentity_t *ent) {
 				}
 				if( usedSyringe && ent && ent->client ) {
 					G_LogPrintf("Medic_Revive: %d %d\n", ent - g_entities, traceEnt - g_entities);
+					if(!(traceEnt->r.svFlags&SVF_BOT)) G_NITMOD_GlobalStatsEvent(ent->s.number,4);
 					Bot_Event_Revived(traceEnt - g_entities, ent);
 				}
 
@@ -1307,6 +1342,7 @@ static qboolean TryConstructing( gentity_t *ent ) {
 
 		if( !G_NITMOD_LegacyCvarInteger("g_constructiblexpsharing", 0) ) {
 			G_AddSkillPoints( ent, SK_EXPLOSIVES_AND_CONSTRUCTION, constructible->constructibleStats.constructxpbonus );
+			G_NITMOD_GlobalStatsEvent(ent->s.number,9);
 			G_DebugAddSkillPoints( ent, SK_EXPLOSIVES_AND_CONSTRUCTION, constructible->constructibleStats.constructxpbonus, "finishing a construction" );
 		}
 

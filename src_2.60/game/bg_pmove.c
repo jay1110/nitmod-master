@@ -15,6 +15,7 @@
 #include "nitmod_weapon_reload.h"
 #include "nitmod_weapon_clip.h"
 #include "nitmod_weapon_recoil.h"
+#include "nitmod_skills.h"
 #ifdef GAMEDLL
 #include "g_nitmod_weapon_definition.h"
 #endif
@@ -36,6 +37,25 @@ float Com_GetFlamethrowerRange(void) {
 
 pmove_t		*pm;
 pml_t		pml;
+
+/* Original BG_CheckCharge selects duration and reward mask by current class,
+ * then selects the table by weapon. Caller only enables this for original
+ * protocol prediction until native server negotiation is integrated. */
+static qboolean PM_NITMOD_PackChargeAvailable(const pmove_t *move) {
+	int skill, duration;
+	float fraction;
+	if(move->nitmodPackChargeBypass) return qtrue;
+	switch(move->ps->stats[STAT_PLAYER_CLASS]) {
+	case PC_MEDIC: skill=SK_FIRST_AID; duration=move->medicChargeTime; break;
+	case PC_ENGINEER: skill=SK_EXPLOSIVES_AND_CONSTRUCTION; duration=move->engineerChargeTime; break;
+	case PC_FIELDOPS: skill=SK_SIGNALS; duration=move->ltChargeTime; break;
+	case PC_COVERTOPS: skill=SK_MILITARY_INTELLIGENCE_AND_SCOPED_WEAPONS; duration=move->covertopsChargeTime; break;
+	default: skill=SK_HEAVY_WEAPONS; duration=move->soldierChargeTime; break;
+	}
+	NITMOD_GameplayTableValue(move->ps->weapon==WP_AMMO ? NITMOD_TABLE_AMMO : NITMOD_TABLE_HEALTH,
+		move->nitmodPackSkillMasks[skill], &fraction);
+	return (double)move->cmd.serverTime - move->ps->classWeaponTime >= (double)duration * fraction;
+}
 
 // movement parameters
 float	pm_stopspeed = 100;
@@ -3603,7 +3623,14 @@ static void PM_Weapon( void ) {
 			return;
 	}
 
-	if( pm->ps->weapon == WP_AMMO ) {
+	if(pm->nitmodPackChargeEnabled &&
+		(pm->ps->weapon==WP_AMMO || pm->ps->weapon==WP_MEDKIT) &&
+		!PM_NITMOD_PackChargeAvailable(pm)) {
+		if(pm->cmd.buttons & BUTTON_ATTACK)
+			BG_AnimScriptEvent(pm->ps, pm->character->animModelInfo, ANIM_ET_NOPOWER, qtrue, qfalse);
+		return;
+	}
+	if( !pm->nitmodPackChargeEnabled && pm->ps->weapon == WP_AMMO ) {
 		if (pm->skill[SK_SIGNALS] >= 1 ) {
 			if( pm->cmd.serverTime - pm->ps->classWeaponTime < (pm->ltChargeTime*0.15f) ) {
 				if( pm->cmd.buttons & BUTTON_ATTACK ) {
@@ -3620,7 +3647,7 @@ static void PM_Weapon( void ) {
 		}
 	}
 
-	if( pm->ps->weapon == WP_MEDKIT ) {
+	if( !pm->nitmodPackChargeEnabled && pm->ps->weapon == WP_MEDKIT ) {
 		if (pm->skill[SK_FIRST_AID] >= 2 ) {
 			if( pm->cmd.serverTime - pm->ps->classWeaponTime < (pm->medicChargeTime*0.15f) ) {
 				if( pm->cmd.buttons & BUTTON_ATTACK ) {

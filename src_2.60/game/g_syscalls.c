@@ -73,6 +73,19 @@ int trap_FS_GetFileList(  const char *path, const char *extension, char *listbuf
 	return syscall( G_FS_GETFILELIST, path, extension, listbuf, bufsize );
 }
 
+/* Negotiate instead of assuming extension syscall numbers on older engines. */
+void trap_NITMOD_DemoSupport(void) {
+	char value[MAX_CVAR_VALUE_STRING];
+	int getValue, demoSupport;
+	trap_Cvar_VariableStringBuffer("//trap_GetValue",value,sizeof(value));
+	getValue=atoi(value);
+	if(getValue<=0) return;
+	value[0]=0;
+	if(!syscall(getValue,value,sizeof(value),"trap_DemoSupport_Legacy")) return;
+	demoSupport=atoi(value);
+	if(demoSupport>0) syscall(demoSupport,"gstats\\sgstats\\sc0\\score\\sc1\\score\\impt\\impt\\imsr\\imsr\\impr\\impr\\impkd0\\impkd\\impkd1\\impkd\\imwa\\imwa\\imws\\imws");
+}
+
 void	trap_SendConsoleCommand( int exec_when, const char *text ) {
 	syscall( G_SEND_CONSOLE_COMMAND, exec_when, text );
 }

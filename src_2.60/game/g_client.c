@@ -1,9 +1,12 @@
+#include "g_nitmod_lua.h"
 #include "g_local.h"
+static void ClientSpawnContext(gentity_t *ent,qboolean revived,qboolean teamChange,qboolean restoreHealth);
 #include "g_nitmod_etbot_lifecycle.h"
 #include "g_nitmod_legacy_cvars.h"
 #include "g_nitmod_abilities.h"
 #include "nitmod_protocol.h"
 #include "nitmod_secondary_weapon.h"
+#include "nitmod_class_primaries.h"
 #include <limits.h>
 
 void NITMOD_SetSpawnProtection(gclient_t *client, qboolean revived) {
@@ -948,10 +951,34 @@ static qboolean G_NITMOD_GrantWarLoadout(gclient_t *client) {
 SetWolfSpawnWeapons
 ===========
 */
-void SetWolfSpawnWeapons( gclient_t *client ) 
+/* Original nitmod_AddNewWeapon (0x10d4f0): separate DM/ordinary masks,
+ * configured starting ammunition, and no current-weapon change. */
+static qboolean G_NITMOD_AddSpecialClassTool(gclient_t *client, weapon_t weapon) {
+	unsigned int normalBit, dmBit, options;
+	const ammotable_t *ammo;
+	switch(weapon) {
+	case WP_TRIPMINE: normalBit = 0x8000u; dmBit = 0x800u; break;
+	case WP_POISON_MINE: normalBit = 0x4000u; dmBit = 0x200u; break;
+	case WP_POISON_BOMB: normalBit = 0x2000u; dmBit = 0x400u; break;
+	default: return qfalse;
+	}
+	options = g_gametype.integer == GT_WOLF_DM ?
+		(unsigned int)g_DMOptions.integer :
+		(unsigned int)G_NITMOD_LegacyCvarInteger("g_weapons", 0);
+	if(!(options & (g_gametype.integer == GT_WOLF_DM ? dmBit : normalBit))) return qfalse;
+	ammo = GetAmmoTableData(weapon);
+	return AddWeaponToPlayer(client, weapon, ammo->defaultStartingAmmo,
+		ammo->defaultStartingClip, qfalse);
+}
+
+void SetWolfSpawnWeapons( gclient_t *client )
 {
 	int		pc = client->sess.playerType;
+	weapon_t primaryWeapon = client->sess.playerWeapon;
 	unsigned int medicOptions = 0;
+	/* Original G_AddClassSpecificTools: DM gates apply to class tools only. */
+	const qboolean deathmatch = g_gametype.integer == GT_WOLF_DM;
+	const unsigned int dmOptions = (unsigned int)g_DMOptions.integer;
 	qboolean	isBot = (g_entities[client->ps.clientNum].r.svFlags & SVF_BOT) ? qtrue : qfalse;
 	qboolean	isPOW = (g_entities[client->ps.clientNum].r.svFlags & SVF_POW) ? qtrue : qfalse;
 
@@ -1000,10 +1027,19 @@ void SetWolfSpawnWeapons( gclient_t *client )
 	/* War modes replace the normal class loadout in the original game. */
 	if(G_NITMOD_GrantWarLoadout(client)) return;
 
+	/* Original validates the class/team list before the silent restriction
+	 * check. The fallback is granted without rechecking or changing latches. */
+	if(g_knifeonly.integer != 1 &&
+		(!NITMOD_ClassHasPrimary(client->sess.sessionTeam, pc, primaryWeapon) ||
+		 G_IsWeaponDisabled(&g_entities[client->ps.clientNum], primaryWeapon)))
+		primaryWeapon = NITMOD_ClassPrimaryAt(client->sess.sessionTeam, pc, 0);
+
 	// Engineer gets dynamite
 	if ( pc == PC_ENGINEER ) {
-		AddWeaponToPlayer( client, WP_DYNAMITE, 0, 1, qfalse );
-		AddWeaponToPlayer( client, WP_PLIERS, 0, 1, qfalse );
+		if (!deathmatch)
+			AddWeaponToPlayer( client, WP_DYNAMITE, 0, 1, qfalse );
+		if (!deathmatch || (dmOptions & 0xb00u))
+			AddWeaponToPlayer( client, WP_PLIERS, 0, 1, qfalse );
 
 		if( g_knifeonly.integer != 1 ) {
 			if( client->sess.nitmodSkillMasks[SK_BATTLE_SENSE] & 2u ) {
@@ -1013,7 +1049,7 @@ void SetWolfSpawnWeapons( gclient_t *client )
 			}
 
 			if (client->sess.sessionTeam == TEAM_AXIS) {
-				switch( client->sess.playerWeapon ) {
+				switch( primaryWeapon ) {
 				case WP_KAR98:
 					if( AddWeaponToPlayer( client, WP_KAR98, GetAmmoTableData(WP_KAR98)->defaultStartingAmmo, GetAmmoTableData(WP_KAR98)->defaultStartingClip, qtrue ) ) {
 						if(!G_IsWeaponDisabled(&g_entities[client->ps.clientNum], WP_GPG40)) {
@@ -1022,14 +1058,15 @@ void SetWolfSpawnWeapons( gclient_t *client )
 					}
 					break;
 				default:
-					AddWeaponToPlayer( client, WP_MP40, GetAmmoTableData(WP_MP40)->defaultStartingAmmo, GetAmmoTableData(WP_MP40)->defaultStartingClip, qtrue );
+					AddWeaponToPlayer( client, primaryWeapon, GetAmmoTableData(primaryWeapon)->defaultStartingAmmo, GetAmmoTableData(primaryWeapon)->defaultStartingClip, qtrue );
 					break;
 				}
-				AddWeaponToPlayer( client, WP_LANDMINE, GetAmmoTableData(WP_LANDMINE)->defaultStartingAmmo, GetAmmoTableData(WP_LANDMINE)->defaultStartingClip, qfalse );
+				if (!deathmatch || (dmOptions & 0x100u))
+					AddWeaponToPlayer( client, WP_LANDMINE, GetAmmoTableData(WP_LANDMINE)->defaultStartingAmmo, GetAmmoTableData(WP_LANDMINE)->defaultStartingClip, qfalse );
 				AddWeaponToPlayer( client, WP_GRENADE_LAUNCHER, 0, 4, qfalse );
 
 			} else {
-				switch( client->sess.playerWeapon ) {
+				switch( primaryWeapon ) {
 				case WP_CARBINE:
 					if( AddWeaponToPlayer( client, WP_CARBINE, GetAmmoTableData(WP_CARBINE)->defaultStartingAmmo, GetAmmoTableData(WP_CARBINE)->defaultStartingClip, qtrue ) ) {
 						if(!G_IsWeaponDisabled(&g_entities[client->ps.clientNum], WP_M7)) {
@@ -1038,10 +1075,11 @@ void SetWolfSpawnWeapons( gclient_t *client )
 					}
 					break;
 				default:
-					AddWeaponToPlayer( client, WP_THOMPSON, GetAmmoTableData(WP_THOMPSON)->defaultStartingAmmo, GetAmmoTableData(WP_THOMPSON)->defaultStartingClip, qtrue );
+					AddWeaponToPlayer( client, primaryWeapon, GetAmmoTableData(primaryWeapon)->defaultStartingAmmo, GetAmmoTableData(primaryWeapon)->defaultStartingClip, qtrue );
 					break;
 				}
-				AddWeaponToPlayer( client, WP_LANDMINE, GetAmmoTableData(WP_LANDMINE)->defaultStartingAmmo, GetAmmoTableData(WP_LANDMINE)->defaultStartingClip, qfalse );
+				if (!deathmatch || (dmOptions & 0x100u))
+					AddWeaponToPlayer( client, WP_LANDMINE, GetAmmoTableData(WP_LANDMINE)->defaultStartingAmmo, GetAmmoTableData(WP_LANDMINE)->defaultStartingClip, qfalse );
 				AddWeaponToPlayer( client, WP_GRENADE_PINEAPPLE, 0, 4, qfalse );
 			}
 		}
@@ -1054,7 +1092,8 @@ void SetWolfSpawnWeapons( gclient_t *client )
 				(unsigned int)G_NITMOD_LegacyCvarInteger("g_fieldOps", 0);
 			qboolean grantBinoculars = qtrue;
 
-			AddWeaponToPlayer( client, WP_AMMO, 0, 1, qfalse );
+			if (!deathmatch)
+				AddWeaponToPlayer( client, WP_AMMO, 0, 1, qfalse );
 
 			/* Original bit 1 removes the unconditional loadout grant.  Either
 			 * Battle Sense or Signals' first unlock restores it. */
@@ -1069,13 +1108,14 @@ void SetWolfSpawnWeapons( gclient_t *client )
 				client->ps.stats[STAT_KEYS] |= ( 1 << INV_BINOCS );
 			}
 
-			AddWeaponToPlayer( client, WP_SMOKE_MARKER, GetAmmoTableData(WP_SMOKE_MARKER)->defaultStartingAmmo, GetAmmoTableData(WP_SMOKE_MARKER)->defaultStartingClip, qfalse );
+			if (!deathmatch)
+				AddWeaponToPlayer( client, WP_SMOKE_MARKER, GetAmmoTableData(WP_SMOKE_MARKER)->defaultStartingAmmo, GetAmmoTableData(WP_SMOKE_MARKER)->defaultStartingClip, qfalse );
 
 			if( client->sess.sessionTeam == TEAM_AXIS ) {
-				AddWeaponToPlayer( client, WP_MP40,  GetAmmoTableData(WP_MP40)->defaultStartingAmmo, GetAmmoTableData(WP_MP40)->defaultStartingClip, qtrue );
+				AddWeaponToPlayer( client, primaryWeapon,  GetAmmoTableData(primaryWeapon)->defaultStartingAmmo, GetAmmoTableData(primaryWeapon)->defaultStartingClip, qtrue );
 				AddWeaponToPlayer( client, WP_GRENADE_LAUNCHER,  0, 1, qfalse );
 			} else {
-				AddWeaponToPlayer( client, WP_THOMPSON, GetAmmoTableData(WP_THOMPSON)->defaultStartingAmmo, GetAmmoTableData(WP_THOMPSON)->defaultStartingClip, qtrue );
+				AddWeaponToPlayer( client, primaryWeapon, GetAmmoTableData(primaryWeapon)->defaultStartingAmmo, GetAmmoTableData(primaryWeapon)->defaultStartingClip, qtrue );
 				AddWeaponToPlayer( client, WP_GRENADE_PINEAPPLE, 0, 1, qfalse );
 			}
 		} else if( pc == PC_MEDIC ) {
@@ -1085,16 +1125,18 @@ void SetWolfSpawnWeapons( gclient_t *client )
 				}
 			}
 
-			AddWeaponToPlayer( client, WP_MEDIC_SYRINGE, GetAmmoTableData(WP_MEDIC_SYRINGE)->defaultStartingAmmo, GetAmmoTableData(WP_MEDIC_SYRINGE)->defaultStartingClip, qfalse );
-			AddWeaponToPlayer( client, WP_MEDKIT, GetAmmoTableData(WP_MEDKIT)->defaultStartingAmmo, GetAmmoTableData(WP_MEDKIT)->defaultStartingClip, qfalse );
+			if (!deathmatch)
+				AddWeaponToPlayer( client, WP_MEDIC_SYRINGE, GetAmmoTableData(WP_MEDIC_SYRINGE)->defaultStartingAmmo, GetAmmoTableData(WP_MEDIC_SYRINGE)->defaultStartingClip, qfalse );
+			if (!deathmatch)
+				AddWeaponToPlayer( client, WP_MEDKIT, GetAmmoTableData(WP_MEDKIT)->defaultStartingAmmo, GetAmmoTableData(WP_MEDKIT)->defaultStartingClip, qfalse );
 
 			if (client->sess.sessionTeam == TEAM_AXIS) {
 				if(!(medicOptions & 4u))
-					AddWeaponToPlayer( client, WP_MP40, 0, GetAmmoTableData(WP_MP40)->defaultStartingClip, qtrue );
+					AddWeaponToPlayer( client, primaryWeapon, 0, GetAmmoTableData(primaryWeapon)->defaultStartingClip, qtrue );
 				AddWeaponToPlayer( client, WP_GRENADE_LAUNCHER, 0, 1, qfalse );
 			} else {
 				if(!(medicOptions & 4u))
-					AddWeaponToPlayer( client, WP_THOMPSON, 0, GetAmmoTableData(WP_THOMPSON)->defaultStartingClip, qtrue );
+					AddWeaponToPlayer( client, primaryWeapon, 0, GetAmmoTableData(primaryWeapon)->defaultStartingClip, qtrue );
 				AddWeaponToPlayer( client, WP_GRENADE_PINEAPPLE, 0, 1, qfalse );
 			}
 		} else if ( pc == PC_SOLDIER ) {
@@ -1106,10 +1148,10 @@ void SetWolfSpawnWeapons( gclient_t *client )
 
 			switch( client->sess.sessionTeam ) {
 				case TEAM_AXIS:
-					switch( client->sess.playerWeapon ) {
+					switch( primaryWeapon ) {
 					default:
 					case WP_MP40:
-						AddWeaponToPlayer( client, WP_MP40, 2*(GetAmmoTableData(WP_MP40)->defaultStartingAmmo), GetAmmoTableData(WP_MP40)->defaultStartingClip, qtrue );
+						AddWeaponToPlayer( client, WP_MP40, GetAmmoTableData(WP_MP40)->defaultStartingAmmo, GetAmmoTableData(WP_MP40)->defaultStartingClip, qtrue );
 						break;
 					case WP_PANZERFAUST:
 						AddWeaponToPlayer( client, WP_PANZERFAUST, GetAmmoTableData(WP_PANZERFAUST)->defaultStartingAmmo, GetAmmoTableData(WP_PANZERFAUST)->defaultStartingClip, qtrue );
@@ -1119,21 +1161,23 @@ void SetWolfSpawnWeapons( gclient_t *client )
 						break;
 					case WP_MOBILE_MG42:
 						if( AddWeaponToPlayer( client, WP_MOBILE_MG42, GetAmmoTableData(WP_MOBILE_MG42)->defaultStartingAmmo, GetAmmoTableData(WP_MOBILE_MG42)->defaultStartingClip, qtrue ) ) {
-							AddWeaponToPlayer( client, WP_MOBILE_MG42_SET, GetAmmoTableData(WP_MOBILE_MG42_SET)->defaultStartingAmmo, GetAmmoTableData(WP_MOBILE_MG42_SET)->defaultStartingClip, qfalse );
+							if(!G_IsWeaponDisabled(&g_entities[client->ps.clientNum], WP_MOBILE_MG42_SET))
+								AddWeaponToPlayer( client, WP_MOBILE_MG42_SET, GetAmmoTableData(WP_MOBILE_MG42_SET)->defaultStartingAmmo, GetAmmoTableData(WP_MOBILE_MG42_SET)->defaultStartingClip, qfalse );
 						}
 						break;
 					case WP_MORTAR:
 						if( AddWeaponToPlayer( client, WP_MORTAR, GetAmmoTableData(WP_MORTAR)->defaultStartingAmmo, GetAmmoTableData(WP_MORTAR)->defaultStartingClip, qtrue ) ) {
-							AddWeaponToPlayer( client, WP_MORTAR_SET, GetAmmoTableData(WP_MORTAR_SET)->defaultStartingAmmo, GetAmmoTableData(WP_MORTAR_SET)->defaultStartingClip, qfalse );
+							if(!G_IsWeaponDisabled(&g_entities[client->ps.clientNum], WP_MORTAR_SET))
+								AddWeaponToPlayer( client, WP_MORTAR_SET, GetAmmoTableData(WP_MORTAR_SET)->defaultStartingAmmo, GetAmmoTableData(WP_MORTAR_SET)->defaultStartingClip, qfalse );
 						}
 						break;
 					}
 					break;
 				case TEAM_ALLIES:
-					switch( client->sess.playerWeapon ) {
+					switch( primaryWeapon ) {
 					default:
 					case WP_THOMPSON:
-						AddWeaponToPlayer( client, WP_THOMPSON, 2*(GetAmmoTableData(WP_THOMPSON)->defaultStartingAmmo), GetAmmoTableData(WP_THOMPSON)->defaultStartingClip, qtrue );
+						AddWeaponToPlayer( client, WP_THOMPSON, GetAmmoTableData(WP_THOMPSON)->defaultStartingAmmo, GetAmmoTableData(WP_THOMPSON)->defaultStartingClip, qtrue );
 						break;
 					case WP_PANZERFAUST:
 						AddWeaponToPlayer( client, WP_PANZERFAUST, GetAmmoTableData(WP_PANZERFAUST)->defaultStartingAmmo, GetAmmoTableData(WP_PANZERFAUST)->defaultStartingClip, qtrue );
@@ -1143,12 +1187,14 @@ void SetWolfSpawnWeapons( gclient_t *client )
 						break;
 					case WP_MOBILE_MG42:
 						if( AddWeaponToPlayer( client, WP_MOBILE_MG42, GetAmmoTableData(WP_MOBILE_MG42)->defaultStartingAmmo, GetAmmoTableData(WP_MOBILE_MG42)->defaultStartingClip, qtrue ) ) {
-							AddWeaponToPlayer( client, WP_MOBILE_MG42_SET, GetAmmoTableData(WP_MOBILE_MG42_SET)->defaultStartingAmmo, GetAmmoTableData(WP_MOBILE_MG42_SET)->defaultStartingClip, qfalse );
+							if(!G_IsWeaponDisabled(&g_entities[client->ps.clientNum], WP_MOBILE_MG42_SET))
+								AddWeaponToPlayer( client, WP_MOBILE_MG42_SET, GetAmmoTableData(WP_MOBILE_MG42_SET)->defaultStartingAmmo, GetAmmoTableData(WP_MOBILE_MG42_SET)->defaultStartingClip, qfalse );
 						}
 						break;
 					case WP_MORTAR:
 						if( AddWeaponToPlayer( client, WP_MORTAR, GetAmmoTableData(WP_MORTAR)->defaultStartingAmmo, GetAmmoTableData(WP_MORTAR)->defaultStartingClip, qtrue ) ) {
-							AddWeaponToPlayer( client, WP_MORTAR_SET, GetAmmoTableData(WP_MORTAR_SET)->defaultStartingAmmo, GetAmmoTableData(WP_MORTAR_SET)->defaultStartingClip, qfalse );
+							if(!G_IsWeaponDisabled(&g_entities[client->ps.clientNum], WP_MORTAR_SET))
+								AddWeaponToPlayer( client, WP_MORTAR_SET, GetAmmoTableData(WP_MORTAR_SET)->defaultStartingAmmo, GetAmmoTableData(WP_MORTAR_SET)->defaultStartingClip, qfalse );
 						}
 						break;
 					}
@@ -1157,27 +1203,30 @@ void SetWolfSpawnWeapons( gclient_t *client )
 					break;
 			}
 		} else if( pc == PC_COVERTOPS ) {
-			switch( client->sess.playerWeapon ) {				
+			switch( primaryWeapon ) {
 			case WP_K43:
 			case WP_GARAND:
 				if( client->sess.sessionTeam == TEAM_AXIS ) {
 					if( AddWeaponToPlayer( client, WP_K43, GetAmmoTableData(WP_K43)->defaultStartingAmmo, GetAmmoTableData(WP_K43)->defaultStartingClip, qtrue ) ) {
-						AddWeaponToPlayer( client, WP_K43_SCOPE, GetAmmoTableData(WP_K43_SCOPE)->defaultStartingAmmo, GetAmmoTableData(WP_K43_SCOPE)->defaultStartingClip, qfalse );
+						if(!G_IsWeaponDisabled(&g_entities[client->ps.clientNum], WP_K43_SCOPE))
+							AddWeaponToPlayer( client, WP_K43_SCOPE, GetAmmoTableData(WP_K43_SCOPE)->defaultStartingAmmo, GetAmmoTableData(WP_K43_SCOPE)->defaultStartingClip, qfalse );
 					}
 					break;
 				} else {
 					if( AddWeaponToPlayer( client, WP_GARAND, GetAmmoTableData(WP_GARAND)->defaultStartingAmmo, GetAmmoTableData(WP_GARAND)->defaultStartingClip, qtrue ) ) {
-						AddWeaponToPlayer( client, WP_GARAND_SCOPE, GetAmmoTableData(WP_GARAND_SCOPE)->defaultStartingAmmo, GetAmmoTableData(WP_GARAND_SCOPE)->defaultStartingClip, qfalse );
+						if(!G_IsWeaponDisabled(&g_entities[client->ps.clientNum], WP_GARAND_SCOPE))
+							AddWeaponToPlayer( client, WP_GARAND_SCOPE, GetAmmoTableData(WP_GARAND_SCOPE)->defaultStartingAmmo, GetAmmoTableData(WP_GARAND_SCOPE)->defaultStartingClip, qfalse );
 					}
 					break;
 				}
 			case WP_FG42:
 				if( AddWeaponToPlayer( client, WP_FG42, GetAmmoTableData(WP_FG42)->defaultStartingAmmo, GetAmmoTableData(WP_FG42)->defaultStartingClip, qtrue ) ) {
-					AddWeaponToPlayer( client, WP_FG42SCOPE, GetAmmoTableData(WP_FG42SCOPE)->defaultStartingAmmo, GetAmmoTableData(WP_FG42SCOPE)->defaultStartingClip, qfalse );
+					if(!G_IsWeaponDisabled(&g_entities[client->ps.clientNum], WP_FG42SCOPE))
+						AddWeaponToPlayer( client, WP_FG42SCOPE, GetAmmoTableData(WP_FG42SCOPE)->defaultStartingAmmo, GetAmmoTableData(WP_FG42SCOPE)->defaultStartingClip, qfalse );
 				}
 				break;
 			default:
-				AddWeaponToPlayer( client, WP_STEN, 2*(GetAmmoTableData(WP_STEN)->defaultStartingAmmo), GetAmmoTableData(WP_STEN)->defaultStartingClip, qtrue );
+				AddWeaponToPlayer( client, WP_STEN, GetAmmoTableData(WP_STEN)->defaultStartingAmmo, GetAmmoTableData(WP_STEN)->defaultStartingClip, qtrue );
 				break;
 			}
 
@@ -1185,15 +1234,15 @@ void SetWolfSpawnWeapons( gclient_t *client )
 				client->ps.stats[STAT_KEYS] |= ( 1 << INV_BINOCS );
 			}
 
-			AddWeaponToPlayer( client, WP_SMOKE_BOMB, GetAmmoTableData(WP_SMOKE_BOMB)->defaultStartingAmmo,  GetAmmoTableData(WP_SMOKE_BOMB)->defaultStartingClip, qfalse );	
+			if (!deathmatch)
+				AddWeaponToPlayer( client, WP_SMOKE_BOMB, GetAmmoTableData(WP_SMOKE_BOMB)->defaultStartingAmmo,  GetAmmoTableData(WP_SMOKE_BOMB)->defaultStartingClip, qfalse );
 
-			// See if we already have a satchel charge placed - NOTE: maybe we want to change this so the thing voids on death
-			if( G_FindSatchel( &g_entities[client->ps.clientNum] ) ) {
-				AddWeaponToPlayer( client, WP_SATCHEL, 0, 0, qfalse );		// Big Bang \o/
-				AddWeaponToPlayer( client, WP_SATCHEL_DET, 0, 1, qfalse );	// Big Red Button for tha Big Bang
-			} else {
-				AddWeaponToPlayer( client, WP_SATCHEL, 0, 1, qfalse );		// Big Bang \o/
-				AddWeaponToPlayer( client, WP_SATCHEL_DET, 0, 0, qfalse );	// Big Red Button for tha Big Bang
+			/* Original 0x47eca/0x486c0: check availability before looking
+			 * up the owner's existing charge (call at 0x47eeb). */
+			if (!deathmatch || (dmOptions & 0x1000u)) {
+				qboolean planted = G_FindSatchel( &g_entities[client->ps.clientNum] ) != NULL;
+				AddWeaponToPlayer( client, WP_SATCHEL, 0, planted ? 0 : 1, qfalse );
+				AddWeaponToPlayer( client, WP_SATCHEL_DET, 0, planted ? 1 : 0, qfalse );
 			}
 		}
 
@@ -1231,8 +1280,7 @@ void SetWolfSpawnWeapons( gclient_t *client )
 	}
 	if(g_dualSMG.integer && g_knifeonly.integer != 1 && pc != PC_COVERTOPS &&
 		(unsigned int)G_NITMOD_ConfiguredWarMode() - 1u >= 4u) {
-		weapon_t primary = pc == PC_MEDIC && (medicOptions & 4u) ?
-			(client->sess.sessionTeam == TEAM_AXIS ? WP_MP40 : WP_THOMPSON) : client->ps.weapon;
+		weapon_t primary = primaryWeapon;
 		weapon_t extra = primary == WP_MP40 ? WP_THOMPSON :
 			primary == WP_THOMPSON ? WP_MP40 :
 			client->sess.sessionTeam == TEAM_AXIS ? WP_MP40 : WP_THOMPSON;
@@ -1241,14 +1289,31 @@ void SetWolfSpawnWeapons( gclient_t *client )
 			GetAmmoTableData(extra)->defaultStartingClip, qfalse);
 	}
 	if(g_knifeonly.integer != 1) {
+		/* Class callers of original G_AddClassSpecificTools.part.3.
+		 * War modes have already returned before ordinary class grants. */
+		if(pc == PC_ENGINEER) {
+			/* Original class-tool branch: Engineering bit32, g_weapons bit4;
+			 * Deathmatch additionally requires g_DMOptions bit0x2000. */
+			if((client->sess.nitmodSkillMasks[SK_EXPLOSIVES_AND_CONSTRUCTION] & 32u) &&
+				(G_NITMOD_LegacyCvarInteger("g_weapons", 0) & 4) &&
+				(!deathmatch || (dmOptions & 0x2000u))) {
+				const ammotable_t *bombAmmo = GetAmmoTableData(WP_BOMB);
+				AddWeaponToPlayer(client, WP_BOMB, bombAmmo->defaultStartingAmmo,
+					bombAmmo->defaultStartingClip, qfalse);
+			}
+			G_NITMOD_AddSpecialClassTool(client, WP_TRIPMINE);
+			G_NITMOD_AddSpecialClassTool(client, WP_POISON_MINE);
+		} else if(pc == PC_COVERTOPS) {
+			G_NITMOD_AddSpecialClassTool(client, WP_POISON_BOMB);
+		}
 		G_NITMOD_GrantAdrenalineSpawn(client, G_NITMOD_FirstAidUnlocks(client),
 			(unsigned int)G_NITMOD_LegacyCvarInteger("g_adrenClasses", 2),
 			(unsigned int)G_NITMOD_LegacyCvarInteger("g_adrenaline", 0),
 			G_NITMOD_ConfiguredWarMode(), GetAmmoTableData(WP_MEDIC_ADRENALINE));
-		/* Original G_AddClassWeapons grants wire weapon 47 when poison is
-		 * enabled and the fifth First Aid reward is unlocked. Use the typed
+		/* Original G_AddClassSpecificTools.part.3 (0x4802d) checks Light
+		 * Weapons reward bit 16 for wire weapon 47. Use the typed
 		 * weapon row so custom weapon definitions keep their ammo contract. */
-		if(g_poison.integer && (G_NITMOD_FirstAidUnlocks(client) & 16u)) {
+		if(g_poison.integer && (client->sess.nitmodSkillMasks[SK_LIGHT_WEAPONS] & 16u)) {
 			const ammotable_t *poisonAmmo = GetAmmoTableData(WP_POISON_SYRINGE);
 			AddWeaponToPlayer(client, WP_POISON_SYRINGE,
 				poisonAmmo->defaultStartingAmmo,
@@ -1327,6 +1392,11 @@ int G_NITMOD_SpawnHealth(const gclient_t *client, int war, int gametype, int ove
 	if(!client) return 0;
 	return client->ps.stats[STAT_MAX_HEALTH] -
 		(!war && gametype != 8 && !override && (client->sess.nitmodSkillMasks[SK_BATTLE_SENSE] & 8u) ? 15 : 0);
+}
+
+static void ApplySpawnHealth(gentity_t *ent, qboolean restoreHealth, int war, int gametype, int override) {
+	if (restoreHealth) ent->health = G_NITMOD_SpawnHealth(ent->client, war, gametype, override);
+	ent->client->ps.stats[STAT_HEALTH] = ent->health;
 }
 
 void AddMedicTeamBonus( gclient_t *client ) {
@@ -1452,6 +1522,7 @@ The game can override any of the settings and call trap_SetUserinfo
 if desired.
 ============
 */
+#include "g_nitmod_accounts.h"
 void ClientUserinfoChanged( int clientNum ) {
 	gentity_t *ent;
 	char	*s;
@@ -1463,11 +1534,14 @@ void ClientUserinfoChanged( int clientNum ) {
 	char	medalStr[16] = "";
 	char	xpStr[128] = "";
 	int		characterIndex;
+	int databaseMuted;
 
 
 	ent = g_entities + clientNum;
 	client = ent->client;
 
+	client->pers.nitmodDemoClient=G_NITMOD_IsDemoClient(clientNum,
+        trap_Cvar_VariableIntegerValue("sv_demoState"),trap_Cvar_VariableIntegerValue("sv_demoClients"));
 	client->ps.clientNum = clientNum;
 
 	client->medals = 0;
@@ -1545,6 +1619,9 @@ void ClientUserinfoChanged( int clientNum ) {
 		}
 	}
 
+	if(!G_NITMOD_AccountUserinfo(clientNum,userinfo)) return;
+	G_NITMOD_GlobalStatsRequest(clientNum,Info_ValueForKey(userinfo,"n_guid"));
+	databaseMuted=G_NITMOD_AccountMuted(clientNum);
 	for( i = 0; i < SK_NUM_SKILLS; i++ ) {
 		Q_strcat( skillStr, sizeof(skillStr), va("%i",client->sess.skill[i]) );
 		Q_strcat( medalStr, sizeof(medalStr), va("%i",client->sess.medals[i]) );
@@ -1597,7 +1674,7 @@ void ClientUserinfoChanged( int clientNum ) {
 			client->sess.playerWeapon,
 			client->sess.latchPlayerWeapon,
 			client->sess.latchPlayerWeapon2,
-			client->sess.muted ? 1 : 0
+			(client->sess.muted || databaseMuted) ? 1 : 0
 		);
 	} else {
 		s = va( "n\\%s\\t\\%i\\c\\%i\\r\\%i\\m\\%s\\s\\%s\\dn\\%s\\dr\\%i\\w\\%i\\lw\\%i\\sw\\%i\\mu\\%i\\ref\\%i",
@@ -1612,7 +1689,7 @@ void ClientUserinfoChanged( int clientNum ) {
 			client->sess.playerWeapon,
 			client->sess.latchPlayerWeapon,
 			client->sess.latchPlayerWeapon2,
-			client->sess.muted ? 1 : 0,
+			(client->sess.muted || databaseMuted) ? 1 : 0,
 			client->sess.referee
 		);
 	}
@@ -1620,8 +1697,10 @@ void ClientUserinfoChanged( int clientNum ) {
 	trap_GetConfigstring( CS_PLAYERS + clientNum, oldname, sizeof( oldname ) );
 
 	/* Optional original equipment field; stock clients ignore unknown keys. */
-	s = va( "%s\\rn\\%i\\lc\\%i\\xp\\%s", s, client->sess.rifleGrenadeStatus,
-		client->sess.latchPlayerType, xpStr );
+	if(g_gametype.integer==8 && (G_NITMOD_LegacyCvarInteger("g_DMOptions",0)&8) &&
+		client->sess.sessionTeam==TEAM_SPECTATOR) client->sess.shoutcaster=1;
+	s = va( "%s\\rn\\%i\\lc\\%i\\xp\\%s\\sc\\%i\\u\\%i", s, client->sess.rifleGrenadeStatus,
+		client->sess.latchPlayerType, xpStr, client->sess.shoutcaster, client->sess.uci );
 
 	trap_SetConfigstring( CS_PLAYERS + clientNum, s );
 
@@ -1630,6 +1709,7 @@ void ClientUserinfoChanged( int clientNum ) {
 	}
 
 	G_LogPrintf( "ClientUserinfoChanged: %i %s\n", clientNum, s );
+	G_NITMOD_LuaClientEvent("et_ClientUserinfoChanged",clientNum);
 	G_DPrintf( "ClientUserinfoChanged: %i :: %s\n", clientNum, s );
 }
 
@@ -1697,6 +1777,7 @@ char *ClientConnect( int clientNum, qboolean firstTime, qboolean isBot ) {
 	}
 
 	// IP filtering
+	{ const char *ban=G_NITMOD_DatabaseBanReason(userinfo); if(ban) return (char *)ban; }
 	// https://zerowing.idsoftware.com/bugzilla/show_bug.cgi?id=500
 	// recommanding PB based IP / GUID banning, the builtin system is pretty limited
 	// check to see if they are on the banned IP list
@@ -1745,12 +1826,15 @@ char *ClientConnect( int clientNum, qboolean firstTime, qboolean isBot ) {
 	}
 
 	// they can connect
+	G_NITMOD_AccountReset(clientNum);
 	ent->client = level.clients + clientNum;
 	client = ent->client;
 
 
 
 	memset( client, 0, sizeof(*client) );
+    client->pers.nitmodDemoClient=G_NITMOD_IsDemoClient(clientNum,
+        trap_Cvar_VariableIntegerValue("sv_demoState"),trap_Cvar_VariableIntegerValue("sv_demoClients"));
 	client->pers.nitmodLastAmmoClient = -1;
 	client->pers.nitmodLastKillerClient = -1;
 	client->pers.nitmodLastHealthClient = -1;
@@ -1771,10 +1855,11 @@ char *ClientConnect( int clientNum, qboolean firstTime, qboolean isBot ) {
 	} else {
 		G_ReadSessionData( client );
 	}
+	client->sess.uci=G_NITMOD_GeoIPCountry(Info_ValueForKey(userinfo,"ip"),isBot);
 
 #ifdef USEXPSTORAGE
 	value = Info_ValueForKey (userinfo, "ip");
-	if( xpBackup = G_FindXPBackup( value ) ) {
+	if( NITMOD_DBUserCount()<0 && (xpBackup = G_FindXPBackup( value )) ) {
 		for( i = 0; i < SK_NUM_SKILLS; i++ ) {
 			client->sess.skillpoints[ i ] = xpBackup->skills[ i ];
 		}
@@ -1802,6 +1887,8 @@ char *ClientConnect( int clientNum, qboolean firstTime, qboolean isBot ) {
 
 		ent->r.svFlags |= SVF_BOT;
 		ent->inuse = qtrue;
+		/* Original exposes bot flags before Lua and ignores its denial for bots. */
+		(void)G_NITMOD_LuaConnect(clientNum,firstTime,isBot);
 		// if this bot is reconnecting, and they aren't supposed to respawn, then dont let it in
 		if (!firstTime) {
 			value = Info_ValueForKey (userinfo, "respawn");
@@ -1836,6 +1923,11 @@ char *ClientConnect( int clientNum, qboolean firstTime, qboolean isBot ) {
 	}
 
 	// get and distribute relevent paramters
+	if(!isBot) {
+		char *denial=G_NITMOD_LuaConnect(clientNum,firstTime,isBot);
+		if(denial && !(ent->r.svFlags & SVF_BOT))
+			return va("You are excluded from this server. %s\n",denial);
+	}
 	G_LogPrintf( "ClientConnect: %i\n", clientNum );
 	G_UpdateCharacter( client );
 	ClientUserinfoChanged( clientNum );
@@ -1903,12 +1995,15 @@ void ClientBegin( int clientNum )
 {
 	gentity_t	*ent;
 	gclient_t	*client;
+	qboolean restoreHealth,notifyLuaBegin;
 	int			flags;
 	int			spawn_count, lives_left;		// DHM - Nerve
 
 	ent = g_entities + clientNum;
+	restoreHealth = ent->health <= 0 || G_NITMOD_LegacyCvarInteger("g_teamChangeKills", 1);
 
 	client = level.clients + clientNum;
+    notifyLuaBegin=client->pers.connected==CON_CONNECTING && !(ent->r.svFlags&SVF_BOT) && !client->pers.nitmodDemoClient;
 	G_NITMOD_ResetClient( clientNum );
 
 	if ( ent->r.linked ) {
@@ -1938,6 +2033,13 @@ void ClientBegin( int clientNum )
 	}
 	flags = client->ps.eFlags;
 	memset( &client->ps, 0, sizeof( client->ps ) );
+    memset(client->nitmodLuaUnusedPowerups,0,sizeof(client->nitmodLuaUnusedPowerups));
+    memset(client->nitmodLuaPersistant,0,sizeof(client->nitmodLuaPersistant));
+    client->nitmodLuaPersistant[3]=client->sess.kills;
+    client->nitmodLuaPersistant[5]=client->sess.nitmodHeadHits;
+    client->nitmodLuaPersistant[6]=client->sess.nitmodBodyHits;
+    client->ps.persistant[PERS_KILLED]=client->sess.deaths;
+
 	client->ps.eFlags = flags;
 	client->ps.persistant[PERS_SPAWN_COUNT] = spawn_count;
 	client->ps.persistant[PERS_RESPAWNS_LEFT] = lives_left;
@@ -1947,7 +2049,7 @@ void ClientBegin( int clientNum )
 	client->pers.complaintEndTime = -1;
 
 	// locate ent at a spawn point
-	ClientSpawn( ent, qfalse );
+	ClientSpawnContext( ent, qfalse, qtrue, restoreHealth );
 
 	// Xian -- Changed below for team independant maxlives
 	if( g_gametype.integer != GT_WOLF_LMS ) {
@@ -1989,7 +2091,7 @@ void ClientBegin( int clientNum )
 
 
 	// DHM - Nerve :: Start players in limbo mode if they change teams during the match
-	if(client->sess.sessionTeam != TEAM_SPECTATOR && (level.time - level.startTime > FRAMETIME * GAME_INIT_FRAMES) ) {
+	if(restoreHealth && client->sess.sessionTeam != TEAM_SPECTATOR && (level.time - level.startTime > FRAMETIME * GAME_INIT_FRAMES) ) {
 /*	  if( (client->sess.sessionTeam != TEAM_SPECTATOR && (level.time - client->pers.connectTime) > 60000) ||
 		( g_gamestate.integer == GS_PLAYING && ( client->sess.sessionTeam == TEAM_AXIS || client->sess.sessionTeam == TEAM_ALLIES ) && 
 		 g_gametype.integer == GT_WOLF_LMS && ( level.numTeamClients[0] > 0 || level.numTeamClients[1] > 0 ) ) ) {*/
@@ -2013,6 +2115,8 @@ void ClientBegin( int clientNum )
 	}
 
 	G_LogPrintf( "ClientBegin: %i\n", clientNum );
+	G_NITMOD_AccountBegin(clientNum);
+	if(notifyLuaBegin) G_NITMOD_LuaClientEvent("et_ClientBegin",clientNum);
 
 	// Xian - Check for maxlives enforcement
 	if( g_gametype.integer != GT_WOLF_LMS ) {
@@ -2112,7 +2216,8 @@ after the first ClientBegin, and after each respawn
 Initializes all non-persistant parts of playerState
 ============
 */
-void ClientSpawn( gentity_t *ent, qboolean revived )
+void ClientSpawn(gentity_t *ent,qboolean revived) { ClientSpawnContext(ent,revived,qfalse,qtrue); }
+static void ClientSpawnContext( gentity_t *ent, qboolean revived, qboolean teamChange, qboolean restoreHealth )
 {
 	int			index;
 	vec3_t		spawn_origin, spawn_angles;
@@ -2121,6 +2226,7 @@ void ClientSpawn( gentity_t *ent, qboolean revived )
 	clientPersistant_t	saved;
 	clientSession_t		savedSess;
 	int			persistant[MAX_PERSISTANT];
+	int nitmodPersistant[16];
 	gentity_t	*spawnPoint;
 	int			flags;
 	int			savedPing;
@@ -2197,6 +2303,7 @@ void ClientSpawn( gentity_t *ent, qboolean revived )
 
 	for( i = 0 ; i < MAX_PERSISTANT ; i++ ) {
 		persistant[i] = client->ps.persistant[i];
+		nitmodPersistant[i] = client->nitmodLuaPersistant[i];
 	}
 
 	{
@@ -2217,6 +2324,7 @@ void ClientSpawn( gentity_t *ent, qboolean revived )
 
 	for( i = 0 ; i < MAX_PERSISTANT ; i++ ) {
 		client->ps.persistant[i] = persistant[i];
+		client->nitmodLuaPersistant[i] = nitmodPersistant[i];
 	}
 
 	// increment the spawncount so the client will detect the respawn
@@ -2358,8 +2466,8 @@ void ClientSpawn( gentity_t *ent, qboolean revived )
 	// JPW NERVE ***NOTE*** the following line is order-dependent and must *FOLLOW* SetWolfSpawnWeapons() in multiplayer
 	// AddMedicTeamBonus() now adds medic team bonus and stores in ps.stats[STAT_MAX_HEALTH].
 
-	ent->health = client->ps.stats[STAT_HEALTH] = G_NITMOD_SpawnHealth(client,
-		G_NITMOD_ConfiguredWarMode(), g_gametype.integer, G_NITMOD_ClassMaxHealth(client->sess.playerType));
+	ApplySpawnHealth(ent, restoreHealth, G_NITMOD_ConfiguredWarMode(),
+		g_gametype.integer, G_NITMOD_ClassMaxHealth(client->sess.playerType));
 
 	G_SetOrigin( ent, spawn_origin );
 	VectorCopy( spawn_origin, client->ps.origin );
@@ -2412,6 +2520,7 @@ void ClientSpawn( gentity_t *ent, qboolean revived )
 
 	// run a client frame to drop exactly to the floor,
 	// initialize animations and other things
+	G_NITMOD_LuaSpawn((int)(ent-g_entities),revived,teamChange,restoreHealth);
 	client->ps.commandTime = level.time - 100;
 	ent->client->pers.cmd.serverTime = level.time;
 	ClientThink( ent-g_entities );
@@ -2477,7 +2586,12 @@ void ClientDisconnect( int clientNum ) {
 	vec3_t		launchvel;
 	int			i;
 
+	G_NITMOD_LuaClientEvent("et_ClientDisconnect",clientNum);
+	G_NITMOD_GlobalStatsUpload(clientNum);
+	G_NITMOD_GlobalStatsReset(clientNum);
 	Bot_Event_ClientDisConnected(clientNum);
+	G_NITMOD_AccountSaveXP(clientNum);
+	G_NITMOD_AccountReset(clientNum);
 	G_NITMOD_ResetClient( clientNum );
 	ent = g_entities + clientNum;
 	if ( !ent->client ) {
@@ -2485,7 +2599,7 @@ void ClientDisconnect( int clientNum ) {
 	}
 
 #ifdef USEXPSTORAGE
-	G_AddXPBackup( ent );
+	if(NITMOD_DBUserCount()<0) G_AddXPBackup( ent );
 #endif // USEXPSTORAGE
 
 	G_RemoveClientFromFireteams( clientNum, qtrue, qfalse );

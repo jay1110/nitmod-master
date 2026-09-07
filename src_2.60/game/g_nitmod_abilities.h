@@ -21,8 +21,8 @@ int G_NITMOD_EntityHasAdrenaline( const struct gentity_s *entity,
 int G_NITMOD_AdrenalineClip( unsigned int options );
 /* Isolated G_UpgradeSkill adrenaline inventory effect after its early-return
  * branches. Uses original independent adrenaline slots, NOT native syringe
- * aliases. Caller owns upgrade dispatch and bot notification. Not gameplay-
- * active; returns 1 when eligible and assigned, 0 without mutation otherwise. */
+ * aliases. Called by the production skill-upgrade dispatcher; returns 1 when
+ * eligible and assigned, 0 without mutation otherwise. */
 int G_NITMOD_GrantAdrenalineUpgrade( struct gclient_s *client,
     unsigned int firstAidUnlocks, unsigned int allowedClasses,
     unsigned int adrenalineOptions, int warMode );
