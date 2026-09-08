@@ -379,12 +379,14 @@ void G_InitWorldSession( void ) {
 		/* Nitmod persists the map-vote XP-cycle counter in the world session:
 		 * gametype, team locks, banner index, map count, map name. Accept the old ET
 		 * three-field layout as well so upgrades do not invalidate sessions. */
-		sessionFields = sscanf(s, "%i %i %i %i %63s", &gt, &locks,
+		sessionFields = sscanf(s, "%i %i %i %d %63s", &gt, &locks,
 			&sessionBanner, &sessionMapCount, sessionMap);
 		extendedSession = sessionFields == 5;
 		/* Original restores each numeric field as it is read, even if a
 		 * manually shortened session has no trailing map name. */
 		if(sessionFields >= 3) G_NITMOD_SetBannerIndex(sessionBanner);
+		/* Original fourth field uses base-10 strtol; preserve its signed raw
+		 * value. Keep the existing old-ET-layout fallback when it is absent. */
 		G_NITMOD_SetMapCycleCount(sessionFields >= 4 ? sessionMapCount : 0);
 		if(extendedSession) {
 			teamInfo[TEAM_AXIS].spec_lock = (locks & TEAM_AXIS) ? qtrue : qfalse;
@@ -421,16 +423,8 @@ void G_InitWorldSession( void ) {
 	}
 	nitmod_RefreshBaseSettings();
 
-	/* Clear the persisted payload once at cycle start. Doing this here rather
-	 * than in G_ReadSessionData avoids erasing XP on a mid-map reconnect. */
-	if(G_NITMOD_MapCycleResetsXP()) {
-		for(i = 0; i < g_maxclients.integer && i < MAX_CLIENTS; ++i) {
-			trap_Cvar_Set(va("sessionstats%i", i), "");
-			G_deleteStats(i);
-		}
-		level.fResetStats = qtrue;
-		G_Printf("Nitmod: starting XP reset map cycle.\n");
-	}
+	/* Original world-session restore does not clear XP or weapon stats.
+	 * The map-start XP owner runs after C / vote_N config publication. */
 
 	for( i = 0; i < MAX_FIRETEAMS; i++ ) {
 		char *p, *c;

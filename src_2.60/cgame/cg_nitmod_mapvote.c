@@ -1,6 +1,7 @@
 #include "cg_local.h"
 #include "cg_nitmod_mapvote.h"
 #include "cg_nitmod_config.h"
+#include <limits.h>
 
 qboolean CG_NitmodMapVoteEnabled(void) {
     const nitmodGameState_t *state = NITMOD_GameState();
@@ -18,19 +19,25 @@ int CG_NitmodNextDebriefPage(int page) {
     return page >= 1 && page < 3 ? page + 1 : 1;
 }
 
-/* Original # arguments 19/20: zero-based map index and XP-reset cycle size. */
+/* Original x86 incl wraps at INT_MAX; express that without signed overflow. */
+static int CG_NitmodMapCycleNumber(int count) {
+    return count == INT_MAX ? INT_MIN : count + 1;
+}
+
+/* Original # arguments 19/20: zero-based map index and XP-reset cycle size.
+ * WM_DrawObjectives accepts a nonzero limit; CG_MapVoteList_Draw requires > 0. */
 qboolean CG_NitmodMapCycleText(const nitmodGameState_t *state, qboolean uppercase, char *text, int size) {
     if(!text || size <= 0) return qfalse;
     text[0] = 0;
-    if(!state || state->mapCount < 0 || state->resetXPMapCount <= 0) return qfalse;
-    Com_sprintf(text, size, uppercase ? "MAP %u of %d" : "Map %u of %d",
-        (unsigned int)state->mapCount + 1U, state->resetXPMapCount);
+    if(!state || (uppercase ? state->resetXPMapCount == 0 : state->resetXPMapCount <= 0)) return qfalse;
+    Com_sprintf(text, size, uppercase ? "MAP %i of %i" : "Map %d of %d",
+        CG_NitmodMapCycleNumber(state->mapCount), state->resetXPMapCount);
     return qtrue;
 }
 
 qboolean CG_NitmodMapCycleReset(const nitmodGameState_t *state) {
-    return state && state->mapCount >= 0 && state->resetXPMapCount > 0 &&
-        state->mapCount >= state->resetXPMapCount - 1;
+    return state && state->resetXPMapCount > 0 &&
+        CG_NitmodMapCycleNumber(state->mapCount) >= state->resetXPMapCount;
 }
 
 qboolean CG_NitmodScoreboardCycleText(const nitmodGameState_t *state, int gametype, char *text, int size) {

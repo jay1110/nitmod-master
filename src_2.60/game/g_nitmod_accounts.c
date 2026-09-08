@@ -278,9 +278,16 @@ void G_NITMOD_AccountsMapStart(void) {
     if(g_gametype.integer==GT_WOLF_CAMPAIGN && level.currentCampaign>=0 &&
        level.currentCampaign<MAX_CAMPAIGNS && g_campaigns[level.currentCampaign].current!=0 && !level.newCampaign) return;
     if((g_gametype.integer==GT_WOLF_STOPWATCH || g_gametype.integer==GT_WOLF_LMS) && g_currentRound.integer!=0) return;
-    if((g_gametype.integer==GT_WOLF_MAPVOTE ||
-       (g_gametype.integer==GT_WOLF_TDM && (G_NITMOD_LegacyCvarInteger("g_TDMOptions",0)&8)) ||
-       (g_gametype.integer==GT_WOLF_DM && (g_DMOptions.integer&0x4000))) && !G_NITMOD_MapCycleResetsXP()) return;
+    /* Original G_InitGame 0x7fd34..0x7fd5a: only mapvote retains XP by
+     * map count. Reset its raw counter before ClearXP, and only while playing
+     * (0x80303..0x80320); warmup still clears XP when the same gate is due. */
+    if(g_gametype.integer==GT_WOLF_MAPVOTE) {
+        if(!G_NITMOD_MapCycleResetsXP()) return;
+        if(g_gamestate.integer==GS_PLAYING) {
+            G_NITMOD_SetMapCycleCount(0);
+            nitmod_RefreshBaseSettings();
+        }
+    }
     if(!G_NITMOD_DatabaseReady() || NITMOD_DBUserCount()>=0) mapResetPending=1;
     if(!G_NITMOD_DatabaseReady())
         G_NITMOD_DatabaseSyncUserAsync("map-start-xp",MapXPReady,&mapGeneration,sizeof(mapGeneration));

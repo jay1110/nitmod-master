@@ -1,6 +1,7 @@
 /* Server half of Nitmod's extended ("ncs") configstring protocol. */
 
 #include <string.h>
+#include <limits.h>
 
 #include "g_local.h"
 #include "g_nitmod_config.h"
@@ -729,7 +730,7 @@ void nitmod_RefreshBaseSettings( void ) {
 	state.doubleJumpHeight = g_DJHeight.value;
 	G_NITMOD_RefreshWeaponSnapshot( &state );
 	state.gravity = g_gravity.integer;
-	state.mapCount = G_NITMOD_MapCycleCount();
+	state.mapCount = G_NITMOD_MapCyclePresentedCount();
 	state.resetXPMapCount = (g_XPSave.integer & 4) ? 0 : g_resetXPMapCount.integer;
 	state.dmOptions = g_DMOptions.integer;
 	state.tdmOptions = G_NITMOD_LegacyCvarInteger( "g_TDMOptions", 0 );
@@ -744,33 +745,45 @@ void nitmod_RefreshBaseSettings( void ) {
 	nitmod_SetGameState( &state );
 }
 
+/* Original ExitLevel permits a nonzero limit, including negative values,
+ * in the three modes that actually run map voting. */
 qboolean G_NITMOD_MapCycleEnabled( void ) {
-	return g_resetXPMapCount.integer > 0 &&
+	return g_resetXPMapCount.integer != 0 &&
 		(g_gametype.integer == GT_WOLF_MAPVOTE ||
 		 (g_gametype.integer == GT_WOLF_TDM &&
 		  (G_NITMOD_LegacyCvarInteger("g_TDMOptions", 0) & 8)) ||
 		 (g_gametype.integer == GT_WOLF_DM && (g_DMOptions.integer & 0x4000)));
 }
 
+/* Original G_InitWorldSession 0xb8305 / G_WriteSessionData preserve the
+ * signed raw counter. Initialization decides when it is actually reset. */
 void G_NITMOD_SetMapCycleCount( int count ) {
-	int limit = g_resetXPMapCount.integer;
-	if(count < 0) count = 0;
-	if(limit > 0 && count >= limit) count = 0;
 	nitmodMapCycleCount = count;
 }
 
 int G_NITMOD_MapCycleCount( void ) {
-	return G_NITMOD_MapCycleEnabled() ? nitmodMapCycleCount : 0;
+	return nitmodMapCycleCount;
 }
 
+/* Original nitmod_SendNCS 0x10cef0 normalizes only the presented value,
+ * independently of gametype and XPSave bit 4 (which hides only the limit). */
+int G_NITMOD_MapCyclePresentedCount( void ) {
+	return nitmodMapCycleCount >= g_resetXPMapCount.integer ? 0 : nitmodMapCycleCount;
+}
+
+/* Original G_InitGame 0x7fd3d..0x7fd5a: this XP exception belongs only to
+ * GT_WOLF_MAPVOTE. Merely checking it must not reset the raw counter. */
 qboolean G_NITMOD_MapCycleResetsXP( void ) {
-	return !(g_XPSave.integer & 4) && G_NITMOD_MapCycleEnabled() &&
-		nitmodMapCycleCount == 0;
+	return g_gametype.integer == GT_WOLF_MAPVOTE && !(g_XPSave.integer & 4) &&
+		g_resetXPMapCount.integer != 0 &&
+		(nitmodMapCycleCount == 0 || nitmodMapCycleCount >= g_resetXPMapCount.integer);
 }
 
 void G_NITMOD_AdvanceMapCycle( void ) {
 	if(!G_NITMOD_MapCycleEnabled()) return;
-	G_NITMOD_SetMapCycleCount(nitmodMapCycleCount + 1);
+	/* Match the original 32-bit increment without signed C overflow. */
+	if(nitmodMapCycleCount == INT_MAX) nitmodMapCycleCount = INT_MIN;
+	else ++nitmodMapCycleCount;
 	nitmod_RefreshBaseSettings();
 }
 

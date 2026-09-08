@@ -48,8 +48,10 @@ void nitmod_SendMapEndStats( int clientNum );
 void nitmod_SetSimpleConfig( const nitmodSimpleConfig_t *config );
 void nitmod_SetGameState( const nitmodGameState_t *state );
 void nitmod_RefreshBaseSettings( void );
+/* Raw signed world-session counter; presentation must not alter storage. */
 void G_NITMOD_SetMapCycleCount( int count );
 int G_NITMOD_MapCycleCount( void );
+int G_NITMOD_MapCyclePresentedCount( void );
 qboolean G_NITMOD_MapCycleEnabled( void );
 qboolean G_NITMOD_MapCycleResetsXP( void );
 void G_NITMOD_AdvanceMapCycle( void );

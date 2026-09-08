@@ -1867,14 +1867,21 @@ void G_NITMOD_LoadMapConfigs(void) {
 
 void G_NITMOD_LoadMapCycleConfig(void) {
 	char command[1024];
-	int configNumber;
-	if(!g_mapConfigs.string[0] || !G_NITMOD_MapCycleEnabled() ||
+	int count, limit, nextCount, configNumber;
+	if(!G_NITMOD_MapVoteActive()) return;
+	count = G_NITMOD_MapCycleCount();
+	limit = g_resetXPMapCount.integer;
+	/* Original G_InitGame 0x80028 publishes C from the raw counter even
+	 * when the reset limit is zero, before map-start XP clearing. */
+	nextCount = count == INT_MAX ? INT_MIN : count + 1;
+	trap_Cvar_Set("C", va("%d,%d", count >= limit ? 1 : nextCount, limit));
+	if(!g_mapConfigs.string[0] || !limit ||
 	   !G_MapConfigPath(g_mapConfigs.string, sizeof(g_mapConfigs.string), qtrue)) return;
-	/* Recovered numbering: a fresh cycle executes vote_2, intermediate maps
-	 * advance through vote_N, and the final map executes vote_1. */
-	if(G_NITMOD_MapCycleCount() == 0) configNumber = 2;
-	else if(G_NITMOD_MapCycleCount() + 1 < g_resetXPMapCount.integer)
-		configNumber = G_NITMOD_MapCycleCount() + 2;
+	/* Original 0x800bc: both zero and exact cycle end select vote_2.
+	 * Match the 32-bit additions, including a restored signed boundary. */
+	if(count == 0 || count == limit) configNumber = 2;
+	else if(nextCount < limit)
+		configNumber = nextCount == INT_MAX ? INT_MIN : nextCount + 1;
 	else configNumber = 1;
 	Com_sprintf(command, sizeof(command), "exec %s/vote_%d.cfg\n",
 		g_mapConfigs.string, configNumber);
@@ -2088,7 +2095,6 @@ void G_InitGame( int levelTime, int randomSeed, int restart ) {
 
 	G_NITMOD_LoadMapConfigs();
 	G_InitWorldSession();
-	G_NITMOD_AccountsMapStart();
 	G_NITMOD_LoadMapCycleConfig();
 
 	nitrox_ResetNumObjectives();
@@ -2150,6 +2156,9 @@ void G_InitGame( int levelTime, int randomSeed, int restart ) {
 
 	numSplinePaths = 0 ;
 	numPathCorners = 0;
+
+	/* Original XP reset follows match config/script and body initialization. */
+	G_NITMOD_AccountsMapStart();
 
 #ifdef USEXPSTORAGE
 	G_ClearXPBackup();
