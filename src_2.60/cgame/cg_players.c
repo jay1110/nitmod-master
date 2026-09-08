@@ -18,6 +18,24 @@
 #include "../game/nitmod_skills.h"
 #include "../game/nitmod_protocol.h"
 
+void CG_LimboPanel_SendSetupMsg( qboolean forceteam );
+
+void CG_NitmodSkillLoadoutUpgrade(int skill, int oldMask, int newMask, int playerClass) {
+	int selection, oldClass;
+	/* CG_NewClientInfo 0x9426c..0x942ee, called on a displayed-level rise.
+	 * Heavy reward selects the SMG secondary for soldiers only. Light reward
+	 * selects akimbo only while the single pistol slot is still selected. */
+	if((oldMask & 16) || !(newMask & 16)) return;
+	if(skill == SK_HEAVY_WEAPONS && playerClass == PC_SOLDIER) selection = 2;
+	else if(skill == SK_LIGHT_WEAPONS && cgs.ccSelectedWeapon2 == 0) selection = 1;
+	else return;
+	oldClass = cgs.ccSelectedClass;
+	cgs.ccSelectedClass = playerClass;
+	CG_LimboPanel_SetSelectedWeaponNumForSlot(1, selection);
+	CG_LimboPanel_SendSetupMsg(qfalse);
+	cgs.ccSelectedClass = oldClass;
+}
+
 #define	SWING_RIGHT	1
 #define SWING_LEFT	2
 
@@ -281,28 +299,33 @@ void CG_NewClientInfo( int clientNum ) {
 		}
 
 		for( i = 0; i < SK_NUM_SKILLS; i++ ) {
-			int shownLevel = NITMOD_UsesOriginalProtocol() ? newInfo.nitmodSkillLevels[i] : newInfo.skill[i];
-			int oldLevel = NITMOD_UsesOriginalProtocol() ? ci->nitmodSkillLevels[i] : ci->skill[i];
+			int shownLevel = NITMOD_UsesNitmodHud() ? newInfo.nitmodSkillLevels[i] : newInfo.skill[i];
+			int oldLevel = NITMOD_UsesNitmodHud() ? ci->nitmodSkillLevels[i] : ci->skill[i];
 			qboolean nativeUpgrade = newInfo.skill[i] > ci->skill[i];
-			if(NITMOD_UsesOriginalProtocol() && ci->infoValid &&
-				ci->nitmodSkillMasks[i] != 0) {
+			if(NITMOD_UsesNitmodHud() && shownLevel > oldLevel && cg.time > 100 &&
+				ci->infoValid && ci->nitmodSkillMasks[i] != 0) {
 				unsigned int gained = NITMOD_NewSkillUnlocks(ci->nitmodSkillMasks[i], newInfo.nitmodSkillMasks[i]);
 				int level;
 				/* Original CG_NewClientInfo compares the seven xp unlock masks.
 				 * A zero old mask is the asynchronous join baseline, not seven
 				 * simultaneous upgrades when the NCS data arrives later. */
 				for(level = 1; level <= 5; ++level) if(gained & (1u << level)) {
-					const char *reward = CG_NITMOD_SkillRewardText(i, level);
+					const char *reward = CG_NITMOD_SkillRewardText(i, shownLevel);
 					CG_AddPMItemBig(PM_SKILL, va("Reached %s skill level %i!", skillNames[i], level), cgs.media.skillPics[i]);
-					if(reward) CG_PriorityCenterPrint(va("You have been rewarded with %s", reward),
-						SCREEN_HEIGHT - (SCREEN_HEIGHT * 0.20), SMALLCHAR_WIDTH, 99999);
+					if(reward) CG_CenterPrint(va("You have been rewarded with %s", reward),
+						SCREEN_HEIGHT - (SCREEN_HEIGHT * 0.20), SMALLCHAR_WIDTH);
 				}
 			}
 			if( shownLevel > oldLevel ) {
 				// Gordon: slick hack so that funcs we call use teh new value now
 				cgs.clientinfo[ cg.clientNum ].skill[ i ] = newInfo.skill[ i ];
+				if(NITMOD_UsesNitmodHud()) {
+					int oldMask = ci->nitmodSkillMasks[i];
+					cgs.clientinfo[cg.clientNum].nitmodSkillMasks[i] = newInfo.nitmodSkillMasks[i];
+					CG_NitmodSkillLoadoutUpgrade(i, oldMask, newInfo.nitmodSkillMasks[i], newInfo.cls);
+				}
 
-				if( nativeUpgrade && newInfo.skill[i] == 4 && i == SK_HEAVY_WEAPONS ) {
+				if( !NITMOD_UsesNitmodHud() && nativeUpgrade && newInfo.skill[i] == 4 && i == SK_HEAVY_WEAPONS ) {
 					if( cgs.clientinfo[ cg.clientNum ].skill[SK_LIGHT_WEAPONS] == 4 ) {
 						oldclass = cgs.ccSelectedClass;
 						cgs.ccSelectedClass = newInfo.cls;
@@ -318,7 +341,7 @@ void CG_NewClientInfo( int clientNum ) {
 					}
 				}
 
-				if( nativeUpgrade && newInfo.skill[i] == 4 && i == SK_LIGHT_WEAPONS ) {
+				if( !NITMOD_UsesNitmodHud() && nativeUpgrade && newInfo.skill[i] == 4 && i == SK_LIGHT_WEAPONS ) {
 					if( cgs.clientinfo[ cg.clientNum ].skill[SK_HEAVY_WEAPONS] == 4 ) {
 						if( cgs.ccSelectedWeapon2 == 2 ) {
 							oldclass = cgs.ccSelectedClass;
@@ -336,7 +359,7 @@ void CG_NewClientInfo( int clientNum ) {
 					}					
 				}
 
-				if(!NITMOD_UsesOriginalProtocol()) {
+				if(!NITMOD_UsesNitmodHud()) {
 				CG_AddPMItemBig( PM_SKILL, va("Increased %s skill to level %i!", skillNames[i], shownLevel ), cgs.media.skillPics[ i ] );
 				if( newInfo.skill[i] > 0 && newInfo.skill[i] < NUM_SKILL_LEVELS ) {
 					CG_PriorityCenterPrint( va( "You have been rewarded with %s", cg_skillRewards[ i ][ newInfo.skill[i]-1 ]), SCREEN_HEIGHT - (SCREEN_HEIGHT * 0.20), SMALLCHAR_WIDTH, 99999 );

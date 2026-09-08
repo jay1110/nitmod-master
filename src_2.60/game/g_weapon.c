@@ -18,6 +18,7 @@
 #include "g_nitmod_legacy_cvars.h"
 #include "g_nitmod_entities.h"
 #include "nitmod_skills.h"
+#include "nitmod_weapon_defaults.h"
 #include "nitmod_weapon_charge.h"
 #include "nitmod_support_time.h"
 #include "g_nitmod_charge.h"
@@ -69,6 +70,14 @@ void G_NITMOD_RefundCharge(gentity_t *ent, nitmodSkillTable_t table, int skill, 
  fraction*=scale; /* Original callers pass a binary32 argument. */
  candidate=(double)ent->client->ps.classWeaponTime-(double)G_NITMOD_ChargeDuration(ent,skill)*fraction;
  if(candidate>=INT_MIN && candidate<(double)INT_MAX+1.0) ent->client->ps.classWeaponTime=(int)candidate;
+}
+
+/* Original BG_GetFromTable consumers: progress and shell counts use reward
+ * masks, independently of the displayed numeric skill level. */
+static int G_NITMOD_SkillAmount(const gentity_t *ent, nitmodSkillTable_t table, int skill) {
+ float value = 0;
+ NITMOD_GameplayTableValue(table,ent->client->sess.nitmodSkillMasks[skill],&value);
+ return (int)value;
 }
 
 vec3_t	forward, right, up;
@@ -1602,6 +1611,15 @@ static qboolean TryConstructing( gentity_t *ent ) {
 			}
 		}
 
+        /* Original Weapon_Engineer f4a9f/f613c: construction team bonus,
+         * independent of personal XP; TDM option1 suppresses this award. */
+        if(!(ent->spawnflags & (CONSTRUCTIBLE_AAS_SCRIPTED|CONSTRUCTIBLE_NO_AAS_BLOCKING)) &&
+           !(constructible->spawnflags & CONSTRUCTIBLE_BLOCK_PATHS_WHEN_BUILD) &&
+           !(g_gametype.integer==GT_WOLF_TDM && (G_NITMOD_LegacyCvarInteger("g_TDMOptions",0)&1))) {
+            level.teamScores[ent->client->sess.sessionTeam] = (int)((double)level.teamScores[ent->client->sess.sessionTeam] +
+                (double)constructible->constructibleStats.constructxpbonus);
+        }
+
 		return( qtrue );	// building
 	}
 
@@ -2030,11 +2048,7 @@ void Weapon_Engineer( gentity_t *ent ) {
 					G_PrintClientSpammyCenterPrint(ent-g_entities, "Arming landmine...");
 
 					// Give health until it is full, don't continue
-					if( ent->client->sess.skill[SK_EXPLOSIVES_AND_CONSTRUCTION] >= 2 ) {
-						traceEnt->health += 24;
-					} else {
-						traceEnt->health += 12;
-					}
+					traceEnt->health += G_NITMOD_SkillAmount(ent,NITMOD_TABLE_ARM_LANDMINE,SK_EXPLOSIVES_AND_CONSTRUCTION);
 
 					if ( traceEnt->health >= 250 ) {
 						//traceEnt->health = 255;
@@ -2063,11 +2077,7 @@ evilbanigoto:
 					if (traceEnt->health >= 250) // have to do this so we don't score multiple times
 						return;
 
-					if( ent->client->sess.skill[SK_EXPLOSIVES_AND_CONSTRUCTION] >= 2 ) {
-						traceEnt->health += 6;
-					} else {
-						traceEnt->health += 3;
-					}
+					traceEnt->health += G_NITMOD_SkillAmount(ent,NITMOD_TABLE_DISARM_LANDMINE,SK_EXPLOSIVES_AND_CONSTRUCTION);
 
 					G_PrintClientSpammyCenterPrint(ent-g_entities, "Defusing landmine");
 
@@ -2168,10 +2178,7 @@ evilbanigoto:
 				G_PrintClientSpammyCenterPrint(ent-g_entities, "Arming dynamite...");
 
 				// Give health until it is full, don't continue
-				if( ent->client->sess.skill[SK_EXPLOSIVES_AND_CONSTRUCTION] >= 2 )
-					traceEnt->health += 14;
-				else
-					traceEnt->health += 7;
+				traceEnt->health += G_NITMOD_SkillAmount(ent,NITMOD_TABLE_ARM_DYNAMITE,SK_EXPLOSIVES_AND_CONSTRUCTION);
 
 				{
 					int		entityList[MAX_GENTITIES];
@@ -2437,10 +2444,7 @@ evilbanigoto:
 				}
 				dynamiteDropTeam = traceEnt->s.teamNum; // set this here since we wack traceent later but want teamnum for scoring
 				
-				if( ent->client->sess.skill[SK_EXPLOSIVES_AND_CONSTRUCTION] >= 2 )
-					traceEnt->health += 6;
-				else
-					traceEnt->health += 3;
+				traceEnt->health += G_NITMOD_SkillAmount(ent,NITMOD_TABLE_DISARM_DYNAMITE,SK_EXPLOSIVES_AND_CONSTRUCTION);
 
 				G_PrintClientSpammyCenterPrint(ent-g_entities, "Defusing dynamite...");
 
@@ -3189,11 +3193,7 @@ void Weapon_Artillery(gentity_t *ent) {
 
 // "spotter" round (i == 0)
 // i == 1->4 is regular explosives
-	if( ent->client->sess.skill[SK_SIGNALS] >= 3 ) {
-		count = 9;
-	} else {
-		count = 5;
-	}
+	count = G_NITMOD_SkillAmount(ent,NITMOD_TABLE_ARTILLERY_BOMBS,SK_SIGNALS);
 
 	for( i = 0; i < count; i++ ) {
 		bomb				= G_Spawn();
@@ -3220,10 +3220,7 @@ void Weapon_Artillery(gentity_t *ent) {
 
 			bomb->think = artillerySpotterThink;
 		} else {
-			if( ent->client->sess.skill[SK_SIGNALS] >= 3 )
-				bomb->nextthink		= level.time + 8950 + 2000 * i + crandom() * 800;
-			else
-				bomb->nextthink		= level.time + 8950 + 2000 * i + crandom() * 800;
+			bomb->nextthink = level.time + 8950 + 2000 * i + crandom() * 800;
 
 			// Gordon: for explosion type
 			bomb->accuracy		= 2;
@@ -3291,6 +3288,9 @@ void Weapon_Artillery(gentity_t *ent) {
 #endif
 		ent->client->sess.aWeaponStats[WS_ARTILLERY].atts++;
 
+	/* Original 0xf8a77..0xf8a92: successful call, binocular weapon, no projectile. */
+	Bot_Event_FireWeapon(ent - g_entities, Bot_WeaponGameToBot(WP_BINOCULARS), NULL);
+
 }
 
 
@@ -3312,15 +3312,18 @@ void weapon_smokeBombExplode( gentity_t *ent ) {
 
 	lived = level.time - ent->grenadeExplodeTime;
 	ent->nextthink = level.time + FRAMETIME;
-	if((ent->s.weapon == WP_POISON_BOMB || ent->s.weapon == WP_POISON_MINE) &&
-		ent->s.effect1Time > 24) {
-		int radius = ent->splashRadius;
+	if(ent->s.weapon == WP_POISON_BOMB || ent->s.weapon == WP_POISON_MINE) {
+		int direct, splash, radius;
+		/* Original PoisonGasThink schedules every invocation, including growth. */
+		ent->nextthink = level.time + 800;
+		NITMOD_WeaponBlastDefaults(ent->s.weapon,&direct,&splash,&radius);
+		if(ent->s.effect1Time > 24) {
 		G_NITMOD_WeaponDamageOverrides(ent->s.weapon, NULL, NULL, &radius);
 		G_RadiusDamage(ent->r.currentOrigin, ent, ent->parent,
 			G_GetWeaponDamage(ent->s.weapon), radius, ent,
 			ent->s.weapon == WP_POISON_MINE ? MOD_POISON_GAS_MINE : MOD_POISON_GAS);
 		ent->s.effect2Time = 0;
-		ent->nextthink = level.time + 800;
+		}
 	}
 
 	if( lived < SMOKEBOMB_GROWTIME ) {
@@ -3387,58 +3390,30 @@ void SnapVectorTowards( vec3_t v, vec3_t to ) {
 // KLUDGE/FIXME: also modded #defines below to become macros that call this fn for minimal impact elsewhere
 //
 int G_GetWeaponDamage( int weapon ) {
-		int overrideDamage = 0;
-		G_NITMOD_WeaponDamageOverrides(weapon, &overrideDamage, NULL, NULL);
-		if(overrideDamage) return overrideDamage;
-		switch (weapon) {
-		default:
-			return 1;
-		case WP_KNIFE: 
-			return 10;
-		case WP_STEN: 
-			return 14;
-		case WP_CARBINE:
-		case WP_GARAND:
-		case WP_KAR98:
-		case WP_K43:
-			return 34;
-		case WP_FG42: 
-			return 15;
-		case WP_LUGER:
-		case WP_SILENCER:
-		case WP_AKIMBO_LUGER:
-		case WP_AKIMBO_SILENCEDLUGER:
-		case WP_COLT:
-		case WP_SILENCED_COLT:
-		case WP_AKIMBO_COLT:
-		case WP_AKIMBO_SILENCEDCOLT: 
-		case WP_THOMPSON: 
-		case WP_MP40: 
-		case WP_MOBILE_MG42: 
-		case WP_MOBILE_MG42_SET:
-			return 18;
-		case WP_FG42SCOPE: 
-			return 30;
-		case WP_GARAND_SCOPE: 
-		case WP_K43_SCOPE: 
-			return 50;
-		case WP_SMOKE_MARKER: 
-			return 140; // just enough to kill somebody standing on it
-		case WP_MAPMORTAR: 
-		case WP_GRENADE_LAUNCHER: 
-		case WP_GRENADE_PINEAPPLE: 
-		case WP_GPG40:
-		case WP_M7: 
-		case WP_LANDMINE: 
-		case WP_SATCHEL:
-			return 250;
-		case WP_TRIPMINE: 
-			return 300;
-		case WP_PANZERFAUST: 
-		case WP_MORTAR_SET: 
-		case WP_DYNAMITE: 
-			return 400;
-	}
+ int damage = 0;
+ /* Original ELF ammoTableMP+40, translated to native weapon identities.
+  * Direct damage is independent of blast damage/radius, including zero. */
+ switch(weapon) {
+ case WP_KNIFE: damage=10; break;
+ case WP_FLAMETHROWER: damage=5; break;
+ case WP_STEN: damage=14; break;
+ case WP_FG42: damage=15; break;
+ case WP_LUGER: case WP_MP40: case WP_COLT: case WP_THOMPSON:
+ case WP_SILENCER: case WP_MOBILE_MG42: case WP_DUMMY_MG42:
+ case WP_AKIMBO_COLT: case WP_AKIMBO_LUGER: case WP_SILENCED_COLT:
+ case WP_AKIMBO_SILENCEDCOLT: case WP_AKIMBO_SILENCEDLUGER:
+ case WP_MOBILE_MG42_SET: damage=18; break;
+ case WP_POISON_BOMB: case WP_POISON_MINE: damage=20; break;
+ case WP_FG42SCOPE: damage=30; break;
+ case WP_KAR98: case WP_CARBINE: case WP_GARAND: case WP_K43: damage=34; break;
+ case WP_GARAND_SCOPE: case WP_K43_SCOPE: damage=50; break;
+ case WP_ARTY: damage=140; break;
+ case WP_GPG40: case WP_M7: damage=250; break;
+ case WP_PANZERFAUST: case WP_SMOKE_MARKER: case WP_MORTAR_SET: damage=400; break;
+ default: break;
+ }
+ G_NITMOD_WeaponDamageOverrides(weapon,&damage,NULL,NULL);
+ return damage;
 }
 
 
@@ -4106,7 +4081,7 @@ gentity_t *weapon_grenadelauncher_fire (gentity_t *ent, int grenType) {
 	// JPW NERVE
 	if (grenType == WP_SMOKE_MARKER) {
 		m->s.teamNum = ent->client->sess.sessionTeam;	// store team so we can generate red or blue smoke
-		if( ent->client->sess.skill[SK_SIGNALS] >= 3 ) {
+		if( ent->client->sess.nitmodSkillMasks[SK_SIGNALS] & 8u ) {
 			m->count = 2;
 			m->nextthink = level.time + 3500;
 			m->think = weapon_checkAirStrikeThink2;
@@ -4134,11 +4109,18 @@ ROCKET
 */
 
 void Weapon_Panzerfaust_Fire( gentity_t *ent ) {
-	gentity_t	*m;
-
-	m = fire_rocket (ent, muzzleEffect, forward);
-
-//	VectorAdd( m->s.pos.trDelta, ent->client->ps.velocity, m->s.pos.trDelta );	// "real" physics
+	vec3_t direction;
+	float spread = 0.0f, horizontal, vertical;
+	/* Original 0xfac50..0xfad9b consumes two random values even with
+	 * zero spread; the Panzer weapon definition supplies the base spread. */
+	G_NITMOD_WeaponSpreadOverride(WP_PANZERFAUST, &spread);
+	horizontal = crandom() * (spread / 1000.0f);
+	vertical = crandom() * (spread / 1000.0f);
+	VectorScale(forward, 16.0f, direction);
+	VectorMA(direction, horizontal, right, direction);
+	VectorMA(direction, vertical, up, direction);
+	VectorNormalize(direction);
+	fire_rocket(ent, muzzleEffect, direction);
 }
 
 
@@ -4453,6 +4435,25 @@ qboolean G_PlayerCanBeSeenByOthers( gentity_t *ent ) {
 FireWeapon
 ===============
 */
+/* Original jP_CheckDisguise 0xfc2c0: checked by ClientEvents before firing.
+ * Return whether this weapon preserves the uniform in the current visibility. */
+qboolean G_NITMOD_CheckDisguise(gentity_t *ent) {
+ switch(ent->s.weapon) {
+ case WP_BINOCULARS: case WP_SATCHEL: case WP_SATCHEL_DET:
+ case WP_SMOKE_BOMB: case WP_MEDIC_ADRENALINE: case WP_BOMB:
+ case WP_POISON_BOMB:
+  return qtrue;
+ case WP_KNIFE: case WP_GRENADE_LAUNCHER: case WP_PANZERFAUST:
+ case WP_GRENADE_PINEAPPLE: case WP_STEN: case WP_SILENCER:
+ case WP_GARAND: case WP_K43: case WP_SILENCED_COLT:
+ case WP_GARAND_SCOPE: case WP_K43_SCOPE: case WP_AKIMBO_SILENCEDCOLT:
+ case WP_AKIMBO_SILENCEDLUGER: case WP_POISON_SYRINGE:
+  return !G_PlayerCanBeSeenByOthers(ent);
+ default:
+  return qfalse;
+ }
+}
+
 void FireWeapon( gentity_t *ent ) {
 	float	aimSpreadScale;
 	int		shots = 1;
@@ -4492,28 +4493,6 @@ void FireWeapon( gentity_t *ent ) {
 		aimSpreadScale = 2.0f;
 	}
 
-	// covert ops disguise handling
-	if( ent->client->ps.powerups[PW_OPS_DISGUISED] &&
-		ent->s.weapon != WP_SMOKE_BOMB &&
-		ent->s.weapon != WP_SATCHEL &&
-		ent->s.weapon != WP_SATCHEL_DET ) {
-		if( !( ent->s.weapon == WP_KNIFE ||
-			ent->s.weapon == WP_STEN ||
-			ent->s.weapon == WP_SILENCER ||
-			ent->s.weapon == WP_SILENCED_COLT ||
-			ent->s.weapon == WP_AKIMBO_SILENCEDCOLT ||
-			ent->s.weapon == WP_AKIMBO_SILENCEDLUGER ||
-			ent->s.weapon == WP_K43 ||
-			ent->s.weapon == WP_K43_SCOPE ||
-			ent->s.weapon == WP_GARAND ||
-			ent->s.weapon == WP_GRENADE_LAUNCHER ||
-			ent->s.weapon == WP_GRENADE_PINEAPPLE ||
-			ent->s.weapon == WP_GARAND_SCOPE ) ) {
-			ent->client->ps.powerups[PW_OPS_DISGUISED] = 0;
-		} else if( G_PlayerCanBeSeenByOthers( ent ) ) {
-			ent->client->ps.powerups[PW_OPS_DISGUISED] = 0;
-		}
-	}
 
 	/* Original FireWeapon ignores the return of the late charge payment.
 	 * Tripmines pay after placement validation; packs pay in their throw function. */

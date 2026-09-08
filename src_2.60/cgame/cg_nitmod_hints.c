@@ -268,7 +268,7 @@ qboolean CG_NitmodPrepareMine(const centity_t *cent, refEntity_t *ent, qboolean 
     int viewer, localTeam, team;
     qboolean caster;
     if(marker) *marker = qfalse;
-    if(!cent || !ent || !marker || !NITMOD_UsesOriginalProtocol() ||
+    if(!cent || !ent || !marker || !NITMOD_UsesNitmodHud() ||
        !cg.snap || cg.clientNum < 0 || cg.clientNum >= MAX_CLIENTS) return qfalse;
     viewer = cg.snap->ps.clientNum;
     if(viewer < 0 || viewer >= MAX_CLIENTS) return qfalse;

@@ -318,7 +318,7 @@ CG_CheckLocalSounds
 void CG_CheckLocalSounds( playerState_t *ps, playerState_t *ops ) {
 	// Original Nitmod reports pain through events; do not add native health-delta pain.
 	// health changes of more than -1 should make pain sounds
-	if ( !NITMOD_UsesOriginalProtocol() && ps->stats[STAT_HEALTH] < ops->stats[STAT_HEALTH] - 1 ) {
+	if ( !NITMOD_UsesNitmodHud() && ps->stats[STAT_HEALTH] < ops->stats[STAT_HEALTH] - 1 ) {
 		if ( ps->stats[STAT_HEALTH] > 0 ) {
 			CG_PainEvent( &cg.predictedPlayerEntity, ps->stats[STAT_HEALTH], qfalse );
 

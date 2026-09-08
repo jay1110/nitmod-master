@@ -8,6 +8,10 @@
 
 #include "g_local.h"
 #include "g_nitmod_entities.h"
+#include "g_nitmod_weapon_definition.h"
+#include "nitmod_weapon_defaults.h"
+#include "g_nitmod_restrictions.h"
+extern void UpdateGoalEntity(gentity_t *oldent, gentity_t *newent);
 
 extern void AimAtTarget ( gentity_t * self );
 extern float AngleDifference(float ang1, float ang2);
@@ -1836,8 +1840,9 @@ void mg42_spawn (gentity_t *ent) {
 	gentity_t *base, *gun;
 	vec3_t	offset;
 
-	// Xian -- If in knifeonly mode, prevent MG42's from spawning
-	if ( g_knifeonly.integer != 1) {
+	/* Original mg42_spawn 0x84b26: knife war and deathmatch remove the
+	 * map placeholder without creating a base/barrel or bot goal. */
+	if (G_NITMOD_ConfiguredWarMode()!=4 && g_gametype.integer!=GT_WOLF_DM) {
 		// Need to spawn the base even when no tripod cause the gun itself isn't solid
 		base = G_Spawn ();
 		base->classname = "misc_mg42base";	// Arnout - ease tracking
@@ -1948,6 +1953,8 @@ void mg42_spawn (gentity_t *ent) {
 		}
 
 		trap_LinkEntity (gun);
+		/* Original 0x84f1a transfers goals before freeing the map entity. */
+		UpdateGoalEntity(ent,gun);
 	} 
 
 	G_FreeEntity (ent);
@@ -2515,13 +2522,12 @@ void landmine_setup( gentity_t *ent ) {
 	ent->s.weapon		= WP_LANDMINE;
 	ent->r.ownerNum		= ENTITYNUM_WORLD;
 
-	ent->damage			= G_GetWeaponDamage(WP_LANDMINE); // overridden for dynamite
-	ent->splashDamage	= G_GetWeaponDamage(WP_LANDMINE);
+	NITMOD_WeaponBlastDefaults(WP_LANDMINE,&ent->damage,&ent->splashDamage,&ent->splashRadius);
+	G_NITMOD_WeaponDamageOverrides(WP_LANDMINE,&ent->damage,&ent->splashDamage,&ent->splashRadius);
 
 	ent->accuracy		= 0; 
 	ent->classname		= "landmine";
 	ent->damage			= 0;
-	ent->splashRadius	= 225;	// was: 400
 	ent->methodOfDeath	= MOD_LANDMINE;
 	ent->splashMethodOfDeath	= MOD_LANDMINE;
 	ent->s.eFlags		= (EF_BOUNCE | EF_BOUNCE_HALF);
@@ -2529,7 +2535,6 @@ void landmine_setup( gentity_t *ent ) {
 	ent->takedamage		= qtrue;
 	ent->r.contents		= CONTENTS_CORPSE;	// (player can walk through)
 
-	ent->splashRadius	= G_GetWeaponDamage(WP_LANDMINE);
 
 	ent->health			= 0;
 	ent->s.modelindex2	= 0;

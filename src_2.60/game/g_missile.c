@@ -2127,9 +2127,10 @@ gentity_t *fire_rocket (gentity_t *self, vec3_t start, vec3_t dir) {
 
 	bolt->r.ownerNum = self->s.number;
 	bolt->parent = self;
-	bolt->damage = G_GetWeaponDamage(WP_PANZERFAUST); // JPW NERVE
-	bolt->splashDamage = G_GetWeaponDamage(WP_PANZERFAUST); // JPW NERVE
-	bolt->splashRadius = 300; //G_GetWeaponDamage(WP_PANZERFAUST);	// Arnout : hardcoded bleh hack
+	/* Original 0x8f428/0x8f43a/0x8f44c resolves each field separately.
+	 * A damage-only script must not replace the default explosion damage. */
+	NITMOD_WeaponBlastDefaults(WP_PANZERFAUST, &bolt->damage,
+		&bolt->splashDamage, &bolt->splashRadius);
 	G_NITMOD_WeaponDamageOverrides(WP_PANZERFAUST, &bolt->damage, &bolt->splashDamage, &bolt->splashRadius);
 	bolt->methodOfDeath = MOD_PANZERFAUST;
 	bolt->splashMethodOfDeath = MOD_PANZERFAUST;

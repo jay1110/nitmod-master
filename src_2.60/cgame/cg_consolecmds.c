@@ -786,7 +786,14 @@ void CG_autoRecord_f( void ) {
 // Dynamically names a screenshot[JPEG]
 void CG_autoScreenShot_f(void)
 {
-	trap_SendConsoleCommand(va("screenshot%s %s\n", ((cg_useScreenshotJPEG.integer)?"JPEG":""), CG_generateFilename()));
+	char version[256];
+	qboolean legacy = qfalse;
+	if(NITMOD_UsesNitmodHud()) {
+		trap_Cvar_VariableStringBuffer("version", version, sizeof(version));
+		legacy = strstr(version, "ET Legacy") != NULL;
+	}
+	/* Original CheckETLegacy / CG_autoScreenShot_f: Legacy owns the format. */
+	trap_SendConsoleCommand(va("screenshot%s %s\n", (!legacy && cg_useScreenshotJPEG.integer)?"JPEG":"", CG_generateFilename()));
 }
 
 void CG_vstrDown_f(void)

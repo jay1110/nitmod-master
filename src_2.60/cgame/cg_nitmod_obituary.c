@@ -113,23 +113,27 @@ static const char *CG_NitmodSelfObituary(int cause) {
     }
 }
 
+/* Original 0x62664..0x626a1 resolves each nonempty script override before
+ * deciding whether this is a paired obituary, including graphic modes. */
+static void CG_NitmodObituaryPair(int cause, const char **message, const char **suffix) {
+    int weapon = CG_NitmodObituaryWeapon(cause);
+    const nitmodObituary_t *entry = &originalObituaries[
+        cause >= 0 && cause < sizeof(originalObituaries)/sizeof(originalObituaries[0]) ? cause : 0];
+    *message = entry->message; *suffix = entry->suffix;
+    if(weapon > WP_NONE && weapon < WP_NUM_WEAPONS) {
+        if(cg_weapons[weapon].killMessage[0]) *message = cg_weapons[weapon].killMessage;
+        if(cg_weapons[weapon].killMessage2[0]) *suffix = cg_weapons[weapon].killMessage2;
+    }
+}
+
 /* Pure text planning, shared by dispatch and deterministic replay tests. */
 qboolean CG_NitmodFormatObituary(int cause, const char *target, const char *attacker,
     qboolean self, qboolean teamkill, char *out, int size) {
-    const nitmodObituary_t *entry;
     const char *single, *message, *suffix;
-    int weapon;
     if(!out || size <= 0) return qfalse;
     out[0] = 0;
     if(!target || cause == 57) return qfalse;
-    entry = &originalObituaries[cause >= 0 && cause < sizeof(originalObituaries) / sizeof(originalObituaries[0]) ? cause : 0];
-    message = entry->message;
-    suffix = entry->suffix;
-    weapon = CG_NitmodObituaryWeapon(cause);
-    if(weapon > WP_NONE && weapon < WP_NUM_WEAPONS) {
-        if(cg_weapons[weapon].killMessage[0]) message = cg_weapons[weapon].killMessage;
-        if(cg_weapons[weapon].killMessage2[0]) suffix = cg_weapons[weapon].killMessage2;
-    }
+    CG_NitmodObituaryPair(cause, &message, &suffix);
     single = self ? CG_NitmodSelfObituary(cause) : NULL;
     if(single) Com_sprintf(out, size, "%s %s", target, single);
     else if(!attacker) Com_sprintf(out, size, "%s %s", target,
@@ -146,13 +150,14 @@ qboolean CG_NitmodPlanGraphicObituary(const entityState_t *es, int mode,
     qhandle_t fallback, nitmodObituaryPlan_t *plan) {
     int target, attacker, weapon, cause, scale;
     qboolean pair, single;
+    const char *message, *suffix;
     if(!plan) return qfalse;
     memset(plan, 0, sizeof(*plan));
     if(!es || (mode != 3 && mode != 4)) return qfalse;
     target = es->otherEntityNum; attacker = es->otherEntityNum2; cause = es->eventParm;
     if(target < 0 || target >= MAX_CLIENTS || cause == 57) return qfalse;
-    pair = cause >= 0 && cause < sizeof(originalObituaries)/sizeof(originalObituaries[0]) &&
-        originalObituaries[cause].message && originalObituaries[cause].suffix;
+    CG_NitmodObituaryPair(cause, &message, &suffix);
+    pair = cause >= 0 && cause < sizeof(originalObituaries)/sizeof(originalObituaries[0]) && message && suffix;
     single = attacker < 0 || attacker >= MAX_CLIENTS ||
         (target == attacker && CG_NitmodSelfObituary(cause));
     plan->first = cgs.clientinfo[target].name;

@@ -1488,9 +1488,9 @@ static void CG_RegisterGraphics( void ) {
 	cgs.media.breakableHintShader	= trap_R_RegisterShader( "gfx/2d/breakableHint" );
 	cgs.media.chairHintShader		= trap_R_RegisterShader( "gfx/2d/chairHint" );
 	cgs.media.alarmHintShader		= trap_R_RegisterShader( "gfx/2d/alarmHint" );
-	cgs.media.healthHintShader = trap_R_RegisterShader(NITMOD_UsesOriginalProtocol() ? "icons/iconw_medheal_1_select" : "gfx/2d/healthHint");
+	cgs.media.healthHintShader = trap_R_RegisterShader(NITMOD_UsesNitmodHud() ? "icons/iconw_medheal_1_select" : "gfx/2d/healthHint");
 	cgs.media.treasureHintShader	= trap_R_RegisterShader( "gfx/2d/treasureHint" );
-	cgs.media.knifeHintShader = trap_R_RegisterShader(NITMOD_UsesOriginalProtocol() ? "icons/iconw_knife_1_select.tga" : "gfx/2d/knifeHint");
+	cgs.media.knifeHintShader = trap_R_RegisterShader(NITMOD_UsesNitmodHud() ? "icons/iconw_knife_1_select.tga" : "gfx/2d/knifeHint");
 	cgs.media.ladderHintShader		= trap_R_RegisterShader( "gfx/2d/ladderHint" );
 	cgs.media.buttonHintShader		= trap_R_RegisterShader( "gfx/2d/buttonHint" );
 	cgs.media.waterHintShader		= trap_R_RegisterShader( "gfx/2d/waterHint" );
@@ -1501,7 +1501,7 @@ static void CG_RegisterGraphics( void ) {
 	cgs.media.exclamationHintShader	= trap_R_RegisterShader( "gfx/2d/exclamationHint" );
 	cgs.media.clipboardHintShader	= trap_R_RegisterShader( "gfx/2d/clipboardHint" );	
 	cgs.media.weaponHintShader		= trap_R_RegisterShader( "gfx/2d/weaponHint" );	
-	cgs.media.ammoHintShader = trap_R_RegisterShader(NITMOD_UsesOriginalProtocol() ? "icons/iconw_ammopack_1_select" : "gfx/2d/ammoHint");
+	cgs.media.ammoHintShader = trap_R_RegisterShader(NITMOD_UsesNitmodHud() ? "icons/iconw_ammopack_1_select" : "gfx/2d/ammoHint");
 	cgs.media.armorHintShader		= trap_R_RegisterShader( "gfx/2d/armorHint" );	
 	cgs.media.powerupHintShader		= trap_R_RegisterShader( "gfx/2d/powerupHint" );	
 	cgs.media.holdableHintShader	= trap_R_RegisterShader( "gfx/2d/holdableHint" );	
@@ -2001,7 +2001,7 @@ static void CG_RegisterGraphics( void ) {
 	cgs.media.limboClassButton2Back_off =		trap_R_RegisterShaderNoMip( "gfx/limbo/skill_back_off"			);
 	cgs.media.limboClassButton2Wedge_off =		trap_R_RegisterShaderNoMip( "gfx/limbo/skill_4pieces_off"		);
 	cgs.media.limboClassButton2Wedge_on =		trap_R_RegisterShaderNoMip( "gfx/limbo/skill_4pieces_on"		);
-	if(NITMOD_UsesOriginalProtocol()) {
+	if(NITMOD_UsesNitmodHud()) {
 		cgs.media.limboClassButtonLevel5_on = trap_R_RegisterShaderNoMip("gfx/limbo/sk_5_on.tga");
 		cgs.media.limboClassButtonLevel5_off = trap_R_RegisterShaderNoMip("gfx/limbo/sk_5_off.tga");
 	}

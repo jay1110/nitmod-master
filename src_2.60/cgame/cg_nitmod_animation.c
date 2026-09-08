@@ -17,7 +17,7 @@ qboolean CG_NitmodCorpseAnimation(centity_t *cent, lerpFrame_t *lf, int number) 
     animation_t *anim;
     int index = number & ~ANIM_TOGGLEBIT, offset;
     double remaining, elapsed;
-    if(!cent || !lf || cent->currentState.eType != ET_CORPSE || !NITMOD_UsesOriginalProtocol()) return qfalse;
+    if(!cent || !lf || cent->currentState.eType != ET_CORPSE || !NITMOD_UsesNitmodHud()) return qfalse;
     character = CG_CharacterForClientinfo(NULL, cent);
     model = character ? character->animModelInfo : NULL;
     if(!model || model->numAnimations < 1 || model->numAnimations > MAX_MODEL_ANIMATIONS ||

@@ -726,6 +726,43 @@ void CG_NitmodResetMovementDelayPrediction(void) {
 }
 
 
+/* Prediction stores completed Pmove results. A new server policy or reward
+ * must replay outstanding commands instead of reusing the old policy's state.
+ * Capture only effective inputs, never pointers or mutable Pmove output. */
+typedef struct {
+ int enabled, gametype, war, noReload, doubleJump, chargeEnabled, chargeBypass, autoReload;
+ unsigned int reloadPreferences;
+ float doubleJumpHeight;
+ int levels[SK_NUM_SKILLS], chargeTimes[5];
+ unsigned int rewards[SK_NUM_SKILLS];
+ char weaponScripts[MAX_QPATH];
+} nitmodPredictionPolicy_t;
+static void CG_NitmodPredictionPolicy(nitmodPredictionPolicy_t *policy) {
+ int team=cg.snap->ps.persistant[PERS_TEAM]-TEAM_AXIS;
+ memset(policy,0,sizeof(*policy));
+ if(!NITMOD_UsesNitmodHud()) return;
+ policy->enabled=1;
+ policy->gametype=cgs.gametype;
+ policy->war=cg_pmove.nitmodWarMode;
+ policy->noReload=cg_pmove.nitmodNoReload;
+ policy->doubleJump=cg_pmove.nitmodDoubleJump;
+ policy->doubleJumpHeight=cg_pmove.nitmodDoubleJumpHeight;
+ policy->chargeEnabled=cg_pmove.nitmodPackChargeEnabled;
+ policy->chargeBypass=cg_pmove.nitmodPackChargeBypass;
+ policy->autoReload=cg_autoReload.integer>0;
+ policy->reloadPreferences=cg_pmove.nitmodReloadPreferenceFlags;
+ memcpy(policy->rewards,cg_pmove.nitmodPackSkillMasks,sizeof(policy->rewards));
+ if(cg_pmove.skill) memcpy(policy->levels,cg_pmove.skill,sizeof(policy->levels));
+ if(team>=0 && team<2) {
+  policy->chargeTimes[0]=cg.ltChargeTime[team];
+  policy->chargeTimes[1]=cg.soldierChargeTime[team];
+  policy->chargeTimes[2]=cg.engineerChargeTime[team];
+  policy->chargeTimes[3]=cg.medicChargeTime[team];
+  policy->chargeTimes[4]=cg.covertopsChargeTime[team];
+ }
+ Q_strncpyz(policy->weaponScripts,NITMOD_WeaponScriptsDir(),sizeof(policy->weaponScripts));
+}
+
 void CG_PredictPlayerState( void ) {
 	int			cmdNum, current;
 	playerState_t	oldPlayerState;
@@ -741,9 +778,11 @@ void CG_PredictPlayerState( void ) {
 	static pmoveExt_t backupPmext[MAX_BACKUP_STATES];
 	static int previousOptimize, previousFixed, previousMsec, previousClient = -1;
 	static int previousNitmodFixed, previousNitmodFps;
-	static int previousNitmodLean, previousLeanWeaponBit;
+	static int previousNitmodLean, previousWeaponEnvironmentFlags;
 	static int previousProneDelay, previousCrouchStandDelay, previousStandCrouchDelay;
 	static unsigned int previousDelayEpoch;
+	static nitmodPredictionPolicy_t previousPolicy;
+	nitmodPredictionPolicy_t currentPolicy;
 	nitmodDelayState_t delayState;
 	qboolean delayStateReady = qfalse;
 	qboolean resetCache = !cg.validPPS;
@@ -786,19 +825,7 @@ void CG_PredictPlayerState( void ) {
 		cg_pmove.nitmodReloadEnabled = !Q_stricmp(Info_ValueForKey(CG_ConfigString(CS_SERVERINFO), "gamename"), "nitmod");
 		cg_pmove.nitmodAuthoritativeWeapons = NITMOD_UsesNitmodHud();
 		NITMOD_PackPredictionInputs(&cg_pmove,cg.snap->ps.clientNum);
-		if(cg_pmove.ps->weapon > WP_NONE && cg_pmove.ps->weapon < WP_NUM_WEAPONS) {
-			weaponInfo_t *wi=&cg_weapons[cg_pmove.ps->weapon];
-			cg_pmove.nitmodCustomRecoilEnabled=wi->customRecoilEnabled;
-			cg_pmove.nitmodCustomRecoilDuration=wi->customRecoilDuration;
-			cg_pmove.nitmodCustomRecoilYaw=wi->customRecoilYaw;
-			cg_pmove.nitmodCustomRecoilPitch=wi->customRecoilPitch;
-			cg_pmove.nitmodNoMidclipReload=wi->noMidclipReload;
-			cg_pmove.nitmodSpreadScaleAdd=wi->spreadScaleAdd;
-			cg_pmove.nitmodSpreadScaleAddRand=wi->spreadScaleAddRand;
-			cg_pmove.nitmodSpreadRatio=wi->spreadRatio;
-			cg_pmove.nitmodVelocityToSpread=wi->velocityToSpread;
-			cg_pmove.nitmodViewChangeToSpread=wi->viewChangeToSpread;
-		}
+	 cg_pmove.nitmodRefreshWeaponOptions = NITMOD_UsesNitmodHud();
 		cg_pmove.nitmodWeaponFlags = NITMOD_GameState()->weapons;
 		cg_pmove.nitmodWarMode = NITMOD_SimpleConfig()->war;
 		cg_pmove.nitmodNoReload = (unsigned int)NITMOD_SimpleConfig()->noReload;
@@ -843,19 +870,7 @@ void CG_PredictPlayerState( void ) {
 	cg_pmove.nitmodReloadEnabled = !Q_stricmp(Info_ValueForKey(CG_ConfigString(CS_SERVERINFO), "gamename"), "nitmod");
 	cg_pmove.nitmodAuthoritativeWeapons = NITMOD_UsesNitmodHud();
 	NITMOD_PackPredictionInputs(&cg_pmove,cg.snap->ps.clientNum);
-	if(cg_pmove.ps->weapon > WP_NONE && cg_pmove.ps->weapon < WP_NUM_WEAPONS) {
-		weaponInfo_t *wi=&cg_weapons[cg_pmove.ps->weapon];
-		cg_pmove.nitmodCustomRecoilEnabled=wi->customRecoilEnabled;
-		cg_pmove.nitmodCustomRecoilDuration=wi->customRecoilDuration;
-		cg_pmove.nitmodCustomRecoilYaw=wi->customRecoilYaw;
-		cg_pmove.nitmodCustomRecoilPitch=wi->customRecoilPitch;
-		cg_pmove.nitmodNoMidclipReload=wi->noMidclipReload;
-		cg_pmove.nitmodSpreadScaleAdd=wi->spreadScaleAdd;
-		cg_pmove.nitmodSpreadScaleAddRand=wi->spreadScaleAddRand;
-		cg_pmove.nitmodSpreadRatio=wi->spreadRatio;
-		cg_pmove.nitmodVelocityToSpread=wi->velocityToSpread;
-		cg_pmove.nitmodViewChangeToSpread=wi->viewChangeToSpread;
-	}
+	 cg_pmove.nitmodRefreshWeaponOptions = NITMOD_UsesNitmodHud();
 	cg_pmove.nitmodWeaponFlags = NITMOD_GameState()->weapons;
 	cg_pmove.nitmodWarMode = NITMOD_SimpleConfig()->war;
 	cg_pmove.nitmodNoReload = (unsigned int)NITMOD_SimpleConfig()->noReload;
@@ -961,13 +976,15 @@ void CG_PredictPlayerState( void ) {
 	 * Turning optimization off retains the existing full Pmove path.
 	 * Input-mode changes and backwards command clocks invalidate native
 	 * cache entries as well as the original teleport/snapshot checks. */
+	CG_NitmodPredictionPolicy(&currentPolicy);
 	optimize = cg_optimizePrediction.integer != 0;
 	predictCmd = current - CMD_BACKUP + 1;
 	if(!optimize || resetCache || !previousOptimize || previousDelayEpoch != nitmodDelayEpoch ||
+	   memcmp(&previousPolicy,&currentPolicy,sizeof(currentPolicy)) != 0 ||
 	   previousFixed != cg_pmove.pmove_fixed || previousMsec != cg_pmove.pmove_msec ||
 	   previousNitmodFixed != cg_pmove.nitmodFixedPhysics || previousNitmodFps != cg_pmove.nitmodFixedPhysicsFps ||
 	   previousNitmodLean != cg_pmove.nitmodLeanEnabled ||
-	   previousLeanWeaponBit != (cg_pmove.nitmodLeanEnabled ? cg_pmove.nitmodWeaponFlags & 256 : 0) ||
+	   previousWeaponEnvironmentFlags != (cg_pmove.nitmodReloadEnabled ? cg_pmove.nitmodWeaponFlags & (32 | 64 | 256 | 1024 | 4096) : 0) ||
 	   previousProneDelay != cg_pmove.nitmodProneDelay ||
 	   previousCrouchStandDelay != cg_pmove.nitmodCrouchStandDelay ||
 	   previousStandCrouchDelay != cg_pmove.nitmodStandCrouchDelay ||
@@ -996,13 +1013,14 @@ void CG_PredictPlayerState( void ) {
 	}
 	cg.lastPhysicsTime = cg.physicsTime;
 	stateIndex = cg.backupStateTop;
+	previousPolicy = currentPolicy;
 	previousOptimize = optimize;
 	previousDelayEpoch = nitmodDelayEpoch;
 	previousFixed = cg_pmove.pmove_fixed;
 	previousNitmodFixed = cg_pmove.nitmodFixedPhysics;
 	previousNitmodFps = cg_pmove.nitmodFixedPhysicsFps;
 	previousNitmodLean = cg_pmove.nitmodLeanEnabled;
-	previousLeanWeaponBit = cg_pmove.nitmodLeanEnabled ? cg_pmove.nitmodWeaponFlags & 256 : 0;
+	previousWeaponEnvironmentFlags = cg_pmove.nitmodReloadEnabled ? cg_pmove.nitmodWeaponFlags & (32 | 64 | 256 | 1024 | 4096) : 0;
 	previousProneDelay = cg_pmove.nitmodProneDelay;
 	previousCrouchStandDelay = cg_pmove.nitmodCrouchStandDelay;
 	previousStandCrouchDelay = cg_pmove.nitmodStandCrouchDelay;

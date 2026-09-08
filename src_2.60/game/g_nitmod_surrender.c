@@ -1,4 +1,5 @@
 #include "g_local.h"
+#include "g_nitmod_admin.h"
 
 qboolean G_NITMOD_CanVoteSurrender(const gentity_t *ent) {
     team_t team = level.voteInfo.surrenderTeam;
@@ -23,7 +24,9 @@ int G_NITMOD_SurrenderVote(gentity_t *ent, unsigned int index, char *arg,
     char info[MAX_INFO_STRING];
     (void)index; (void)referee;
     if(arg) {
-        if(!ent || !ent->client || !arg2 || !vote_allow_surrender.integer ||
+        if(!ent || !ent->client || !arg2 ||
+           (!vote_allow_surrender.integer && !(ent->client->sess.referee &&
+            G_NITMOD_AdminPrivilege((int)(ent - g_entities), "novotelimit"))) ||
            g_gamestate.integer != GS_PLAYING) return G_INVALID;
         team = ent->client->sess.sessionTeam;
         if(team != TEAM_AXIS && team != TEAM_ALLIES) return G_INVALID;

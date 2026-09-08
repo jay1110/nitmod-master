@@ -1,6 +1,7 @@
 #ifndef G_NITMOD_LEGACY_CVARS_H
 #define G_NITMOD_LEGACY_CVARS_H
 void G_NITMOD_RegisterLegacyGameplayCvars(void);
+void G_NITMOD_ReassignSkillLevel(skillType_t skill);
 qboolean G_NITMOD_UpdateLegacyGameplayCvars(void);
 qboolean G_NITMOD_ConsumeLuaConfigurationChange(void);
 int G_NITMOD_LegacyCvarInteger(const char *name, int fallback);

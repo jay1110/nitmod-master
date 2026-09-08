@@ -242,7 +242,7 @@ void CG_DrawPlayerWeaponIcon( rectDef_t *rect, qboolean drawHighlighted, int ali
 	qhandle_t	icon;
 	float		scale,halfScale;
 	vec4_t		hcolor;
-	qboolean original = NITMOD_UsesOriginalProtocol();
+	qboolean original = NITMOD_UsesNitmodHud();
 	nitmodHudAnchor_t previous;
 	int tank = -1;
 	if(!rect || !refcolor || !cg.snap) return;
@@ -392,7 +392,7 @@ void CG_DrawCursorhint(rectDef_t *rect) {
 		return;
 
 	CG_CheckForCursorHints();
-	if(NITMOD_UsesOriginalProtocol()) {
+	if(NITMOD_UsesNitmodHud()) {
 		CG_NitmodDrawCursorHint(rect);
 		return;
 	}
@@ -642,7 +642,7 @@ CG_DrawWeapStability
 void CG_DrawWeapStability( rectDef_t *rect ) {
 	vec4_t goodColor = {0, 1, 0, 0.5f}, badColor = {1, 0, 0, 0.5f};
 	nitmodHudAnchor_t previous;
-	qboolean original = NITMOD_UsesOriginalProtocol();
+	qboolean original = NITMOD_UsesNitmodHud();
 	float fraction;
 	if(!rect || !cg.snap) return;
 
@@ -685,7 +685,7 @@ void CG_DrawWeapHeat(rectDef_t *rect, int align) {
 
 	if(!(cg.snap->ps.curWeapHeat))
 		return;
-	if(NITMOD_UsesOriginalProtocol()) {
+	if(NITMOD_UsesNitmodHud()) {
 		nitmodHudAnchor_t previous = CG_NitmodHudAnchor(NITMOD_HUD_RIGHT);
 		CG_FilledBar(rect->x, rect->y, rect->w, rect->h, color, color2, NULL,
 			Com_Clamp(0, 1, cg.snap->ps.curWeapHeat / 255.0f), 0);

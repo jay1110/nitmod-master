@@ -5,6 +5,7 @@
 
 #include "g_local.h"
 #include "g_nitmod_config.h"
+#include "g_nitmod_abilities.h"
 #include "g_nitmod_hudstats.h"
 #include "g_nitmod_restrictions.h"
 #include "g_nitmod_legacy_cvars.h"

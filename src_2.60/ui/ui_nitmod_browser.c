@@ -365,7 +365,8 @@ void UI_BuildServerDisplayList(qboolean force) {
 
 			trap_Cvar_Update( &ui_browserShowFriendlyFire );
 			if ( ui_browserShowFriendlyFire.integer ) {
-				friendlyFire = atoi(Info_ValueForKey(info, "friendlyFire"));
+				/* Original UI_BuildServerDisplayList 0x148eb tests bit 1. */
+				friendlyFire = atoi(Info_ValueForKey(info, "friendlyFire")) & 1;
 
 				if( ( friendlyFire && ui_browserShowFriendlyFire.integer == 2 ) ||
 					( !friendlyFire && ui_browserShowFriendlyFire.integer == 1 ) ) {

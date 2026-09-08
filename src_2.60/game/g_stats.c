@@ -177,6 +177,18 @@ static void G_UpgradeSkill( gentity_t *ent, skillType_t skill ) {
 	}
 }
 
+/* Original G_ReassignSkillLevel 0xd1a70: all connected slots, even when
+ * the displayed level stays equal; upgrade hooks publish rewards/userinfo. */
+void G_NITMOD_ReassignSkillLevel(skillType_t skill) {
+ int i;
+ for(i=0;i<g_maxclients.integer;++i) {
+  gentity_t *ent=&g_entities[i];
+  if(!ent->client || ent->client->pers.connected!=CON_CONNECTED) continue;
+  G_SetPlayerSkill(ent->client,skill);
+  G_UpgradeSkill(ent,skill);
+ }
+}
+
 void G_LoseSkillPoints( gentity_t *ent, skillType_t skill, float points ) {
 	int oldskill;
 	float oldskillpoints;

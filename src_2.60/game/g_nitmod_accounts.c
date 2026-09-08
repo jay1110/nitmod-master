@@ -172,9 +172,12 @@ static void RestoreXP(int n,const nitmodDatabaseAccount_t *account) {
     for(i=0;i<7;++i) { g_entities[n].client->sess.skillpoints[i]=skills[i]; total+=skills[i]; }
     g_entities[n].client->sess.startxptotal=(float)total;
     NITMOD_SetSnapshotXP(&g_entities[n].client->ps,NITMOD_XPInteger(total));
-    if((G_NITMOD_LegacyCvarInteger("g_XPDecay",0)&3)==1 && age>0)
+    if((G_NITMOD_LegacyCvarInteger("g_XPDecay",0)&3)==1)
         G_NITMOD_XPDecay(&g_entities[n],age,qtrue);
     G_CalcRank(g_entities[n].client);
+    /* Original LoadXP 0x103871/0x1038a0 publishes the rebuilt state
+     * immediately, including delayed account restores between frames. */
+    BG_PlayerStateToEntityState(&g_entities[n].client->ps,&g_entities[n].s,qtrue);
 }
 static int UpdateXP(int n) {
     nitmodDatabaseAccount_t account; qtime_t now;

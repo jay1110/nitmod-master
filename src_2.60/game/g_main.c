@@ -1176,23 +1176,20 @@ void G_CheckForCursorHints( gentity_t *ent ) {
 							hintType = HINT_TREASURE;
 							break;
 						case IT_WEAPON: {
-								qboolean canPickup = COM_BitCheck( ent->client->ps.weapons, it->giTag );
+                            qboolean canPickup = G_CanPickupWeapon(it->giTag, ent);
+                            /* Original item hints carry the selected weapon ID; packs
+                             * use their dedicated hint without a weapon value. */
+                            if (it->giTag == WP_AMMO) {
+                                hintType = HINT_AMMO;
+                            } else if (it->giTag == WP_MEDKIT) {
+                                hintType = HINT_HEALTH;
+                            } else if (canPickup) {
+                                hintType = HINT_WEAPON;
+                                hintVal = it->giTag;
+                            }
+                            break;
+                        }
 
-								if( !canPickup ) {
-									if( it->giTag == WP_AMMO ) {
-										canPickup = qtrue;
-									}
-								}
-
-								if( !canPickup ) {
-									canPickup = G_CanPickupWeapon( it->giTag, ent );
-								}
-
-								if( canPickup ) {
-									hintType = HINT_WEAPON;
-								}
-								break;
-							}
 						case IT_AMMO:	
 							hintType = HINT_AMMO;
 							break;
@@ -3232,19 +3229,23 @@ void CheckExitRules( void ) {
 
 	/* Original CheckExitRules: Nitmod's two extended frag modes qualify
 	 * before the ordinary objective/maxlives checks. */
-	if(g_gamestate.integer == GS_PLAYING && g_gametype.integer == GT_WOLF_TDM) {
+	if(g_gametype.integer == GT_WOLF_TDM) {
 		int limit = G_NITMOD_LegacyCvarInteger("g_TDMScore", 500);
 		int winner = -1;
-		if(limit > 0 && level.teamScores[TEAM_AXIS] >= limit) winner = 0;
-		else if(limit > 0 && level.teamScores[TEAM_ALLIES] >= limit) winner = 1;
+		if(level.teamScores[TEAM_AXIS] >= limit) winner = 0;
+		else if(level.teamScores[TEAM_ALLIES] >= limit) winner = 1;
 		if(winner >= 0) {
 			trap_GetConfigstring(CS_MULTI_MAPWINNER, cs, sizeof(cs));
+			Info_SetValueForKey(cs, "w", winner ? "1" : "0");
 			Info_SetValueForKey(cs, "winner", winner ? "1" : "0");
 			trap_SetConfigstring(CS_MULTI_MAPWINNER, cs);
+			/* Original publishes the winner during warmup/countdown too;
+			 * only the intermission transition requires GS_PLAYING. */
+			if(g_gamestate.integer == GS_PLAYING)
+				LogExit(winner ? "TDM : Allies win this round\n" : "TDM : Axis win this round\n");
 			trap_SendServerCommand(-1, winner ?
-				"print \"^3TDM ^7: ^4Allies ^7win this round.\\n\"" :
-				"print \"^3TDM ^7: ^1Axis ^7win this round.\\n\"");
-			LogExit(winner ? "TDM: Allies win this round." : "TDM: Axis win this round.");
+				"print \"^3TDM ^7: ^4Allies ^7win this round.\n\"" :
+				"print \"^3TDM ^7: ^_Axis ^7win this round.\n\"");
 			return;
 		}
 	}
@@ -4299,7 +4300,7 @@ uebrgpiebrpgibqeripgubeqrpigubqifejbgipegbrtibgurepqgbn%i", level.time )
 
 	for( i = 0; i < level.numConnectedClients; i++ ) {
 		ClientEndFrame(&g_entities[level.sortedClients[i]]);
-		G_NITMOD_CheckWarEntry(&g_entities[level.sortedClients[i]], G_NITMOD_ConfiguredWarMode());
+		G_NITMOD_CheckClientWeapons(&g_entities[level.sortedClients[i]], G_NITMOD_ConfiguredWarMode());
 	}
 
 	G_NITMOD_SendHudStats();

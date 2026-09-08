@@ -417,7 +417,7 @@ qboolean NITMOD_DecodeClientSkills(const char *text, int *nativeLevels, int *dis
     /* text can point into Info_ValueForKey's rotating scratch buffers.
      * Consume it before protocol detection performs additional Info lookups. */
     if(!nativeLevels || !displayLevels || !NITMOD_ParseSkillDigits(text, 9, levels)) return qfalse;
-    maximum = NITMOD_UsesOriginalProtocol() ? NITMOD_SKILL_LEVEL_COUNT - 1 : NUM_SKILL_LEVELS - 1;
+    maximum = NITMOD_UsesNitmodHud() ? NITMOD_SKILL_LEVEL_COUNT - 1 : NUM_SKILL_LEVELS - 1;
     for(i = 0; i < SK_NUM_SKILLS; ++i) if(levels[i] > maximum) return qfalse;
     for(i = 0; i < SK_NUM_SKILLS; ++i) {
         displayLevels[i] = levels[i];
@@ -432,9 +432,9 @@ void NITMOD_ParseClientExtras(const char *info, clientInfo_t *client) {
     if(!client) return;
     client->nitmodTV = client->nitmodShoutcaster = qfalse;
     if(!info || !NITMOD_UsesNitmodHud()) return;
+    if(NITMOD_ParseProtocolSigned(Info_ValueForKey(info, "sc"), &value))
+        client->nitmodShoutcaster = value != 0;
     if(NITMOD_UsesOriginalProtocol()) {
-        if(NITMOD_ParseProtocolSigned(Info_ValueForKey(info, "sc"), &value))
-            client->nitmodShoutcaster = value != 0;
         if(NITMOD_ParseProtocolSigned(Info_ValueForKey(info, "tv"), &value))
             client->nitmodTV = value != 0;
     }

@@ -26,6 +26,13 @@ void Bot_Event_ResetWeapons(int clientNum);
 void Bot_Event_Healed(int clientNum, struct gentity_s *healer);
 void Bot_Event_RecievedAmmo(int clientNum, struct gentity_s *supplier);
 void Bot_Event_Revived(int clientNum, struct gentity_s *medic);
+void Bot_Event_FireTeamCreated(int clientNum, int fireteamNum);
+void Bot_Event_FireTeamDestroyed(int clientNum);
+void Bot_Event_JoinedFireTeam(int clientNum, struct gentity_s *leader);
+void Bot_Event_LeftFireTeam(int clientNum);
+void Bot_Event_InviteFireTeam(int inviter, int invitee);
+void Bot_Event_FireTeam_Proposal(int clientNum, int proposed);
+void Bot_Event_FireTeam_Warn(int clientNum, int warned);
 int Bot_WeaponGameToBot(int weapon);
 #ifdef __cplusplus
 }

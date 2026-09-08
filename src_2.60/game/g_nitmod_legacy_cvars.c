@@ -113,12 +113,18 @@ void G_NITMOD_RegisterLegacyGameplayCvars(void) {
 	}
 }
 qboolean G_NITMOD_UpdateLegacyGameplayCvars(void) {
+ static const char *skills[SK_NUM_SKILLS]={"skill_battlesense","skill_engineer","skill_medic","skill_fieldops","skill_lightweapons","skill_soldier","skill_covertops"};
+ static const int originalOrder[SK_NUM_SKILLS]={5,2,1,3,6,0,4};
+ unsigned int skillChanges=0;
+ int skill,clientNum;
 	unsigned int i;
 	qboolean changed = qfalse;
 	for(i=0;i<sizeof(legacyGameplayCvars)/sizeof(*legacyGameplayCvars);++i) {
 		trap_Cvar_Update(&legacyGameplayCvars[i].value);
 		if(legacyGameplayCvars[i].modificationCount != legacyGameplayCvars[i].value.modificationCount) {
 			legacyGameplayCvars[i].modificationCount = legacyGameplayCvars[i].value.modificationCount;
+            for(skill=0;skill<SK_NUM_SKILLS;++skill)
+                if(!strcmp(legacyGameplayCvars[i].name,skills[skill])) skillChanges|=1u<<skill;
 			if(!Q_stricmp(legacyGameplayCvars[i].name,"g_TDMScore")) nitmod_SendTDMScoreLimit(-1);
             if(!Q_stricmp(legacyGameplayCvars[i].name,"lua_modules") ||
                !Q_stricmp(legacyGameplayCvars[i].name,"lua_allowedModules")) luaConfigurationChanged=qtrue;
@@ -126,6 +132,13 @@ qboolean G_NITMOD_UpdateLegacyGameplayCvars(void) {
 				changed = qtrue;
 		}
 	}
+ /* Match original CheckCvars ordering, then publish one updated table. */
+ for(skill=0;skill<SK_NUM_SKILLS;++skill)
+  if(skillChanges & (1u<<originalOrder[skill]))
+   G_NITMOD_ReassignSkillLevel((skillType_t)originalOrder[skill]);
+ if(skillChanges) for(clientNum=0;clientNum<MAX_CLIENTS;++clientNum)
+  nitmod_SendSkillLevels(clientNum);
+
 	return changed;
 }
 int G_NITMOD_LegacyCvarInteger(const char *name,int fallback) {

@@ -477,29 +477,10 @@ void SpectatorThink( gentity_t *ent, usercmd_t *ucmd ) {
 		pm.nitmodStandCrouchDelay = G_NITMOD_LegacyCvarInteger("n_standCrouchDelay", 0);
 		pm.nitmodNoReload = (unsigned int)G_NITMOD_ConfiguredNoReload();
 		pm.nitmodWeaponFlags = G_NITMOD_ConfiguredWeaponFlags();
-		pm.nitmodNoMidclipReload = G_NITMOD_WeaponNoMidclipReload(client->ps.weapon);
+		pm.nitmodRefreshWeaponOptions = qtrue;
 		pm.nitmodFixedPhysics = G_NITMOD_LegacyCvarInteger("g_fixedphysics", 0) != 0;
 		pm.nitmodFixedPhysicsFps = G_NITMOD_LegacyCvarInteger("g_fixedphysicsfps", 125);
-		{
-			nitmodWeaponOptions_t options;
-			memset(&options, 0, sizeof(options));
-			if(G_NITMOD_WeaponSpreadOptions(client->ps.weapon, &options)) {
-				pm.nitmodSpreadScaleAdd = options.spreadScaleAdd;
-				pm.nitmodSpreadScaleAddRand = options.spreadScaleAddRand;
-				pm.nitmodSpreadRatio = options.spreadRatio;
-				pm.nitmodVelocityToSpread = options.velocityToSpread;
-				pm.nitmodViewChangeToSpread = options.viewChangeToSpread;
-			}
-		}
-		{
-			nitmodWeaponRecoil_t recoil;
-			if(G_NITMOD_WeaponRecoil(client->ps.weapon, &recoil)) {
-				pm.nitmodCustomRecoilEnabled = qtrue;
-				pm.nitmodCustomRecoilDuration = recoil.duration;
-				pm.nitmodCustomRecoilYaw = recoil.yaw;
-				pm.nitmodCustomRecoilPitch = recoil.pitch;
-			}
-		}
+
 		pm.nitmodDoubleJumpHeight = g_DJHeight.value;
 		pm.nitmodReloadPreferenceFlags = NITMOD_EncodeReloadPreferences(0,
 			client->pers.bAutoReloadAux, client->pers.bAltReloadAux);
@@ -879,6 +860,8 @@ void ClientEvents( gentity_t *ent, int oldEventSequence ) {
 		case EV_FIRE_WEAPONB:
 		case EV_FIRE_WEAPON_LASTSHOT:
 			G_NITMOD_AttackInvulnerability(ent, event, level.time, g_noAttackInvul.integer);
+			if(ent->client->ps.powerups[PW_OPS_DISGUISED] && !G_NITMOD_CheckDisguise(ent))
+				ent->client->ps.powerups[PW_OPS_DISGUISED] = 0;
 			FireWeapon( ent );
 			break;
 		case EV_NITMOD_THROW_KNIFE:
@@ -1027,6 +1010,15 @@ void ClientThink_real( gentity_t *ent ) {
 	// don't think if the client is not yet connected (and thus not yet spawned in)
 	if (client->pers.connected != CON_CONNECTED) {
 		return;
+	}
+
+	/* Original ClientThink_real 0x4025e..0x40285: unavailable support bits
+	 * are refreshed before command timing, including non-Field-Ops clients. */
+	{
+		int team = client->sess.sessionTeam == TEAM_AXIS ? 0 : 1;
+		client->ps.ammo[WP_ARTY] =
+			(level.nitmodAirstrikeCounter[team] > 0 ? 1 : 0) |
+			(level.nitmodArtilleryCounter[team] > 0 ? 2 : 0);
 	}
 
 	if( ent->s.eFlags & EF_MOUNTEDTANK ) {
@@ -1202,29 +1194,10 @@ void ClientThink_real( gentity_t *ent ) {
 	pm.nitmodStandCrouchDelay = G_NITMOD_LegacyCvarInteger("n_standCrouchDelay", 0);
 	pm.nitmodNoReload = (unsigned int)G_NITMOD_ConfiguredNoReload();
 	pm.nitmodWeaponFlags = G_NITMOD_ConfiguredWeaponFlags();
-	pm.nitmodNoMidclipReload = G_NITMOD_WeaponNoMidclipReload(client->ps.weapon);
+	pm.nitmodRefreshWeaponOptions = qtrue;
 	pm.nitmodFixedPhysics = G_NITMOD_LegacyCvarInteger("g_fixedphysics", 0) != 0;
 	pm.nitmodFixedPhysicsFps = G_NITMOD_LegacyCvarInteger("g_fixedphysicsfps", 125);
-	{
-		nitmodWeaponOptions_t options;
-		memset(&options, 0, sizeof(options));
-		if(G_NITMOD_WeaponSpreadOptions(client->ps.weapon, &options)) {
-			pm.nitmodSpreadScaleAdd = options.spreadScaleAdd;
-			pm.nitmodSpreadScaleAddRand = options.spreadScaleAddRand;
-			pm.nitmodSpreadRatio = options.spreadRatio;
-			pm.nitmodVelocityToSpread = options.velocityToSpread;
-			pm.nitmodViewChangeToSpread = options.viewChangeToSpread;
-		}
-	}
-	{
-		nitmodWeaponRecoil_t recoil;
-		if(G_NITMOD_WeaponRecoil(client->ps.weapon, &recoil)) {
-			pm.nitmodCustomRecoilEnabled = qtrue;
-			pm.nitmodCustomRecoilDuration = recoil.duration;
-			pm.nitmodCustomRecoilYaw = recoil.yaw;
-			pm.nitmodCustomRecoilPitch = recoil.pitch;
-		}
-	}
+
 	pm.nitmodDoubleJumpHeight = g_DJHeight.value;
 	pm.nitmodReloadPreferenceFlags = NITMOD_EncodeReloadPreferences(0,
 		client->pers.bAutoReloadAux, client->pers.bAltReloadAux);

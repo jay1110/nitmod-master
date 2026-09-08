@@ -1118,7 +1118,7 @@ void CG_Missile( centity_t *cent ) {
 	ent.renderfx = weapon->missileRenderfx | RF_NOSHADOW;
 
 	if( cent->currentState.weapon == WP_LANDMINE || cent->currentState.weapon == WP_POISON_MINE ) {
-		if(NITMOD_UsesOriginalProtocol()) {
+		if(NITMOD_UsesNitmodHud()) {
 			qboolean marker;
 			if(!CG_NitmodPrepareMine(cent, &ent, &marker)) return;
 			if(marker) CG_DrawMineMarkerFlag(cent, &ent, weapon);
@@ -1176,7 +1176,7 @@ void CG_Missile( centity_t *cent ) {
 		}
 	}
 
-	if(!CG_NitmodMissileAxis(cent, ent.axis, cg.time, NITMOD_UsesOriginalProtocol())) return;
+	if(!CG_NitmodMissileAxis(cent, ent.axis, cg.time, NITMOD_UsesNitmodHud())) return;
 	CG_NitmodMissileCameraTrack(cent, ent.axis);
 
 	// Rafael

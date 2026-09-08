@@ -25,6 +25,13 @@ static const char *ENABLED = "ENABLED";
 static const char *DISABLED = "DISABLED";
 void G_voteDisableMessage(gentity_t *ent, const char *cmd);
 
+/* Original action votes require referee AND permission 6 when disabled.
+ * The four boolean-setting votes deliberately retain referee-only bypass. */
+static qboolean G_NITMOD_ActionVoteOverride(gentity_t *ent) {
+	return ent && ent->client && ent->client->sess.referee &&
+		G_NITMOD_AdminPrivilege((int)(ent - g_entities), "novotelimit");
+}
+
 /* Original G_Poll_v, ELF 0xe8f30: concatenate argv[2..], require two
  * characters, and perform no action when the vote passes. ELF 0xe8f6b
  * requires BOTH referee status and permission 6 for a disabled poll. */
@@ -311,7 +318,7 @@ int G_Comp_v(gentity_t *ent, unsigned int dwVoteIndex, char *arg, char *arg2, qb
 		if(trap_Argc() > 2) {
 			G_refPrintf(ent, "Usage: ^3%s %s%s\n", ((fRefereeCmd) ? "\\ref" : "\\callvote"), arg, aVoteInfo[dwVoteIndex].pszVoteHelp);
 			return(G_INVALID);
-		} else if(vote_allow_comp.integer<=0 && ent && !ent->client->sess.referee) {
+		} else if(vote_allow_comp.integer==0 && ent && !G_NITMOD_ActionVoteOverride(ent)) {
 			G_voteDisableMessage(ent, arg);
 			return(G_INVALID);
 		}
@@ -349,7 +356,7 @@ int G_Gametype_v(gentity_t *ent, unsigned int dwVoteIndex, char *arg, char *arg2
 	if(arg) {
 		int i = atoi(arg2);
 
-		if(!vote_allow_gametype.integer && ent && !ent->client->sess.referee) {
+		if(!vote_allow_gametype.integer && ent && !G_NITMOD_ActionVoteOverride(ent)) {
 			G_voteDisableMessage(ent, arg);
 			G_GametypeList(ent);
 			G_voteCurrentSetting(ent, arg, va("%d (%s)", g_gametype.integer, G_GametypeName(g_gametype.integer)));
@@ -391,7 +398,7 @@ int G_Kick_v( gentity_t *ent, unsigned int dwVoteIndex, char *arg, char *arg2, q
 	if( arg ) {
 		int pid;
 
-		if( !vote_allow_kick.integer && ent && !ent->client->sess.referee ) {
+		if( !vote_allow_kick.integer && ent && !G_NITMOD_ActionVoteOverride(ent) ) {
 			G_voteDisableMessage(ent, arg);
 			return G_INVALID;
 		} else if( G_voteDescription(ent, fRefereeCmd, dwVoteIndex) ) {
@@ -442,7 +449,7 @@ int G_Mute_v(gentity_t *ent, unsigned int dwVoteIndex, char *arg, char *arg2, qb
 	if(arg) {
 		int pid;
 
-		if(!vote_allow_muting.integer && ent && !ent->client->sess.referee) {
+		if(!vote_allow_muting.integer && ent && !G_NITMOD_ActionVoteOverride(ent)) {
 			G_voteDisableMessage(ent, arg);
 			return(G_INVALID);
 		} else if(G_voteDescription(ent, fRefereeCmd, dwVoteIndex)) return(G_INVALID);
@@ -492,7 +499,7 @@ int G_UnMute_v(gentity_t *ent, unsigned int dwVoteIndex, char *arg, char *arg2, 
 	if(arg) {
 		int pid;
 
-		if(!vote_allow_muting.integer && ent && !ent->client->sess.referee) {
+		if(!vote_allow_muting.integer && ent && !G_NITMOD_ActionVoteOverride(ent)) {
 			G_voteDisableMessage(ent, arg);
 			return(G_INVALID);
 		} else if(G_voteDescription(ent, fRefereeCmd, dwVoteIndex)) return(G_INVALID);
@@ -536,7 +543,7 @@ int G_Map_v(gentity_t *ent, unsigned int dwVoteIndex, char *arg, char *arg2, qbo
 		char serverinfo[MAX_INFO_STRING];
 		trap_GetServerinfo(serverinfo, sizeof(serverinfo));
 
-		if(!vote_allow_map.integer && ent && !ent->client->sess.referee) {
+		if(!vote_allow_map.integer && ent && !G_NITMOD_ActionVoteOverride(ent)) {
 			G_voteDisableMessage(ent, arg);
 			G_voteCurrentSetting(ent, arg, Info_ValueForKey(serverinfo, "mapname"));
 			return(G_INVALID);
@@ -572,7 +579,7 @@ int G_Campaign_v(gentity_t *ent, unsigned int dwVoteIndex, char *arg, char *arg2
 		char serverinfo[MAX_INFO_STRING];
 		trap_GetServerinfo(serverinfo, sizeof(serverinfo));
 
-		if(!vote_allow_map.integer && ent && !ent->client->sess.referee) {
+		if(!vote_allow_map.integer && ent && !G_NITMOD_ActionVoteOverride(ent)) {
 			G_voteDisableMessage(ent, arg);
 			if( g_gametype.integer == GT_WOLF_CAMPAIGN ) {
 				G_voteCurrentSetting(ent, arg, g_campaigns[level.currentCampaign].shortname );
@@ -628,7 +635,7 @@ int G_MatchReset_v(gentity_t *ent, unsigned int dwVoteIndex, char *arg, char *ar
 {
 	// Vote request (vote is being initiated)
 	if(arg) {
-		if(!vote_allow_matchreset.integer && ent && !ent->client->sess.referee) {
+		if(!vote_allow_matchreset.integer && ent && !G_NITMOD_ActionVoteOverride(ent)) {
 			G_voteDisableMessage(ent, arg);
 			return(G_INVALID);
 		} else if( trap_Argc() != 2 && G_voteDescription(ent, fRefereeCmd, dwVoteIndex) ) {
@@ -679,7 +686,7 @@ int G_Nextmap_v(gentity_t *ent, unsigned int dwVoteIndex, char *arg, char *arg2,
 		if(trap_Argc() > 2) {
 			G_refPrintf(ent, "Usage: ^3%s %s%s\n", ((fRefereeCmd) ? "\\ref" : "\\callvote"), arg, aVoteInfo[dwVoteIndex].pszVoteHelp);
 			return(G_INVALID);
-		} else if(!vote_allow_nextmap.integer && ent && !ent->client->sess.referee) {
+		} else if(!vote_allow_nextmap.integer && ent && !G_NITMOD_ActionVoteOverride(ent)) {
 			G_voteDisableMessage(ent, arg);
 			return(G_INVALID);
 		} else {
@@ -730,7 +737,7 @@ int G_Pub_v(gentity_t *ent, unsigned int dwVoteIndex, char *arg, char *arg2, qbo
 		if(trap_Argc() > 2) {
 			G_refPrintf(ent, "Usage: ^3%s %s%s\n", ((fRefereeCmd) ? "\\ref" : "\\callvote"), arg, aVoteInfo[dwVoteIndex].pszVoteHelp);
 			return(G_INVALID);
-		} else if(vote_allow_pub.integer<=0 && ent && !ent->client->sess.referee) {
+		} else if(vote_allow_pub.integer==0 && ent && !G_NITMOD_ActionVoteOverride(ent)) {
 			G_voteDisableMessage(ent, arg);
 			return(G_INVALID);
 		}
@@ -753,7 +760,7 @@ int G_Referee_v(gentity_t *ent, unsigned int dwVoteIndex, char *arg, char *arg2,
 	if(arg) {
 		int pid;
 
-		if(!vote_allow_referee.integer && ent && !ent->client->sess.referee) {
+		if(!vote_allow_referee.integer && ent && !G_NITMOD_ActionVoteOverride(ent)) {
 			G_voteDisableMessage(ent, arg);
 			return(G_INVALID);
 		}
@@ -864,7 +871,7 @@ int G_SwapTeams_v(gentity_t *ent, unsigned int dwVoteIndex, char *arg, char *arg
 		if(trap_Argc() > 2) {
 			G_refPrintf(ent, "Usage: ^3%s %s%s\n", ((fRefereeCmd) ? "\\ref" : "\\callvote"), arg, aVoteInfo[dwVoteIndex].pszVoteHelp);
 			return(G_INVALID);
-		} else if(!vote_allow_swapteams.integer && ent && !ent->client->sess.referee) {
+		} else if(!vote_allow_swapteams.integer && ent && !G_NITMOD_ActionVoteOverride(ent)) {
 			G_voteDisableMessage(ent, arg);
 			return(G_INVALID);
 		}
@@ -942,7 +949,7 @@ int G_Timelimit_v(gentity_t *ent, unsigned int dwVoteIndex, char *arg, char *arg
 {
 	// Vote request (vote is being initiated)
 	if(arg) {
-		if(!vote_allow_timelimit.integer && ent && !ent->client->sess.referee) {
+		if(!vote_allow_timelimit.integer && ent && !G_NITMOD_ActionVoteOverride(ent)) {
 			G_voteDisableMessage(ent, arg);
 			G_voteCurrentSetting(ent, arg, g_timelimit.string);
 			return(G_INVALID);
@@ -985,7 +992,7 @@ int G_Warmupfire_v(gentity_t *ent, unsigned int dwVoteIndex, char *arg, char *ar
 									(match_warmupDamage.integer > 2) ? 2 :
 																	   match_warmupDamage.integer;
 
-		if(!vote_allow_warmupdamage.integer && ent && !ent->client->sess.referee) {
+		if(!vote_allow_warmupdamage.integer && ent && !G_NITMOD_ActionVoteOverride(ent)) {
 			G_voteDisableMessage(ent, arg);
 			G_WarmupDamageTypeList(ent);
 			G_voteCurrentSetting(ent, arg, va("%d (%s)", val, warmupType[val]));
@@ -1029,7 +1036,7 @@ int G_Unreferee_v(gentity_t *ent, unsigned int dwVoteIndex, char *arg, char *arg
 	if(arg) {
 		int pid;
 
-		if(!vote_allow_referee.integer && ent && !ent->client->sess.referee) {
+		if(!vote_allow_referee.integer && ent && !G_NITMOD_ActionVoteOverride(ent)) {
 			G_voteDisableMessage(ent, arg);
 			return(G_INVALID);
 		}

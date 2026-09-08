@@ -923,6 +923,7 @@ struct gclient_s {
 	// the next 2 are used to play the proper animation on the body
 	int				torsoDeathAnim;
 	int				legsDeathAnim;
+	int nitmodDeathAnimEndTime;
 
 	int				lastSpammyCentrePrintTime;
 	pmoveExt_t		pmext;
@@ -1442,6 +1443,7 @@ gentity_t *weapon_grenadelauncher_fire (gentity_t *ent, int grenadeWPID);
 void weapon_smokeBombExplode( gentity_t *ent );
 void G_PlaceTripmine(gentity_t* ent);
 void G_NITMOD_RemoveTripmines(gentity_t *owner);
+void G_NITMOD_DropTeamChangeObjective(gentity_t *ent);
 int G_NITMOD_CountTeamTripmines(team_t team);
 void G_FadeItems(gentity_t* ent, int modType);
 gentity_t *G_FindSatchel(gentity_t* ent);
@@ -1513,6 +1515,7 @@ void Svcmd_ShuffleTeams_f(void);
 //
 // g_weapon.c
 //
+qboolean G_NITMOD_CheckDisguise(gentity_t *ent);
 void FireWeapon( gentity_t *ent );
 qboolean ReviveEntity( gentity_t *ent, gentity_t *traceEnt );
 void G_NITMOD_UpdateAdminGlow(gentity_t *ent);

@@ -457,10 +457,26 @@ A new item was picked up this frame
 static void CG_ItemPickup( int itemNum ) {
 	int itemid;
 	int wpbank_cur, wpbank_pickup;
+	popupMessageType_t popupType = PM_MESSAGE;
+	qhandle_t pickupIcon = cgs.media.pmImages[PM_MESSAGE];
 	
 	itemid = bg_itemlist[itemNum].giTag;
 
-	CG_AddPMItem( PM_MESSAGE, va( "Picked up %s", CG_PickupItemText( itemNum ) ), cgs.media.pmImages[PM_MESSAGE] );
+	/* Original CG_ItemPickup 0xa5e6..0xa649 and CG_InitPMGraphics:
+	 * ammo/health pickups have their own icons; flags use the objective icon.
+	 * Keep native popup type numbering: original ammo type 7 is native TEAM. */
+	if(NITMOD_UsesNitmodHud()) {
+		if(bg_itemlist[itemNum].giType == IT_AMMO ||
+		   (bg_itemlist[itemNum].giType == IT_WEAPON && itemid == WP_AMMO))
+			pickupIcon = trap_R_RegisterShaderNoMip("icons/iconw_ammopack_1_select");
+		else if(bg_itemlist[itemNum].giType == IT_HEALTH)
+			pickupIcon = trap_R_RegisterShaderNoMip("icons/iconw_medheal_1_select");
+		else if(bg_itemlist[itemNum].giType == IT_TEAM) {
+			popupType = PM_OBJECTIVE;
+			pickupIcon = cgs.media.pmImages[PM_OBJECTIVE];
+		}
+	}
+	CG_AddPMItem( popupType, va( "Picked up %s", CG_PickupItemText( itemNum ) ), pickupIcon );
 
 //	cg.itemPickup			= itemNum;
 //	cg.itemPickupTime		= cg.time;
@@ -2199,7 +2215,11 @@ static void CG_EntityEventForProtocol( centity_t *cent, vec3_t position, qboolea
 
 	case EV_FILL_CLIP:
 		DEBUGNAME("EV_FILL_CLIP");
-		if( cgs.clientinfo[cg.clientNum].skill[SK_LIGHT_WEAPONS] >= 2 && BG_isLightWeaponSupportingFastReload( es->weapon ) && cg_weapons[es->weapon].reloadFastSound )
+		/* Original 0x639e3..0x639f8: the reloading entity's unlock bit,
+		 * not the viewer's displayed level, controls the fast reload sound. */
+		if( (NITMOD_UsesNitmodHud() ? NITMOD_ClientSkillUnlocked(es->number, SK_LIGHT_WEAPONS, 2) :
+		     cgs.clientinfo[cg.clientNum].skill[SK_LIGHT_WEAPONS] >= 2) &&
+		    BG_isLightWeaponSupportingFastReload( es->weapon ) && cg_weapons[es->weapon].reloadFastSound )
 			trap_S_StartSound (NULL, es->number, CHAN_WEAPON, cg_weapons[es->weapon].reloadFastSound );
 		else if(cg_weapons[es->weapon].reloadSound)
 			trap_S_StartSound (NULL, es->number, CHAN_WEAPON, cg_weapons[es->weapon].reloadSound ); // JPW NERVE following sherman's SP fix, should allow killing reload sound when player dies

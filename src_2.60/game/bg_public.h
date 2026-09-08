@@ -589,6 +589,7 @@ typedef struct {
 	unsigned int nitmodNoReload;
 	int nitmodWeaponFlags;
 	qboolean nitmodCustomRecoilEnabled;
+	qboolean nitmodRefreshWeaponOptions;
 	int nitmodCustomRecoilDuration;
 	float nitmodCustomRecoilYaw;
 	float nitmodCustomRecoilPitch;

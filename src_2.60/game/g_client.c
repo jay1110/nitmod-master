@@ -416,25 +416,12 @@ void CopyToBodyQue( gentity_t *ent ) {
 		body->s.events[i] = 0;
 	body->s.eventSequence = 0;
 
-	// DHM - Nerve
-	// change the animation to the last-frame only, so the sequence
-	// doesn't repeat anew for the body
-	switch ( body->s.legsAnim & ~ANIM_TOGGLEBIT ) 
-	{
-	case BOTH_DEATH1:	
-	case BOTH_DEAD1:
-	default:
-		body->s.torsoAnim = body->s.legsAnim = BOTH_DEAD1;
-		break;
-	case BOTH_DEATH2:
-	case BOTH_DEAD2:
-		body->s.torsoAnim = body->s.legsAnim = BOTH_DEAD2;
-		break;
-	case BOTH_DEATH3:
-	case BOTH_DEAD3:
-		body->s.torsoAnim = body->s.legsAnim = BOTH_DEAD3;
-		break;
-	}
+	/* Original CopyToBodyQue preserves the selected death animation and
+	 * its absolute end time, so late snapshots resume the correct frame. */
+	body->s.torsoAnim = body->s.legsAnim = ent->client->legsDeathAnim;
+	body->s.effect1Time = ent->client->nitmodDeathAnimEndTime;
+	if(body->s.onFireEnd > level.time)
+		body->s.onFireEnd = (int)((unsigned int)body->s.effect1Time + 1500u);
 
 	body->r.svFlags = ent->r.svFlags & ~SVF_BOT;
 	VectorCopy (ent->r.mins, body->r.mins);
@@ -1381,7 +1368,9 @@ int G_CountTeamMedics( team_t team, qboolean alivecheck ) {
 	int numMedics = 0;
 	int i, j;
 
-	for( i = 0; i < level.numConnectedClients; i++ ) {
+	/* Original 0x4a08c/0x4a09a: share the sorted non-spectator prefix
+	 * for both team-health bonuses and living-medic/LMS checks. */
+	for( i = 0; i < level.numNonSpectatorClients; i++ ) {
 		j = level.sortedClients[i];
 
 		if( level.clients[j].sess.sessionTeam != team ) {
@@ -2056,14 +2045,21 @@ char *ClientConnect( int clientNum, qboolean firstTime, qboolean isBot ) {
 //
 int G_ComputeMaxLives(gclient_t *cl, int maxRespawns)
 {
-	float scaled = (float)(maxRespawns - 1) * (1.0f - ((float)(level.time - level.startTime) / (g_timelimit.value * 60000.0f)));
-	int val = (int)scaled;
+	float scaled, duration;
+	int val;
 
 	// rain - #102 - don't scale of the timelimit is 0
 	if (g_timelimit.value == 0.0) {
 		return maxRespawns - 1;
 	}
 
+	/* Original 0x4d1dc -> 0x4d270 disables the limit after map time
+	 * expires; overtime must not become a zero-life late join. */
+	duration = g_timelimit.value * 60000.0f;
+	if((float)(level.time - level.startTime) >= duration) return -1;
+	scaled = (float)(maxRespawns - 1) *
+		(1.0f - (float)(level.time - level.startTime) / duration);
+	val = (int)scaled;
 	val += ((scaled - (float)val) < 0.5f) ? 0 : 1;
 	return(val);
 }

@@ -1034,7 +1034,7 @@ void CG_DrawLagometer( float y ) {
 
 
 void CG_DrawLivesLeft( void ) {
-	qboolean original = NITMOD_UsesOriginalProtocol();
+	qboolean original = NITMOD_UsesNitmodHud();
 	nitmodHudAnchor_t previous;
 	if(!cg.snap) return;
 	if( cg_gameType.integer == GT_WOLF_LMS ) {
@@ -3062,7 +3062,7 @@ void CG_DrawFlashFade( void ) {
 	static int lastTime;
 	int elapsed, time;
 	vec4_t col;
-	qboolean fBlackout = ((NITMOD_UsesOriginalProtocol() || !CG_IsSinglePlayer()) && int_ui_blackout.integer > 0);
+	qboolean fBlackout = ((NITMOD_UsesNitmodHud() || !CG_IsSinglePlayer()) && int_ui_blackout.integer > 0);
 
 	if (cgs.fadeStartTime + cgs.fadeDuration < cg.time) {
 		cgs.fadeAlphaCurrent = cgs.fadeAlpha;
@@ -3084,10 +3084,10 @@ void CG_DrawFlashFade( void ) {
 
 	// OSP - ugh, have to inform the ui that we need to remain blacked out (or not)
 	if(int_ui_blackout.integer == 0) {
-		if((NITMOD_UsesOriginalProtocol() || cg.mvTotalClients < 1) && cg.snap->ps.powerups[PW_BLACKOUT] > 0) {
+		if((NITMOD_UsesNitmodHud() || cg.mvTotalClients < 1) && cg.snap->ps.powerups[PW_BLACKOUT] > 0) {
 			trap_Cvar_Set("ui_blackout", va("%d", cg.snap->ps.powerups[PW_BLACKOUT]));
 		}
-	} else if(cg.snap->ps.powerups[PW_BLACKOUT] == 0 || (!NITMOD_UsesOriginalProtocol() && cg.mvTotalClients > 0)) {
+	} else if(cg.snap->ps.powerups[PW_BLACKOUT] == 0 || (!NITMOD_UsesNitmodHud() && cg.mvTotalClients > 0)) {
 		trap_Cvar_Set("ui_blackout", "0");
 	}
 

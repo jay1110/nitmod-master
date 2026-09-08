@@ -1,9 +1,8 @@
 #include "g_local.h"
+#include "g_nitmod_admin.h"
 
-/* Nitmod separates in-place team operations from their restart wrappers.
- * Request-side permission-6 overrides are deliberately denied until the
- * original permission system exists; console invocations still bypass the
- * cvar. Neither a request nor its rejection may shuffle/reset players. */
+/* Original team votes require referee status AND permission 6 for the
+ * disabled-vote override; requests must not execute the team operation. */
 static int TeamVote(gentity_t *ent, char *arg, qboolean referee,
     int allowed, void (*execute)(void)) {
     if(!arg) {
@@ -14,7 +13,8 @@ static int TeamVote(gentity_t *ent, char *arg, qboolean referee,
         G_refPrintf(ent, "Usage: ^3%s %s^7\n", referee ? "\\ref" : "\\callvote", arg);
         return G_INVALID;
     }
-    if(ent && !allowed) {
+    if(ent && !allowed && !(ent->client && ent->client->sess.referee &&
+        G_NITMOD_AdminPrivilege((int)(ent - g_entities), "novotelimit"))) {
         G_refPrintf(ent, "Sorry, [lof]^3%s^7 [lon]voting has been disabled", arg);
         return G_INVALID;
     }

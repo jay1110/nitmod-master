@@ -5,7 +5,7 @@
 
 qboolean CG_NitmodMapVoteEnabled(void) {
     const nitmodGameState_t *state = NITMOD_GameState();
-    return NITMOD_UsesOriginalProtocol() && ((int)cgs.gametype == 6 ||
+    return NITMOD_UsesNitmodHud() && ((int)cgs.gametype == 6 ||
         ((int)cgs.gametype == 7 && (state->tdmOptions & 8)) ||
         ((int)cgs.gametype == 8 && (state->dmOptions & 0x4000)));
 }

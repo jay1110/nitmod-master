@@ -1289,11 +1289,11 @@ void CG_LimboPanel_RenderClassButton( panel_button_t* button ) {
 	if(!button || cg.clientNum < 0 || cg.clientNum >= MAX_CLIENTS ||
 		button->data[1] < PC_SOLDIER || button->data[1] > PC_COVERTOPS) return;
 	skill = BG_ClassSkillForClass(button->data[1]);
-	level = NITMOD_UsesOriginalProtocol() ? cgs.clientinfo[cg.clientNum].nitmodSkillLevels[skill] :
+	level = NITMOD_UsesNitmodHud() ? cgs.clientinfo[cg.clientNum].nitmodSkillLevels[skill] :
 		cgs.clientinfo[cg.clientNum].skill[skill];
 	wedgeOn = cgs.media.limboClassButton2Wedge_on;
 	wedgeOff = cgs.media.limboClassButton2Wedge_off;
-	if(NITMOD_UsesOriginalProtocol() && level == 5) {
+	if(NITMOD_UsesNitmodHud() && level == 5) {
 		if(cgs.media.limboClassButtonLevel5_on > 0) wedgeOn = cgs.media.limboClassButtonLevel5_on;
 		if(cgs.media.limboClassButtonLevel5_off > 0) wedgeOff = cgs.media.limboClassButtonLevel5_off;
 	}
@@ -2053,7 +2053,7 @@ int CG_LimboPanel_RenderCounter_ValueForButton( panel_button_t* button ) {
 	int clientLimit = MAX_CLIENTS;
 
 	if(!button) return 0;
-	if(NITMOD_UsesOriginalProtocol()) {
+	if(NITMOD_UsesNitmodHud()) {
 		clientLimit = cgs.maxclients;
 		if(clientLimit < 0) clientLimit = 0;
 		if(clientLimit > MAX_CLIENTS) clientLimit = MAX_CLIENTS;
@@ -2095,7 +2095,7 @@ int CG_LimboPanel_RenderCounter_ValueForButton( panel_button_t* button ) {
 			return CG_CalculateReinfTime_Float( qtrue );
 		case 4: // skills
 			if(cg.clientNum < 0 || cg.clientNum >= MAX_CLIENTS) return 0;
-			if(NITMOD_UsesOriginalProtocol()) {
+			if(NITMOD_UsesNitmodHud()) {
 				int skill;
 				if(button->data[1] == 0) skill = SK_BATTLE_SENSE;
 				else if(button->data[1] == 1) skill = SK_LIGHT_WEAPONS;
@@ -2174,7 +2174,7 @@ int CG_LimboPanel_RenderCounter_RollTimeForButton( panel_button_t* button ) {
 		case 3: // respawn time
 			return 50.f;
 		case 2: // xp: original Nitmod uses a faster roller than ET 2.60.
-			return NITMOD_UsesOriginalProtocol() ? 15 : 50;
+			return NITMOD_UsesNitmodHud() ? 15 : 50;
 	}
 
 	return 1000.f;
@@ -2201,7 +2201,7 @@ int CG_LimboPanel_RenderCounter_NumRollers( panel_button_t* button ) {
 			if( cg_gameType.integer == GT_WOLF_LMS /*|| CG_LimboPanel_GetTeam() == TEAM_SPECTATOR*/ ) {
 				return 0;
 			}
-			return NITMOD_UsesOriginalProtocol() ? 5 : 4;
+			return NITMOD_UsesNitmodHud() ? 5 : 4;
 
 		case 6: // stats
 			switch( button->data[1] ) {
@@ -2742,7 +2742,7 @@ int CG_LimboPanel_WeaponCount_ForSlot( int number ) {
 				break;
 			}
 			/* Original hides a disallowed STEN; heavy quota cards remain visible. */
-			if(NITMOD_UsesOriginalProtocol() && classInfo->classWeapons[i] == WP_STEN &&
+			if(NITMOD_UsesNitmodHud() && classInfo->classWeapons[i] == WP_STEN &&
 				CG_LimboPanel_RealWeaponIsDisabled(WP_STEN)) continue;
 
 			cnt++;

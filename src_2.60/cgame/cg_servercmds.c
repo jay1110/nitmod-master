@@ -325,8 +325,9 @@ void CG_ParseWolfinfo( void ) {
 
 	// OSP - Announce game in progress if we are really playing
 	if(old_gs != GS_PLAYING && cgs.gamestate == GS_PLAYING) {
-		if(NITMOD_UsesOriginalProtocol()) {
+		if(NITMOD_UsesNitmodHud()) {
 			CG_NitmodAnnounce(0);
+			if(!cg.demoPlayback && (cg_autoAction.integer & AA_DEMORECORD)) CG_autoRecord_f();
 		} else {
 			Pri("^1FIGHT!\n");
 			CPri("^1FIGHT!\n");
@@ -1848,7 +1849,7 @@ void CG_parseWeaponStatsGS_cmd(void)
 				continue;
 			}
 
-			int level = NITMOD_UsesOriginalProtocol() ? ci->nitmodSkillLevels[i] : ci->skill[i];
+			int level = NITMOD_UsesNitmodHud() ? ci->nitmodSkillLevels[i] : ci->skill[i];
 			int threshold = NITMOD_ClientSkillNextThreshold(i, level);
 			if(threshold >= 0) {
 				str = va("%4d/%-4d", ci->skillpoints[i], threshold);
@@ -1981,7 +1982,7 @@ void CG_parseWeaponStats_cmd(void (txt_dump)(char *))
 				continue;
 			}
 
-			int level = NITMOD_UsesOriginalProtocol() ? ci->nitmodSkillLevels[i] : ci->skill[i];
+			int level = NITMOD_UsesNitmodHud() ? ci->nitmodSkillLevels[i] : ci->skill[i];
 			int threshold = NITMOD_ClientSkillNextThreshold(i, level);
 			if(threshold >= 0) {
 				str = va("%d (%d/%d)", level, ci->skillpoints[i], threshold);
@@ -2629,11 +2630,11 @@ static void CG_ServerCommand( void ) {
 		CG_topshotsParse_cmd(qtrue);
 		return;
 	}
-	if( !strcmp( cmd, "immaplist" ) && NITMOD_UsesOriginalProtocol() ) {
+	if( !strcmp( cmd, "immaplist" ) && NITMOD_UsesNitmodHud() ) {
 		CG_NitmodParseMapVoteList();
 		return;
 	}
-	if( !strcmp( cmd, "imvotetally" ) && NITMOD_UsesOriginalProtocol() ) {
+	if( !strcmp( cmd, "imvotetally" ) && NITMOD_UsesNitmodHud() ) {
 		CG_NitmodParseMapVoteTally();
 		return;
 	}

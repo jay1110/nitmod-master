@@ -21,6 +21,55 @@
 #include "g_nitmod_weapon_definition.h"
 #endif
 
+/* Original PM_Weapon indexes the definition by the current ps weapon at
+ * each use (cgame 0x1c8bf, 0x1c90f). A command can finish a weapon switch. */
+static void PM_NITMOD_RefreshWeaponOptions(pmove_t *move, int weapon) {
+	if(!move->nitmodRefreshWeaponOptions) return;
+	move->nitmodCustomRecoilEnabled = qfalse;
+	move->nitmodCustomRecoilDuration = 0;
+	move->nitmodCustomRecoilYaw = move->nitmodCustomRecoilPitch = 0;
+	move->nitmodNoMidclipReload = qfalse;
+	move->nitmodSpreadScaleAdd = move->nitmodSpreadScaleAddRand = 0;
+	move->nitmodSpreadRatio = 0;
+	move->nitmodVelocityToSpread = move->nitmodViewChangeToSpread = 0;
+	if(weapon <= WP_NONE || weapon >= WP_NUM_WEAPONS) return;
+#ifdef CGAMEDLL
+	{
+		const weaponInfo_t *wi = &cg_weapons[weapon];
+		move->nitmodCustomRecoilEnabled = wi->customRecoilEnabled;
+		move->nitmodCustomRecoilDuration = wi->customRecoilDuration;
+		move->nitmodCustomRecoilYaw = wi->customRecoilYaw;
+		move->nitmodCustomRecoilPitch = wi->customRecoilPitch;
+		move->nitmodNoMidclipReload = wi->noMidclipReload;
+		move->nitmodSpreadScaleAdd = wi->spreadScaleAdd;
+		move->nitmodSpreadScaleAddRand = wi->spreadScaleAddRand;
+		move->nitmodSpreadRatio = wi->spreadRatio;
+		move->nitmodVelocityToSpread = wi->velocityToSpread;
+		move->nitmodViewChangeToSpread = wi->viewChangeToSpread;
+	}
+#elif defined(GAMEDLL)
+	{
+		nitmodWeaponOptions_t options;
+		nitmodWeaponRecoil_t recoil;
+		move->nitmodNoMidclipReload = G_NITMOD_WeaponNoMidclipReload(weapon);
+		if(G_NITMOD_WeaponRecoil(weapon, &recoil)) {
+			move->nitmodCustomRecoilEnabled = qtrue;
+			move->nitmodCustomRecoilDuration = recoil.duration;
+			move->nitmodCustomRecoilYaw = recoil.yaw;
+			move->nitmodCustomRecoilPitch = recoil.pitch;
+		}
+		memset(&options, 0, sizeof(options));
+		if(G_NITMOD_WeaponSpreadOptions(weapon, &options)) {
+			move->nitmodSpreadScaleAdd = options.spreadScaleAdd;
+			move->nitmodSpreadScaleAddRand = options.spreadScaleAddRand;
+			move->nitmodSpreadRatio = options.spreadRatio;
+			move->nitmodVelocityToSpread = options.velocityToSpread;
+			move->nitmodViewChangeToSpread = options.viewChangeToSpread;
+		}
+	}
+#endif
+}
+
 #ifdef CGAMEDLL
 #define PM_GameType cg_gameType.integer
 #elif GAMEDLL
@@ -38,6 +87,11 @@ float Com_GetFlamethrowerRange(void) {
 
 pmove_t		*pm;
 pml_t		pml;
+
+/* Nitmod transports reward masks separately from the visible skill level. */
+static qboolean PM_HasWeaponReward(int skill, unsigned int bit, int nativeLevel) {
+	return pm->nitmodReloadEnabled ? (pm->nitmodPackSkillMasks[skill] & bit) != 0 : pm->skill[skill] >= nativeLevel;
+}
 
 /* Original BG_CheckCharge selects duration and reward mask by current class,
  * then selects the table by weapon. Original and negotiated native clients
@@ -187,9 +241,9 @@ int PM_LastAttackAnimForWeapon ( int weapon ) {
 }
 
 int PM_ReloadAnimForWeapon ( int weapon ) {
-	// Native skill eligibility remains local; no recovered ability is inferred.
 	return NITMOD_ReloadAnimation(weapon,
-		BG_isLightWeaponSupportingFastReload(weapon) && pm->skill[SK_LIGHT_WEAPONS] >= 2);
+		BG_isLightWeaponSupportingFastReload(weapon) &&
+		(pm->nitmodReloadEnabled ? (pm->nitmodPackSkillMasks[SK_LIGHT_WEAPONS] & NITMOD_FAST_RELOAD) != 0 : pm->skill[SK_LIGHT_WEAPONS] >= 2));
 }
 
 int PM_RaiseAnimForWeapon ( int weapon ) {
@@ -653,7 +707,9 @@ static float PM_CmdScale( usercmd_t *cmd ) {
 		(pm->ps->weapon == WP_MOBILE_MG42) ||
 		(pm->ps->weapon == WP_MOBILE_MG42_SET) ||
 		(pm->ps->weapon == WP_MORTAR)) {
-		if( pm->skill[SK_HEAVY_WEAPONS] >= 3 ) {
+		if(pm->nitmodReloadEnabled && pm->nitmodWarMode == 1) {
+			/* Original PM_CmdScale 0x27850: Panzer war removes this penalty. */
+		} else if( PM_HasWeaponReward(SK_HEAVY_WEAPONS, 8u, 3) ) {
 			scale *= 0.75;
 		} else {
 			scale *= 0.5;
@@ -661,7 +717,7 @@ static float PM_CmdScale( usercmd_t *cmd ) {
 	}
 	
 	if (pm->ps->weapon == WP_FLAMETHROWER) { // trying some different balance for the FT
-		if( !(pm->skill[SK_HEAVY_WEAPONS] >= 3) || pm->cmd.buttons & BUTTON_ATTACK )
+		if( !PM_HasWeaponReward(SK_HEAVY_WEAPONS, 8u, 3) || pm->cmd.buttons & BUTTON_ATTACK )
 			scale *= 0.7;
 	}
 
@@ -2409,19 +2465,17 @@ PM_BeginWeaponReload
 static void PM_BeginWeaponReload( int weapon ) {
 	gitem_t* item;
 	int reloadTime;
+	PM_NITMOD_RefreshWeaponOptions(pm, weapon);
 
-	/* Reviewed light/akimbo and scoped start transactions.
-	 * Keep native skill policy until original ability words are synchronized;
-	 * do not pretend a native skill level is itself an original ability mask. */
-	if(pm->nitmodReloadEnabled && (NITMOD_ReloadUsesOuterClipGate(weapon) ||
-		weapon == WP_GARAND_SCOPE || weapon == WP_K43_SCOPE || weapon == WP_FG42SCOPE)) {
+	/* Original 0x287a4/0x28812/0x28884 uses weapon options and reward
+	 * words, which are now synchronized for authoritative and predicted Pmove. */
+	if(pm->nitmodReloadEnabled && NITMOD_ReloadWeaponEligible(weapon)) {
 		nitmodWeaponOptions_t options;
-		unsigned int lightBits = pm->skill[SK_LIGHT_WEAPONS] >= 2 ? NITMOD_FAST_RELOAD : 0;
 		memset(&options, 0, sizeof(options));
-		/* Keep the native Garand clip policy until dynamic original weapon
-		 * definitions are connected. Other scoped rifles allow midclip reload. */
-		options.noMidclipReload = pm->nitmodNoMidclipReload || weapon == WP_GARAND_SCOPE;
-		NITMOD_BeginWeaponReload(pm, weapon, GetAmmoTableData(weapon), &options, 0, lightBits);
+		options.noMidclipReload = pm->nitmodNoMidclipReload;
+		NITMOD_BeginWeaponReload(pm, weapon, GetAmmoTableData(weapon), &options,
+			pm->nitmodPackSkillMasks[SK_HEAVY_WEAPONS],
+			pm->nitmodPackSkillMasks[SK_LIGHT_WEAPONS]);
 		return;
 	}
 
@@ -2641,6 +2695,7 @@ static void PM_FinishWeaponChange( void ) {
 
 	oldweapon = pm->ps->weapon;
 	newweapon = NITMOD_CommitWeaponChange( pm->ps );
+	PM_NITMOD_RefreshWeaponOptions(pm, newweapon);
 	pm->pmext->silencedSideArm = NITMOD_PistolModeFlags(newweapon, pm->pmext->silencedSideArm);
 	pm->pmext->silencedSideArm = NITMOD_RifleGrenadeModeFlags(newweapon, pm->pmext->silencedSideArm);
 
@@ -2785,14 +2840,13 @@ void PM_CheckForReload( int weapon ) {
 	if( weapon == WP_GPG40 || weapon == WP_M7 )
 		return;
 
-	/* War mode is shared by server and prediction. Original scoped ability
-	 * words remain unavailable: zero preserves the normal unscope policy. */
+	/* Original PM_CheckForReload 0x2a8a4: Covert reward32 preserves scope. */
 	if(pm->nitmodReloadEnabled && NITMOD_WeaponInventorySlots(weapon, &slots)) {
 		nitmodReloadPolicy_t policy;
 		nitmodReloadDecision_t decision;
 		if(NITMOD_BuildReloadPolicy(pm,
 			(pm->nitmodReloadPreferenceFlags & NITMOD_CGF_ALT_RELOAD) != 0,
-			IS_AUTORELOAD_WEAPON(weapon), 0, pm->nitmodWarMode, &policy) &&
+			IS_AUTORELOAD_WEAPON(weapon), pm->nitmodPackSkillMasks[SK_MILITARY_INTELLIGENCE_AND_SCOPED_WEAPONS], pm->nitmodWarMode, &policy) &&
 			NITMOD_DecideReload(pm->ps, weapon, &policy, ammoTableMP, WP_NUM_WEAPONS, &decision)) {
 			if(decision.action == NITMOD_RELOAD_ACTION_BEGIN)
 				PM_BeginWeaponReload(decision.weapon);
@@ -2999,12 +3053,18 @@ void PM_CoolWeapons( void ) {
 	int wp, maxHeat;
 
 	for(wp=0;wp<WP_NUM_WEAPONS;wp++) {
+		/* Original skips heat-disabled entries before ownership and applies
+		 * Heavy4 only to the immutable heavy-ammo flag (+0x34). */
+		if(pm->nitmodReloadEnabled && !GetAmmoTableData(wp)->maxHeat) continue;
 
 		// if you have the weapon
 		if( COM_BitCheck( pm->ps->weapons, wp) ) {
 			// and it's hot
 			if(pm->ps->weapHeat[wp]) {
-				if( pm->skill[SK_HEAVY_WEAPONS] >= 2 && pm->ps->stats[STAT_PLAYER_CLASS] == PC_SOLDIER ) {
+				if( pm->nitmodReloadEnabled ?
+					((pm->nitmodPackSkillMasks[SK_HEAVY_WEAPONS] & 4u) &&
+					 (wp == WP_PANZERFAUST || wp == WP_FLAMETHROWER || wp == WP_MOBILE_MG42 || wp == WP_MORTAR)) :
+					(pm->skill[SK_HEAVY_WEAPONS] >= 2 && pm->ps->stats[STAT_PLAYER_CLASS] == PC_SOLDIER) ) {
 					pm->ps->weapHeat[wp] -= ((float)GetAmmoTableData(wp)->coolRate * 2.f * pml.frametime);
 				} else {
 					pm->ps->weapHeat[wp] -= ((float)GetAmmoTableData(wp)->coolRate * pml.frametime);
@@ -3055,6 +3115,7 @@ void PM_AdjustAimSpreadScale( void ) {
 	int		i;
 	float	increase, decrease;		// (SA) was losing lots of precision on slower weapons (scoped)
 	float	viewchange, cmdTime, wpnScale;
+	PM_NITMOD_RefreshWeaponOptions(pm, pm->ps->weapon);
 
 	// all weapons are very inaccurate in zoomed mode
 	if(pm->ps->eFlags & EF_ZOOMING) {
@@ -3089,7 +3150,7 @@ void PM_AdjustAimSpreadScale( void ) {
 	case WP_K43_SCOPE:
 	case WP_GARAND_SCOPE:
 	case WP_FG42SCOPE:
-		if( pm->skill[SK_MILITARY_INTELLIGENCE_AND_SCOPED_WEAPONS] >= 3 ) {
+		if( PM_HasWeaponReward(SK_MILITARY_INTELLIGENCE_AND_SCOPED_WEAPONS, 8u, 3) ) {
 			wpnScale = 5.f;
 		} else {
 			wpnScale = 10.f;
@@ -3142,7 +3203,10 @@ void PM_AdjustAimSpreadScale( void ) {
 		if((!BG_IsScopedWeapon(pm->ps->weapon) && pm->nitmodViewChangeToSpread != 2) ||
 		   (BG_IsScopedWeapon(pm->ps->weapon) && pm->nitmodViewChangeToSpread == 1)) {
 			for( i = 0; i < 2; i++ ) {
-				viewchange += fabs( SHORT2ANGLE(pm->cmd.angles[i]) - SHORT2ANGLE(pm->oldcmd.angles[i]) );
+				/* Original normalizes the packed angles before taking the shortest turn. */
+				viewchange += fabs( AngleSubtract(
+					SHORT2ANGLE(pm->cmd.angles[i] & 65535),
+					SHORT2ANGLE(pm->oldcmd.angles[i] & 65535)) );
 			}
 		}
 
@@ -3205,7 +3269,7 @@ static qboolean PM_NitmodThrowKnife(void) {
 		return qfalse;
 	ammo = BG_FindClipForWeapon(WP_KNIFE);
 	if(pm->ps->weaponstate != WEAPON_FIRINGALT) {
-		if(!(pm->cmd.wbuttons & WBUTTON_ATTACK2) || !(pm->nitmodWeaponFlags & 32) ||
+		if(!(pm->cmd.wbuttons & WBUTTON_ATTACK2) || !(pm->nitmodPackSkillMasks[SK_LIGHT_WEAPONS] & 32u) ||
 		   pm->ps->ammoclip[ammo] < 2 || pm->ps->leanf != 0 ||
 		   (pm->ps->eFlags & EF_PRONE_MOVING) || pm->ps->weaponTime > 0 ||
 		   pm->ps->weaponDelay > 0 || pm->cmd.weapon != WP_KNIFE ||
@@ -3250,6 +3314,35 @@ static qboolean PM_NitmodThrowKnife(void) {
 	pm->ps->nextWeapon = pm->cmd.weapon;
 	pm->ps->holdable[1] = 0;
 	return qtrue;
+}
+
+/* Original PM_Weapon: g_weapons 256 expands lean-fire weapons, while
+ * 4096 permits underwater fire except Panzer/Flamer/rifle grenades/mobile MG. */
+static qboolean PM_NitmodLeanFireAllowed(qboolean delayedFire) {
+ int w=pm->ps->weapon;
+ if(w==WP_GRENADE_LAUNCHER || w==WP_GRENADE_PINEAPPLE || w==WP_SMOKE_BOMB ||
+    w==WP_BOMB || w==WP_POISON_BOMB) return qtrue;
+ if(w==WP_KNIFE && pm->ps->weaponstate==WEAPON_FIRINGALT && (delayedFire || pm->ps->weaponDelay>0)) return qtrue;
+ if(!(pm->nitmodWeaponFlags&256)) return qfalse;
+ switch(w) {
+ case WP_KNIFE: case WP_LUGER: case WP_MP40: case WP_COLT: case WP_THOMPSON:
+ case WP_STEN: case WP_SILENCER: case WP_SILENCED_COLT:
+ case WP_AKIMBO_COLT: case WP_AKIMBO_LUGER:
+ case WP_AKIMBO_SILENCEDCOLT: case WP_AKIMBO_SILENCEDLUGER: return qtrue;
+ default: return qfalse;
+ }
+}
+static qboolean PM_NitmodUnderwaterFireAllowed(void) {
+ int w=pm->ps->weapon;
+ if(pm->nitmodWeaponFlags&4096)
+  return w!=WP_PANZERFAUST && w!=WP_FLAMETHROWER && w!=WP_GPG40 && w!=WP_M7 && w!=WP_MOBILE_MG42;
+ switch(w) {
+ case WP_KNIFE: case WP_GRENADE_LAUNCHER: case WP_GRENADE_PINEAPPLE:
+ case WP_PLIERS: case WP_SMOKE_BOMB: case WP_MEDIC_SYRINGE: case WP_DYNAMITE:
+ case WP_LANDMINE: case WP_SATCHEL: case WP_POISON_SYRINGE: case WP_BOMB:
+ case WP_TRIPMINE: case WP_POISON_BOMB: case WP_POISON_MINE: return qtrue;
+ default: return qfalse;
+ }
 }
 
 static void PM_Weapon( void ) {
@@ -3795,7 +3888,8 @@ static void PM_Weapon( void ) {
 	 * (throwing knife) or by reload handling. Mixing the two bit namespaces
 	 * made +attack2 alias BUTTON_ATTACK because both constants use bit zero. */
 	if((!(pm->cmd.buttons & BUTTON_ATTACK) && !delayedFire) ||
-	  (pm->ps->leanf != 0 && pm->ps->weapon != WP_GRENADE_LAUNCHER && pm->ps->weapon != WP_GRENADE_PINEAPPLE && pm->ps->weapon != WP_SMOKE_BOMB))
+	  (pm->ps->leanf != 0 && (pm->nitmodReloadEnabled ? !PM_NitmodLeanFireAllowed(delayedFire) :
+	   (pm->ps->weapon != WP_GRENADE_LAUNCHER && pm->ps->weapon != WP_GRENADE_PINEAPPLE && pm->ps->weapon != WP_SMOKE_BOMB))))
 	{
 		pm->ps->weaponTime	= 0;
 		pm->ps->weaponDelay	= 0;
@@ -3833,13 +3927,14 @@ static void PM_Weapon( void ) {
 
 	// player is underwater - no fire
 	if(pm->waterlevel == 3) {
-		if(	pm->ps->weapon != WP_KNIFE &&
+		if( pm->nitmodReloadEnabled ? !PM_NitmodUnderwaterFireAllowed() :
+			(pm->ps->weapon != WP_KNIFE &&
 			pm->ps->weapon != WP_GRENADE_LAUNCHER &&
 			pm->ps->weapon != WP_GRENADE_PINEAPPLE &&
 			pm->ps->weapon != WP_DYNAMITE &&
 			pm->ps->weapon != WP_LANDMINE &&
 			pm->ps->weapon != WP_TRIPMINE &&
-			pm->ps->weapon != WP_SMOKE_BOMB ) {
+			pm->ps->weapon != WP_SMOKE_BOMB) ) {
 				PM_AddEvent(EV_NOFIRE_UNDERWATER);	// event for underwater 'click' for nofire
 				pm->ps->weaponTime	= 500;
 				pm->ps->weaponDelay	= 0;			// avoid insta-fire after water exit on delayed weapon attacks
@@ -4343,12 +4438,14 @@ static void PM_Weapon( void ) {
 
 	case WP_MP40:
 	case WP_THOMPSON:
-		addTime = GetAmmoTableData(pm->ps->weapon)->nextShotTime;
+		/* Original 2dddb: FastShoot overrides the script shot interval. */
+		addTime = pm->nitmodReloadEnabled && (pm->nitmodWeaponFlags&1024) ? 110 : GetAmmoTableData(pm->ps->weapon)->nextShotTime;
 		aimSpreadScaleAdd = 15+rand()%10;	// (SA) new values for DM
 		break;
 
 	case WP_STEN:
-		addTime = GetAmmoTableData(pm->ps->weapon)->nextShotTime;
+		/* Original 2dddb: FastShoot overrides the script shot interval. */
+		addTime = pm->nitmodReloadEnabled && (pm->nitmodWeaponFlags&1024) ? 110 : GetAmmoTableData(pm->ps->weapon)->nextShotTime;
 		aimSpreadScaleAdd = 15+rand()%10;	// (SA) new values for DM
 		break;
 
@@ -4387,6 +4484,16 @@ static void PM_Weapon( void ) {
 	}
 	
 	// set weapon recoil
+	PM_NITMOD_RefreshWeaponOptions(pm, pm->ps->weapon);
+	/* Original Nitmod applies these weaponDef values after the native weapon
+	 * switch. A zero base value is the sentinel for retaining ET behavior. */
+	if(pm->nitmodSpreadScaleAdd != 0) {
+		aimSpreadScaleAdd = pm->nitmodSpreadScaleAdd;
+		if(pm->nitmodSpreadScaleAddRand != 0) {
+			aimSpreadScaleAdd += rand() % pm->nitmodSpreadScaleAddRand;
+		}
+	}
+
 	pm->pmext->lastRecoilDeltaTime = 0;
 	if( pm->nitmodCustomRecoilEnabled ) {
 		nitmodWeaponRecoil_t recoil;
@@ -4402,10 +4509,10 @@ static void PM_Weapon( void ) {
 	case WP_GARAND_SCOPE:
 	case WP_K43_SCOPE:
 		pm->pmext->weapRecoilTime = pm->cmd.serverTime;
-		pm->pmext->weapRecoilDuration = 300;
-		pm->pmext->weapRecoilYaw = crandom() * .5f;
+		pm->pmext->weapRecoilDuration = pm->nitmodReloadEnabled && pm->nitmodWarMode == 2 ? 170 : 300;
+		pm->pmext->weapRecoilYaw = pm->nitmodReloadEnabled ? (float)(cos((double)pm->cmd.serverTime) * .5) : crandom() * .5f;
 
-		if( pm->skill[SK_MILITARY_INTELLIGENCE_AND_SCOPED_WEAPONS] >= 3 ) {
+		if( PM_HasWeaponReward(SK_MILITARY_INTELLIGENCE_AND_SCOPED_WEAPONS, 8u, 3) || (pm->nitmodReloadEnabled && pm->nitmodWarMode == 2) ) {
 			pm->pmext->weapRecoilPitch = .25f;
 		} else {
 			pm->pmext->weapRecoilPitch = .5f;
@@ -4415,11 +4522,11 @@ static void PM_Weapon( void ) {
 		pm->pmext->weapRecoilTime = pm->cmd.serverTime;
 		pm->pmext->weapRecoilDuration = 200;
 		if( pm->ps->pm_flags & PMF_DUCKED || pm->ps->eFlags & EF_PRONE ) {
-			pm->pmext->weapRecoilYaw = crandom() * .5f;
-			pm->pmext->weapRecoilPitch = .45f * random() * .15f;
+			pm->pmext->weapRecoilYaw = pm->nitmodReloadEnabled ? (float)(cos((double)pm->cmd.serverTime) * .5) : crandom() * .5f;
+			pm->pmext->weapRecoilPitch = pm->nitmodReloadEnabled ? (float)(fabs(cos((double)pm->cmd.serverTime)) * (double).45f * (double).15f) : .45f * random() * .15f;
 		} else {
-			pm->pmext->weapRecoilYaw = crandom() * .25f;
-			pm->pmext->weapRecoilPitch = .75f * random() * .2f;
+			pm->pmext->weapRecoilYaw = pm->nitmodReloadEnabled ? (float)(cos((double)pm->cmd.serverTime) * .25) : crandom() * .25f;
+			pm->pmext->weapRecoilPitch = pm->nitmodReloadEnabled ? (float)(fabs(cos((double)pm->cmd.serverTime)) * (double).75f * (double).2f) : .75f * random() * .2f;
 		}
 		break;
 	/*case WP_MOBILE_MG42_SET:
@@ -4430,9 +4537,9 @@ static void PM_Weapon( void ) {
 		pm->pmext->weapRecoilTime = pm->cmd.serverTime;
 		pm->pmext->weapRecoilDuration = 100;
 		pm->pmext->weapRecoilYaw = 0.f;
-		pm->pmext->weapRecoilPitch = .45f * random() * .15f;
+		pm->pmext->weapRecoilPitch = pm->nitmodReloadEnabled ? (float)(fabs(cos((double)pm->cmd.serverTime)) * (double).45f * (double).15f) : .45f * random() * .15f;
 
-		if( pm->skill[SK_MILITARY_INTELLIGENCE_AND_SCOPED_WEAPONS] >= 3 ) {
+		if( PM_HasWeaponReward(SK_MILITARY_INTELLIGENCE_AND_SCOPED_WEAPONS, 8u, 3) ) {
 			pm->pmext->weapRecoilPitch *= .5f;
 		}
 		break;
@@ -4445,9 +4552,9 @@ static void PM_Weapon( void ) {
 	case WP_AKIMBO_COLT:
 	case WP_AKIMBO_SILENCEDCOLT:
 		pm->pmext->weapRecoilTime = pm->cmd.serverTime;
-		pm->pmext->weapRecoilDuration = pm->skill[SK_LIGHT_WEAPONS] >= 3 ? 70 : 100;
+		pm->pmext->weapRecoilDuration = PM_HasWeaponReward(SK_LIGHT_WEAPONS, 8u, 3) ? 70 : 100;
 		pm->pmext->weapRecoilYaw = 0.f;//crandom() * .1f;
-		pm->pmext->weapRecoilPitch = pm->skill[SK_LIGHT_WEAPONS] >= 3 ? .25f * random() * .15f : .45f * random() * .15f;
+		pm->pmext->weapRecoilPitch = PM_HasWeaponReward(SK_LIGHT_WEAPONS, 8u, 3) ? .25f * random() * .15f : .45f * random() * .15f;
 		break;
 	default:
 		pm->pmext->weapRecoilTime = 0;
@@ -4456,14 +4563,6 @@ static void PM_Weapon( void ) {
 	}
 
 recoil_complete:
-	/* Original Nitmod applies these weaponDef values after the native weapon
-	 * switch. A zero base value is the sentinel for retaining ET behavior. */
-	if(pm->nitmodSpreadScaleAdd != 0) {
-		aimSpreadScaleAdd = pm->nitmodSpreadScaleAdd;
-		if(pm->nitmodSpreadScaleAddRand != 0) {
-			aimSpreadScaleAdd += rand() % pm->nitmodSpreadScaleAddRand;
-		}
-	}
 
 	// check for overheat
 
@@ -4472,9 +4571,16 @@ recoil_complete:
 		// it is overheating
 		if(pm->ps->weapHeat[pm->ps->weapon] >= GetAmmoTableData(pm->ps->weapon)->maxHeat) {
 			pm->ps->weapHeat[pm->ps->weapon] = GetAmmoTableData(pm->ps->weapon)->maxHeat;	// cap heat to max
-			PM_AddEvent( EV_WEAP_OVERHEAT);
-//			PM_StartWeaponAnim(WEAP_IDLE1);	// removed.  client handles anim in overheat event
-			addTime = 2000;		// force "heat recovery minimum" to 2 sec right now
+			/* Original 2d472: only STEN and the two mobile MG variants
+             * emit overheat/recovery here. Heat itself still reaches max. */
+            if(!pm->nitmodReloadEnabled ||
+               (pm->ps->weapon==WP_STEN && !(pm->nitmodWeaponFlags&32)) ||
+               ((pm->ps->weapon==WP_MOBILE_MG42 || pm->ps->weapon==WP_MOBILE_MG42_SET) && !(pm->nitmodWeaponFlags&64))) {
+                PM_AddEvent(EV_WEAP_OVERHEAT);
+                addTime=pm->nitmodReloadEnabled && (pm->nitmodPackSkillMasks[SK_EXPLOSIVES_AND_CONSTRUCTION]&32u) ? 1500 : 2000;
+            }
+            /* Original Engineering reward32 shortens recovery even for STEN. */
+            /* Original default recovery is 2000 ms. */
 		}
 	}
 
@@ -4485,7 +4591,7 @@ recoil_complete:
 	if (pm->ps->aimSpreadScaleFloat > 255)
 		pm->ps->aimSpreadScaleFloat = 255;
 
-	if( pm->skill[SK_MILITARY_INTELLIGENCE_AND_SCOPED_WEAPONS] >= 3 && pm->ps->stats[STAT_PLAYER_CLASS] == PC_COVERTOPS ) {
+	if( PM_HasWeaponReward(SK_MILITARY_INTELLIGENCE_AND_SCOPED_WEAPONS, 8u, 3) && pm->ps->stats[STAT_PLAYER_CLASS] == PC_COVERTOPS ) {
 		pm->ps->aimSpreadScaleFloat *= .5f;
 	}
 
@@ -5243,7 +5349,9 @@ void PM_Sprint( void ) {
 		// JPW NERVE -- sprint time tuned for multiplayer
 		else  {
 			// JPW NERVE adjusted for framerate independence
-			pm->pmext->sprintTime -= 5000*pml.frametime;
+			/* Original PM_Sprint: Battle Sense reward 32 reduces sprint drain. */
+			pm->pmext->sprintTime -= (pm->nitmodReloadEnabled &&
+				(pm->nitmodPackSkillMasks[SK_BATTLE_SENSE] & 32u) ? 4000 : 5000)*pml.frametime;
 		}
 		// jpw
 
@@ -5268,13 +5376,13 @@ void PM_Sprint( void ) {
 			int rechargebase = 500;
 
 #ifdef GAMEDLL // Gordon: FIXME: predict leadership clientside
-			if( pm->leadership ) {
+			if( !pm->nitmodReloadEnabled && pm->leadership ) {
 				rechargebase = 1000;
 			} else 
 #endif // GAMEDLL
 			{
-				if( pm->skill[SK_BATTLE_SENSE] >= 2 )
-					rechargebase *= 1.6f;
+				if( PM_HasWeaponReward(SK_BATTLE_SENSE, 4u, 2) )
+					rechargebase = 800;
 			}
 
 			pm->pmext->sprintTime += rechargebase*pml.frametime;		// JPW NERVE adjusted for framerate independence
@@ -5442,6 +5550,7 @@ void PmoveSingle (pmove_t *pmove) {
 	BG_AnimUpdatePlayerStateConditions( pmove );
 
 	pm = pmove;
+	PM_NITMOD_RefreshWeaponOptions(pm, pm->ps->weapon);
 
 	if( pm->ps->pm_type == PM_PLAYDEAD ) {
 		PM_NITMOD_TogglePlayDead();
@@ -5856,6 +5965,11 @@ int Pmove (pmove_t *pmove) {
 		pmove->ps->curWeapHeat = 255;
 	else if (pmove->ps->curWeapHeat < 0)
 		pmove->ps->curWeapHeat = 0;
+    else if(pmove->nitmodReloadEnabled &&
+       ((pmove->ps->weapon==WP_STEN && (pmove->nitmodWeaponFlags&32)) ||
+        ((pmove->ps->weapon==WP_MOBILE_MG42 || pmove->ps->weapon==WP_MOBILE_MG42_SET) && (pmove->nitmodWeaponFlags&64))))
+        pmove->ps->curWeapHeat=0;
+
 
 	//PM_CheckStuck();
 

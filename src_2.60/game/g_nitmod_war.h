@@ -5,6 +5,7 @@ struct gentity_s;
 typedef struct {
     int stripped;
 } nitmodWarState_t;
+void G_NITMOD_CheckClientWeapons(struct gentity_s *entity,int warMode);
 void G_NITMOD_ResetWarState( nitmodWarState_t *state );
 int G_NITMOD_CheckWarEntry( struct gentity_s *entity, int warMode );
 int G_NITMOD_ApplyWarEntry( struct gentity_s *entity, nitmodWarState_t *state,

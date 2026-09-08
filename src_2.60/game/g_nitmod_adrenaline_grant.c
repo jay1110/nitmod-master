@@ -1,5 +1,6 @@
 #include "g_local.h"
 #include "g_nitmod_abilities.h"
+#include "g_nitmod_etbot_lifecycle.h"
 #include <limits.h>
 
 int G_NITMOD_GrantAdrenalineUpgrade( gclient_t *client,
@@ -16,6 +17,9 @@ int G_NITMOD_GrantAdrenalineUpgrade( gclient_t *client,
     client->ps.weapons[WP_MEDIC_ADRENALINE / 32] |= 1 << (WP_MEDIC_ADRENALINE % 32);
     client->ps.ammo[WP_MEDIC_ADRENALINE] = 0;
     client->ps.ammoclip[WP_MEDIC_ADRENALINE] = clip;
+    /* Original AddWeaponToPlayer 0x49e53/0x49e65 notifies on every grant,
+     * including replacement of already-owned inventory. */
+    Bot_Event_AddWeapon(client->ps.clientNum, Bot_WeaponGameToBot(WP_MEDIC_ADRENALINE));
     return 1;
 }
 
@@ -34,5 +38,8 @@ int G_NITMOD_GrantAdrenalineSpawn( gclient_t *client,
     client->ps.weapons[WP_MEDIC_ADRENALINE / 32] |= 1 << (WP_MEDIC_ADRENALINE % 32);
     client->ps.ammo[WP_MEDIC_ADRENALINE] = defaults->defaultStartingAmmo;
     client->ps.ammoclip[WP_MEDIC_ADRENALINE] = clip + bonus;
+    /* Original AddWeaponToPlayer 0x49e53/0x49e65 notifies on every grant,
+     * including replacement of already-owned inventory. */
+    Bot_Event_AddWeapon(client->ps.clientNum, Bot_WeaponGameToBot(WP_MEDIC_ADRENALINE));
     return 1;
 }

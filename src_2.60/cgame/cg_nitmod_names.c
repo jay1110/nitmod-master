@@ -114,7 +114,7 @@ static qboolean CG_NitmodSpectatorNamesEnabled(void) {
 }
 
 static qboolean CG_NitmodDynamiteNamesEnabled(void) {
-    return NITMOD_UsesOriginalProtocol() && cg.snap && cg_draw2D.integer &&
+    return NITMOD_UsesNitmodHud() && cg.snap && cg_draw2D.integer &&
         cg.clientNum >= 0 && cg.clientNum < MAX_CLIENTS &&
         cgs.clientinfo[cg.clientNum].team == TEAM_SPECTATOR &&
         cgs.clientinfo[cg.clientNum].nitmodShoutcaster;

@@ -271,7 +271,7 @@ int CG_CalcFov( void ) {
 	}
 
 	/* Original Nitmod overloads the ET camera bit with poison state. */
-	if(NITMOD_UsesOriginalProtocol() && (cg.predictedPlayerState.eFlags & NITMOD_EF_POISONED)) {
+	if(NITMOD_UsesNitmodHud() && (cg.predictedPlayerState.eFlags & NITMOD_EF_POISONED)) {
 		phase = cg.time / 1000.0 * .3 * M_PI * 2;
 		v = 12 * sin(phase);
 		fov_x += v; fov_y -= v;

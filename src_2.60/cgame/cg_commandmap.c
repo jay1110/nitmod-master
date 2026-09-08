@@ -484,7 +484,7 @@ void CG_DrawMapEntity( mapEntityData_t *mEnt, float x, float y, float w, float h
 	vec2_t icon_extends, icon_pos, string_pos;
 	int customimage = 0;
 	oidInfo_t* oidInfo = NULL;
-	qboolean original = NITMOD_UsesOriginalProtocol();
+	qboolean original = NITMOD_UsesNitmodHud();
 	if(!mEnt || !snap) return;
 
 	switch( mEnt->type ) {
@@ -990,7 +990,7 @@ void CG_DrawMap( float x, float y, float w, float h, int mEntFilter, mapScissor_
 
 	for(i = 0, mEnt = &mapEntities[0]; i < mapEntityCount; i++, mEnt++ ) {
 		if( mEnt->team != CG_LimboPanel_GetRealTeam() &&
-			!(NITMOD_UsesOriginalProtocol() && snap->ps.persistant[PERS_TEAM] == TEAM_SPECTATOR) ) {
+			!(NITMOD_UsesNitmodHud() && snap->ps.persistant[PERS_TEAM] == TEAM_SPECTATOR) ) {
 			continue;
 		}
 
@@ -1008,7 +1008,7 @@ void CG_DrawMap( float x, float y, float w, float h, int mEntFilter, mapScissor_
 
 	for(i = 0, mEnt = &mapEntities[0]; i < mapEntityCount; i++, mEnt++ ) {
 		if( mEnt->team != CG_LimboPanel_GetRealTeam() &&
-			!(NITMOD_UsesOriginalProtocol() && snap->ps.persistant[PERS_TEAM] == TEAM_SPECTATOR) ) {
+			!(NITMOD_UsesNitmodHud() && snap->ps.persistant[PERS_TEAM] == TEAM_SPECTATOR) ) {
 			continue;
 		}
 

@@ -747,14 +747,14 @@ static void CG_OffsetFirstPersonView( void ) {
 	CG_StepOffset();
 
 	CG_ZoomSway();
-	if(NITMOD_UsesOriginalProtocol()) {
+	if(NITMOD_UsesNitmodHud()) {
 		CG_NitmodViewOffsets(cg.time, cg.predictedPlayerState.eFlags,
 			NITMOD_GameState()->weapons, cg.predictedPlayerState.leanf,
 			cg.refdefViewAngles, cg.refdef_current->vieworg);
 	}
 
 	// adjust for 'lean'
-	if(!NITMOD_UsesOriginalProtocol() && cg.predictedPlayerState.leanf != 0)
+	if(!NITMOD_UsesNitmodHud() && cg.predictedPlayerState.leanf != 0)
 	{
 		//add leaning offset
 		vec3_t	right;
@@ -1671,6 +1671,12 @@ void CG_DrawActiveFrame( int serverTime, stereoFrame_t stereoView, qboolean demo
 	if( !cg.weaponSelect && cg.snap->ps.weapon) {
 		cg.weaponSelect = cg.snap->ps.weapon;
 		cg.weaponSelectTime = cg.time;
+	}
+
+	/* Original CG_DrawActiveFrame also records a join into an active match. */
+	if(NITMOD_UsesNitmodHud() && !cg.clientFrame && !cg.demoPlayback &&
+	   cgs.gamestate == GS_PLAYING && (cg_autoAction.integer & AA_DEMORECORD)) {
+		CG_autoRecord_f();
 	}
 
 	if (cg.weaponSelect == WP_FG42SCOPE) {

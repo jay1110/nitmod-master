@@ -34,25 +34,23 @@ extern void BotRecordDeath( int client, int enemy );
 
 extern vec3_t muzzleTrace;
 
-/* Recovered scoped-rifle branch in G_Damage (qagame 0x00079952).  In sniper
- * war, option bit 2 selects original instant-kill damage.  With
- * the option disabled, the original level-five scoped-weapon reward turns a
- * live target's headshot damage into its current health. */
-static void G_NITMOD_ApplySniperWarHeadshot( gentity_t *targ,
+/* Original G_Damage0x6a6ed..0x6a722: scoped reward32 applies in every
+ * war mode. Sniper war additionally offers instant-kill option2 and its
+ * dedicated hit sound (0x6aa91..0x6aab5). */
+static void G_NITMOD_ApplyScopedHeadshot( gentity_t *targ,
 		gentity_t *attacker, int mod, int *damage, int *dflags ) {
 	unsigned int options;
 	unsigned int scopedRewards;
 
 	if ( !targ || !targ->client || !attacker || !attacker->client ||
 		!damage || !dflags ||
-		G_NITMOD_ConfiguredWarMode() != 2 ||
 		( mod != MOD_K43_SCOPE && mod != MOD_GARAND_SCOPE ) ) {
 		return;
 	}
 
 	options = (unsigned int)G_NITMOD_LegacyCvarInteger(
 		"n_sniperWarOptions", 7 );
-	if ( options & 2u ) {
+	if ( G_NITMOD_ConfiguredWarMode() == 2 && (options & 2u) ) {
 		*dflags |= DAMAGE_NITMOD_INSTANT_KILL;
 	} else {
 		scopedRewards = attacker->client->sess.nitmodSkillMasks[
@@ -62,7 +60,8 @@ static void G_NITMOD_ApplySniperWarHeadshot( gentity_t *targ,
 		}
 	}
 
-	NITMOD_SendHitSound( attacker->s.number, NITMOD_HIT_SOUND_HEAD );
+	if(G_NITMOD_ConfiguredWarMode() == 2)
+		NITMOD_SendHitSound( attacker->s.number, NITMOD_HIT_SOUND_HEAD );
 }
 
 /*
@@ -959,6 +958,7 @@ void player_die( gentity_t *self, gentity_t *inflictor, gentity_t *attacker, int
 			// record the death animation to be used later on by the corpse
 			self->client->torsoDeathAnim = self->client->ps.torsoAnim;
 			self->client->legsDeathAnim = self->client->ps.legsAnim;
+			self->client->nitmodDeathAnimEndTime = (int)((unsigned int)level.time + (unsigned int)self->client->ps.pm_time);
 
 			G_AddEvent( self, EV_DEATH1 + 1, killer );
 
@@ -1838,7 +1838,7 @@ void G_Damage( gentity_t *targ, gentity_t *inflictor, gentity_t *attacker,  vec3
 
 		targ->client->ps.eFlags |= EF_HEADSHOT;
 
-		G_NITMOD_ApplySniperWarHeadshot( targ, attacker, mod, &take, &dflags );
+		G_NITMOD_ApplyScopedHeadshot( targ, attacker, mod, &take, &dflags );
 
 		// OSP - Record the headshot
 		if(client && attacker && attacker->client

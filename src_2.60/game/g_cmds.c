@@ -764,7 +764,7 @@ void Cmd_Kill_f( gentity_t *ent )
 
 /* Original G_DropItems 0x550b0: a living team change drops only the
  * objective, inheriting player velocity. This is not a weapon drop. */
-static void G_NITMOD_DropTeamChangeObjective(gentity_t *ent) {
+void G_NITMOD_DropTeamChangeObjective(gentity_t *ent) {
 	gitem_t *item = NULL;
 	gentity_t *dropped;
 	vec3_t origin, velocity, angles, forward;
@@ -870,6 +870,8 @@ qboolean SetTeam( gentity_t *ent, char *s, qboolean force, weapon_t w1, weapon_t
 	
 	G_TeamDataForString( s, client - level.clients, &team, &specState, &specClient );
 
+	oldTeam = client->sess.sessionTeam;
+
 	/* Original SetTeam 0x5d814..0x5d866: force does not bypass this
 	 * millisecond gate. Leaving a playing team or stopping follow is allowed. */
 	if( !client->pers.nitmodDemoClient ) {
@@ -880,63 +882,63 @@ qboolean SetTeam( gentity_t *ent, char *s, qboolean force, weapon_t w1, weapon_t
 		      client->sess.spectatorState != SPECTATOR_FOLLOW)) ) return qfalse;
 		if( team == client->sess.sessionTeam &&
 		    client->sess.spectatorState != SPECTATOR_FOLLOW ) return qfalse;
-	}
 
-	if( team != TEAM_SPECTATOR ) {
-		// Ensure the player can join
-		if(!G_teamJoinCheck(team, ent)) {
-			// Leave them where they were before the command was issued
-			return(qfalse);
-		}
-
-		if(g_noTeamSwitching.integer && (team != ent->client->sess.sessionTeam && ent->client->sess.sessionTeam != TEAM_SPECTATOR ) && g_gamestate.integer == GS_PLAYING && !force ) {
-			trap_SendServerCommand( clientNum, "cp \"You cannot switch during a match, please wait until the round ends.\n\"" );
-			return qfalse;	// ignore the request
-		}
-
-		if ( ( (g_gametype.integer == GT_WOLF_LMS && g_lms_teamForceBalance.integer) || g_teamForceBalance.integer ) && !force ) {
-			int		counts[TEAM_NUM_TEAMS];
-
-			counts[TEAM_ALLIES] = TeamCount( ent-g_entities, TEAM_ALLIES );
-			counts[TEAM_AXIS] = TeamCount( ent-g_entities, TEAM_AXIS );
-
-			// We allow a spread of one
-			if ( team == TEAM_AXIS && counts[TEAM_AXIS] - counts[TEAM_ALLIES] >= 1 ) {
-				CP("cp \"The Axis has too many players.\n\"");
-				return qfalse; // ignore the request
-			}
-			if ( team == TEAM_ALLIES && counts[TEAM_ALLIES] - counts[TEAM_AXIS] >= 1 ) {
-				CP("cp \"The Allies have too many players.\n\"");
-				return qfalse; // ignore the request
+		if( team != TEAM_SPECTATOR ) {
+			// Ensure the player can join
+			if(!G_teamJoinCheck(team, ent)) {
+				// Leave them where they were before the command was issued
+				return(qfalse);
 			}
 
-			// It's ok, the team we are switching to has less or same number of players
+			if(g_noTeamSwitching.integer && (team != ent->client->sess.sessionTeam && ent->client->sess.sessionTeam != TEAM_SPECTATOR ) && g_gamestate.integer == GS_PLAYING && !force ) {
+				trap_SendServerCommand( clientNum, "cp \"You cannot switch during a match, please wait until the round ends.\n\"" );
+				return qfalse;	// ignore the request
+			}
+
+			if ( ( (g_gametype.integer == GT_WOLF_LMS && g_lms_teamForceBalance.integer) || g_teamForceBalance.integer ) && !force ) {
+				int		counts[TEAM_NUM_TEAMS];
+
+				counts[TEAM_ALLIES] = TeamCount( ent-g_entities, TEAM_ALLIES );
+				counts[TEAM_AXIS] = TeamCount( ent-g_entities, TEAM_AXIS );
+
+				// We allow a spread of one
+				if ( team == TEAM_AXIS && counts[TEAM_AXIS] - counts[TEAM_ALLIES] >= 1 ) {
+					CP("cp \"The Axis has too many players.\n\"");
+					return qfalse; // ignore the request
+				}
+				if ( team == TEAM_ALLIES && counts[TEAM_ALLIES] - counts[TEAM_AXIS] >= 1 ) {
+					CP("cp \"The Allies have too many players.\n\"");
+					return qfalse; // ignore the request
+				}
+
+				// It's ok, the team we are switching to has less or same number of players
+			}
 		}
-	}
 
-	if ( g_maxGameClients.integer > 0 && level.numNonSpectatorClients >= g_maxGameClients.integer ) {
-		team = TEAM_SPECTATOR;
-	}
+		if ( g_maxGameClients.integer > 0 && level.numNonSpectatorClients >= g_maxGameClients.integer ) {
+			team = TEAM_SPECTATOR;
+		}
 
-	//
-	// decide if we will allow the change
-	//
-	oldTeam = client->sess.sessionTeam;
-	if ( team == oldTeam && team != TEAM_SPECTATOR ) {
-		return qfalse;
-	}
+		//
+		// decide if we will allow the change
+		//
+		if ( team == oldTeam && team != TEAM_SPECTATOR ) {
+			return qfalse;
+		}
 
-	// NERVE - SMF - prevent players from switching to regain deployments
-	if( g_gametype.integer != GT_WOLF_LMS ) {
-		if( ( g_maxlives.integer > 0 || 
-			( g_alliedmaxlives.integer > 0 && ent->client->sess.sessionTeam == TEAM_ALLIES ) || 
-			( g_axismaxlives.integer > 0 && ent->client->sess.sessionTeam == TEAM_AXIS ) ) 
+		// NERVE - SMF - prevent players from switching to regain deployments
+		if( g_gametype.integer != GT_WOLF_LMS ) {
+			if( ( g_maxlives.integer > 0 ||
+				( g_alliedmaxlives.integer > 0 && ent->client->sess.sessionTeam == TEAM_ALLIES ) ||
+				( g_axismaxlives.integer > 0 && ent->client->sess.sessionTeam == TEAM_AXIS ) )
 			
-			&& ent->client->ps.persistant[PERS_RESPAWNS_LEFT] == 0 && oldTeam != TEAM_SPECTATOR ) {
-			CP("cp \"You can't switch teams because you are out of lives.\n\" 3");
-			return qfalse;	// ignore the request
+				&& ent->client->ps.persistant[PERS_RESPAWNS_LEFT] == 0 && oldTeam != TEAM_SPECTATOR ) {
+				CP("cp \"You can't switch teams because you are out of lives.\n\" 3");
+				return qfalse;	// ignore the request
+			}
 		}
-	}
+
+	} /* Demo clients jump to original 0x5d910: admission only is bypassed. */
 
 	// DHM - Nerve :: Force players to wait 30 seconds before they can join a new team.
 	// OSP - changed to 5 seconds
@@ -2386,6 +2388,9 @@ Cmd_Vote_f
 void Cmd_Vote_f( gentity_t *ent ) {
 	char		msg[64];
 	int			num;
+	/* Original samples mute before complaint/fireteam handling, but only
+	 * rejects the eventual ordinary vote. */
+	qboolean muted = G_NITMOD_ClientMuted(ent);
 
 	// DHM - Nerve :: Complaints supercede voting (and share command)
 	if ( ent->client->pers.complaintEndTime > level.time && g_gamestate.integer == GS_PLAYING && g_complaintlimit.integer ) {
@@ -2606,8 +2611,13 @@ void Cmd_Vote_f( gentity_t *ent ) {
 		trap_SendServerCommand( ent-g_entities, "print \"Vote already cast.\n\"" );
 		return;
 	}
-	if ( ent->client->sess.sessionTeam == TEAM_SPECTATOR ) {
+	if ( ent->client->sess.sessionTeam == TEAM_SPECTATOR && !ent->client->sess.referee ) {
 		trap_SendServerCommand( ent-g_entities, "print \"Not allowed to vote as spectator.\n\"" );
+		return;
+	}
+
+	if(muted) {
+		trap_SendServerCommand(ent-g_entities, "print \"Not allowed to vote when muted.\n\"");
 		return;
 	}
 

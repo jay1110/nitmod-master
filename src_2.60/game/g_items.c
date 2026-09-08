@@ -346,11 +346,12 @@ int Add_Ammo(gentity_t *ent, int weapon, int count, qboolean fillClip) {
 		fillClip = qtrue;
 	}
 
-	if( fillClip ) {
-		Fill_Clip(&ent->client->ps, weapon);
-	}
-
-	if( ammoweap == WP_PANZERFAUST || ammoweap == WP_FLAMETHROWER ) {
+	/* Original 0x71bb0 transfers existing reserve for these four tools;
+	 * it does not first credit the supplied count. */
+	if(ammoweap == WP_GRENADE_LAUNCHER || ammoweap == WP_GRENADE_PINEAPPLE ||
+	   ammoweap == WP_DYNAMITE || ammoweap == WP_SATCHEL_DET) {
+		/* Ownership and forced clip fill were established above. */
+	} else if( ammoweap == WP_PANZERFAUST || ammoweap == WP_FLAMETHROWER ) {
 		ent->client->ps.ammoclip[ammoweap] += count;
 
 		if( ent->client->ps.ammoclip[ammoweap] > maxammo ) {
@@ -363,6 +364,9 @@ int Add_Ammo(gentity_t *ent, int weapon, int count, qboolean fillClip) {
 			ent->client->ps.ammo[ammoweap] = maxammo;	// - ent->client->ps.ammoclip[BG_FindClipForWeapon(weapon)];
 		}
 	}
+
+	/* Original 0x71ab5: fill from the newly credited reserve, after its cap. */
+	if(fillClip) Fill_Clip(&ent->client->ps, weapon);
 
 	if(count >= 999) { // 'really, give /all/'
 		ent->client->ps.ammo[ammoweap] = count;
@@ -518,12 +522,12 @@ qboolean G_CanPickupWeapon( weapon_t weapon, gentity_t* ent ) {
 	if(!ent || !ent->client || weapon < WP_NONE || weapon >= WP_NUM_WEAPONS) return qfalse;
 	decision=G_NITMOD_PickupPrecheck(ent,weapon);
 	if(decision>=0) return decision ? qtrue : qfalse;
-	/* Only validated definitions enable the reconstructed class policy.
-	 * Missing/unsupported files preserve ET's existing pickup fallback. */
-	if(G_NITMOD_PickupClassMask(weapon, &classMask)) {
-		decision = G_NITMOD_CanPickupWeapon(ent, weapon, classMask);
-		if(decision >= 0) return decision ? qtrue : qfalse;
-	}
+	/* Original G_CanPickupWeapon uses the ordinary class allowlist when
+	 * the private definition has no class bits, including missing scripts. */
+	classMask = 0;
+	G_NITMOD_PickupClassMask(weapon, &classMask);
+	decision = G_NITMOD_CanPickupWeapon(ent, weapon, classMask);
+	if(decision >= 0) return decision ? qtrue : qfalse;
 	if( ent->client->sess.sessionTeam == TEAM_AXIS ) {
 		if( weapon == WP_THOMPSON ) {
 			weapon = WP_MP40;

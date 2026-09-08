@@ -2,6 +2,7 @@
 #include <limits.h>
 
 #include "g_local.h"
+#include "g_nitmod_legacy_cvars.h"
 #include "g_nitmod_config.h"
 #include "nitmod_clamp.h"
 
@@ -1627,12 +1628,12 @@ void G_swapTeams(void)
 		G_teamReset(i, qtrue);
 	}
 
-	for(i=0; i<level.numConnectedClients; i++) {
+	/* Original0xdcf6b..0xdcfc0 uses the mutable non-spectator sorted prefix. */
+	for(i=0; i<level.numNonSpectatorClients; i++) {
 		cl = level.clients + level.sortedClients[i];
 
 		if(cl->sess.sessionTeam == TEAM_AXIS) cl->sess.sessionTeam = TEAM_ALLIES;
-		else if(cl->sess.sessionTeam == TEAM_ALLIES) cl->sess.sessionTeam = TEAM_AXIS;
-		else continue;
+		else cl->sess.sessionTeam = TEAM_AXIS;
 
 		G_UpdateCharacter(cl);
 		ClientUserinfoChanged(level.sortedClients[i]);
@@ -1698,8 +1699,13 @@ void G_shuffleTeams(void)
 			if( g_landminetimeout.integer ) {
 				G_ExplodeMines( g_entities + sortClients[i] );
 			}
+			if(G_NITMOD_LegacyCvarInteger("n_tripmineTimeout",1))
+				G_NITMOD_RemoveTripmines(g_entities + sortClients[i]);
 			G_FadeItems( g_entities + sortClients[i], MOD_SATCHEL );
 		}
+
+		/* Original0xdd15f drops carried objectives even when the team stays. */
+		G_NITMOD_DropTeamChangeObjective(g_entities + sortClients[i]);
 
 		cl->sess.sessionTeam = cTeam;
 
@@ -1731,12 +1737,14 @@ qboolean G_checkReady(void)
 
 	// Ensure we have enough real players
 	if(level.numNonSpectatorClients >= match_minplayers.integer && level.voteInfo.numVotingClients > 0) {
-		// Step through all active clients
+		/* Original level+0x9c bounds the sorted prefix too. During
+		 * connection transitions that prefix can contain a spectator;
+		 * only connection state is filtered by the original loop. */
 		notReady = 0;
-		for(i=0; i<level.numConnectedClients; i++) {
+		for(i=0; i<level.numNonSpectatorClients; i++) {
 			cl = level.clients + level.sortedClients[i];
 
-			if(cl->pers.connected != CON_CONNECTED || cl->sess.sessionTeam == TEAM_SPECTATOR) continue;
+			if(cl->pers.connected != CON_CONNECTED) continue;
 			else if(cl->pers.ready || (g_entities[level.sortedClients[i]].r.svFlags & SVF_BOT)) ready++;
 			else notReady++;
 		}

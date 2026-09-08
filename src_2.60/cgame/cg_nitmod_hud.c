@@ -193,7 +193,6 @@ void CG_NitmodDrawStatusBars(void) {
         nativeDisplay.stats[6] = cg.pmext.sprintTime;
         nativeDisplay.stats[9] = BG_EffectiveMaxHealth(display);
         nativeDisplay.powerups[11] = display->powerups[PW_ADRENALINE];
-        nativeDisplay.ammo[WP_ARTY] = 0; /* No native support-availability mask. */
         display = &nativeDisplay;
     }
     client = cg.snap->ps.clientNum;
@@ -258,7 +257,7 @@ void CG_NitmodDrawSkillLevels(void) {
         /* Use the normalized snapshot, not the original global pm pointer. */
         skill = CG_NitmodHudSkill(ci->cls, row, &cg.snap->ps);
         if(skill < 0 || skill >= SK_NUM_SKILLS) continue;
-        level = NITMOD_UsesOriginalProtocol() ? ci->nitmodSkillLevels[skill] : ci->skill[skill];
+        level = ci->nitmodSkillLevels[skill];
         if(level < 0) level = 0;
         if(level > 5) level = 5;
         trap_R_SetColor(colorBlack);

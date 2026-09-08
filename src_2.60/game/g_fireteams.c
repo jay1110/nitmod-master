@@ -1,4 +1,5 @@
 #include "g_local.h"
+#include "g_nitmod_etbot_lifecycle.h"
 #include "g_nitmod_config.h"
 
 // Gordon
@@ -250,6 +251,9 @@ void G_RegisterFireteam(/*const char* name,*/ int entityNum) {
 
 //	Q_strncpyz(ft->name, name, 32);
 
+	Bot_Event_FireTeamCreated(entityNum, ft->ident);
+	Bot_Event_JoinedFireTeam(entityNum, leader);
+
 	G_UpdateFireteamConfigString(ft);
 }
 
@@ -288,6 +292,8 @@ void G_AddClientToFireteam( int entityNum, int leaderNum ) {
 		if(ft->joinOrder[i] == -1) {
 			// found a free position
 			ft->joinOrder[i] = entityNum;
+
+			Bot_Event_JoinedFireTeam(entityNum, &g_entities[leaderNum]);
 
 			G_UpdateFireteamConfigString(ft);
 
@@ -328,11 +334,8 @@ void G_RemoveClientFromFireteams( int entityNum, qboolean update, qboolean print
 		return;
 	}
 
-	if( ft->joinOrder[0] != -1 ) {
-		if( g_entities[(int)ft->joinOrder[0]].r.svFlags & SVF_BOT ) {
-			G_RemoveClientFromFireteams( ft->joinOrder[0], qfalse, qfalse );
-		}
-	}
+	/* Original permits a promoted bot leader and notifies the leaving slot. */
+	Bot_Event_LeftFireTeam(entityNum);
 
 	if( print ) {
 		for( i = 0; i < MAX_CLIENTS; i++ ) {
@@ -373,15 +376,12 @@ void G_InviteToFireTeam( int entityNum, int otherEntityNum ) {
 		G_ClientPrintAndReturn( entityNum, "The other player is already on a fireteam" );
 	}
 
-	if( g_entities[otherEntityNum].r.svFlags & SVF_BOT ) {
-		// Gordon: bots auto join
-		G_AddClientToFireteam( otherEntityNum, entityNum );
-	} else {
-		trap_SendServerCommand( entityNum, va( "invitation -1" ) );
-		trap_SendServerCommand( otherEntityNum, va( "invitation %i", entityNum ) );
-		g_entities[otherEntityNum].client->pers.invitationClient =	entityNum;
-		g_entities[otherEntityNum].client->pers.invitationEndTime =	level.time + 20500;
-	}
+	/* Original 0x6ef40: bots receive the invitation callback, not autojoin. */
+	trap_SendServerCommand(entityNum, "invitation -1");
+	trap_SendServerCommand(otherEntityNum, va("invitation %i", entityNum));
+	g_entities[otherEntityNum].client->pers.invitationClient = entityNum;
+	g_entities[otherEntityNum].client->pers.invitationEndTime = level.time + 20500;
+	Bot_Event_InviteFireTeam(entityNum, otherEntityNum);
 }
 
 void G_DestroyFireteam( int entityNum ) {
@@ -397,6 +397,7 @@ void G_DestroyFireteam( int entityNum ) {
 
 	while( ft->joinOrder[0] != -1 ) {
 		if( ft->joinOrder[0] != entityNum ) {
+			Bot_Event_FireTeamDestroyed(ft->joinOrder[0]);
 			trap_SendServerCommand( ft->joinOrder[0], "cpm \"The Fireteam you are on has been disbanded\"\n" );
 		}
 
@@ -430,6 +431,7 @@ void G_WarnFireTeamPlayer( int entityNum, int otherEntityNum ) {
 	}
 
 	trap_SendServerCommand( otherEntityNum, "cpm \"You have been warned by your Fireteam Commander\n\"" );
+	Bot_Event_FireTeam_Warn(entityNum, otherEntityNum);
 }
 
 void G_KickFireTeamPlayer( int entityNum, int otherEntityNum ) {
@@ -456,6 +458,8 @@ void G_KickFireTeamPlayer( int entityNum, int otherEntityNum ) {
 	}
 
 
+	/* Original kick emits Left both here and from the removal consumer. */
+	Bot_Event_LeftFireTeam(otherEntityNum);
 	G_RemoveClientFromFireteams( otherEntityNum, qtrue, qfalse );
 
 	G_ClientPrintAndReturn( otherEntityNum, "You have been kicked from the fireteam" );
@@ -537,6 +541,7 @@ void G_ProposeFireTeamPlayer( int entityNum, int otherEntityNum ) {
 	leader->client->pers.propositionClient =	otherEntityNum;
 	leader->client->pers.propositionClient2 =	entityNum;
 	leader->client->pers.propositionEndTime =	level.time + 20000;
+	Bot_Event_FireTeam_Proposal((int)(leader-g_entities), otherEntityNum);
 }
 
 
