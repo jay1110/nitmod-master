@@ -221,7 +221,10 @@ Add continuous entity effects, like local entity emission and lighting
 ==================
 */
 sfxHandle_t CG_GetGameSound( int index ) {
-	/* NCS slots 0..83 are already registered in the typed sound table. */
+	/* Original CG_GetGameSound reserves 0..83 for its fixed bank. Native
+	 * ordinary events keep ET's dynamic CS_SOUNDS IDs, including low slots. */
+	if(NITMOD_UsesOriginalProtocol() && index>=0 && index<NITMOD_FIXED_SOUND_COUNT)
+		return NITMOD_FixedSound(index);
 	if ( index <= 0 || index >= MAX_SOUNDS || cgs.gameSounds[index] <= 0 ) return 0;
 	return cgs.gameSounds[index];
 }

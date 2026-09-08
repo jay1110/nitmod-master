@@ -4,6 +4,7 @@
 
 #include "g_local.h"
 #include "g_nitmod_config.h"
+#include "g_nitmod_hudstats.h"
 #include "g_nitmod_restrictions.h"
 #include "g_nitmod_legacy_cvars.h"
 #include "nitmod_announcements.h"
@@ -49,6 +50,7 @@ static void NITMOD_SetValidationReason( char *reason, int reasonSize, const char
 }
 
 void G_NITMOD_ClearConfigStrings( void ) {
+	G_NITMOD_ResetHudStats(-1);
 	NITMOD_ClearConfigStore( &nitmodConfigStore );
 	memset( nitmodClientCapabilities, 0, sizeof( nitmodClientCapabilities ) );
 	memset( nitmodLegacyHandshake, 0, sizeof( nitmodLegacyHandshake ) );
@@ -68,6 +70,7 @@ void G_NITMOD_ResetGameplayClient( int clientNum ) {
 	}
 }
 void G_NITMOD_ResetClient( int clientNum ) {
+	G_NITMOD_ResetHudStats(clientNum);
 	if( G_NITMOD_IsValidClient(clientNum) ) {
 		nitmodClientCapabilities[clientNum]=0;
 		nitmodLegacyHandshake[clientNum]=nitmodLegacyStateReady[clientNum]=qfalse;
@@ -96,6 +99,59 @@ void G_NITMOD_CacheClientAddress( gentity_t *ent, const char *address ) {
 	} else {
 		cached->port = 0;
 	}
+}
+
+/* Original ClientConnect IP gate and IsFakepConnection (ELF 0x4ce20).
+ * Retain the original digit/dot and pre-port comparison rules. */
+const char *G_NITMOD_CheckConnection(int clientNum, const char *userinfo,
+    qboolean isBot) {
+    char address[MAX_INFO_STRING], host[16], *port;
+    int i, dots = 0, count = 1, limit;
+    if (isBot || G_NITMOD_IsDemoClient(clientNum,
+        trap_Cvar_VariableIntegerValue("sv_demoState"),
+        trap_Cvar_VariableIntegerValue("sv_demoClients"))) return NULL;
+    Q_strncpyz(address, Info_ValueForKey(userinfo, "ip"), sizeof(address));
+    Q_strncpyz(host, address, sizeof(host));
+    port = strchr(host, ':');
+    if (port) *port = '\0';
+    if (G_NITMOD_LegacyCvarInteger("g_IPChecks", 1) && strcmp(host, "localhost")) {
+        for (i = 0; host[i]; ++i) {
+            if (host[i] == '.') ++dots;
+            else if (host[i] < '0' || host[i] > '9') break;
+        }
+        if (!host[0] || host[i] || dots != 3) {
+            G_LogPrintf("[DROPCLIENT] Client %d Invalid IP Address (%s)\n", clientNum, host);
+            return va("Invalid IP Address (%s)", host);
+        }
+    }
+    if (!Info_ValueForKey(userinfo, "rate")[0]) {
+        G_LogPrintf("[DROPCLIENT] Client %d Invalid connection\n", clientNum);
+        return "Invalid connection!";
+    }
+    if (!strcmp(address, "localhost")) return NULL;
+    limit = trap_Cvar_VariableIntegerValue("ip_max_clients");
+    if (limit <= 0) limit = 3;
+    for (i = 0; i < level.maxclients; ++i) {
+        const char *other, *leftPort, *rightPort;
+        size_t length;
+        if (i == clientNum || !g_entities[i].client ||
+            g_entities[i].client->pers.connected == CON_DISCONNECTED) continue;
+        other = g_entities[i].client->pers.nitmodAddress.address;
+        leftPort = strchr(address, ':');
+        rightPort = strchr(other, ':');
+        if (leftPort || rightPort) {
+            length = leftPort ? (size_t)(leftPort - address) : strlen(address) + 1;
+            if (rightPort && (size_t)(rightPort - other) < length)
+                length = (size_t)(rightPort - other);
+            if (strncmp(address, other, length)) continue;
+        } else if (strcmp(address, other)) continue;
+        if (++count > limit) {
+            G_LogPrintf("[DROPCLIENT] Too many connections from %s\n", address);
+            return va("Only %d connection%s per IP %s allowed on this server!",
+                limit, limit == 1 ? "" : "s", limit == 1 ? "is" : "are");
+        }
+    }
+    return NULL;
 }
 
 /* ClientUserinfoChanged requires 32 characters. The original checksum reads
@@ -203,8 +259,8 @@ void nitrox_stripLeadingSpaces( char *text ) {
 	}
 }
 
-/* Original nitmod_SoundEvent uses private wire event 100, whose eventParm is
- * still an ordinary CS_SOUNDS index.  Keep the shared source tree ABI-safe by
+/* Original nitmod_SoundEvent uses private wire event 100, whose eventParm
+ * addresses the original fixed 84-sound bank. Keep the shared source tree ABI-safe by
  * emitting a named internal event; cgame accepts both this event from the
  * reconstructed qagame and wire 100 from an original Nitmod server. */
 void NITMOD_PlaySoundEvent( gentity_t *source, int soundIndex ) {
@@ -678,7 +734,7 @@ void nitmod_RefreshBaseSettings( void ) {
 	state.dmOptions = g_DMOptions.integer;
 	state.tdmOptions = G_NITMOD_LegacyCvarInteger( "g_TDMOptions", 0 );
 	state.adrenaline = G_NITMOD_LegacyCvarInteger( "g_adrenaline", 0 );
-	state.keepAwards = G_NITMOD_LegacyCvarInteger( "jp_keepAwards", 0 );
+	state.keepAwards = G_NITMOD_LegacyCvarInteger( "g_skills", 0 );
 	state.maxSoldiers = team_maxSoldiers.integer;
 	state.maxMedics = team_maxMedics.integer;
 	state.maxEngineers = team_maxEngineers.integer;

@@ -14,13 +14,16 @@
 #include "cg_nitmod_hints.h"
 #include "cg_nitmod_names.h"
 #include "cg_nitmod_config.h"
+#include "../game/nitmod_build.h"
+#include "cg_nitmod_nxac.h"
+#include "cg_nitmod_nxac_transfer.h"
 #include "cg_nitmod_log.h"
 #include "cg_nitmod_locations.h"
 #include "../game/nitmod_weapon_reload.h"
 
 displayContextDef_t cgDC;
 
-void CG_Init( int serverMessageNum, int serverCommandSequence, int clientNum, qboolean demoPlayback );
+void CG_Init( int serverMessageNum, int serverCommandSequence, int clientNum, qboolean demoPlayback, qboolean isLegacyClient );
 void CG_Shutdown( void );
 qboolean CG_CheckExecKey( int key );
 extern itemDef_t* g_bindItem;
@@ -47,7 +50,7 @@ NITMOD_MODULE_EXPORT int vmMain( int command, int arg0, int arg1, int arg2, int 
 #endif
 	switch ( command ) {
 	case CG_INIT:
-		CG_Init( arg0, arg1, arg2, arg3 );
+		CG_Init( arg0, arg1, arg2, arg3, arg4 );
 		cgs.initing = qfalse;
 		return 0;
 	case CG_SHUTDOWN:
@@ -355,11 +358,7 @@ cvarTable_t		cvarTable[] = {
 	{ &cg_countryflags, "cg_countryflags", "1", CVAR_ARCHIVE },
 	{ &demo_wallHack, "demo_wallHack", "0", CVAR_CHEAT },
 	{ NULL, "etVersion", "", CVAR_USERINFO | CVAR_ROM },
-#ifdef __EMSCRIPTEN__
-	{ NULL, "build", "wasm32", CVAR_USERINFO | CVAR_ROM },
-#else
-	{ NULL, "build", "linux-i386", CVAR_USERINFO | CVAR_ROM },
-#endif
+	{ NULL, "build", NITMOD_BUILD_STRING, CVAR_USERINFO | CVAR_ROM },
 	{ NULL, "r_dynamicTextures", "0", CVAR_ARCHIVE },
 	{ &cg_drawHitbox, "cg_drawHitbox", "0", CVAR_CHEAT },
 	{ &cg_optimizePrediction, "cg_optimizePrediction", "1", CVAR_ARCHIVE },
@@ -475,8 +474,10 @@ cvarTable_t		cvarTable[] = {
 //	{ &cg_smoothClients, "cg_smoothClients", "0", CVAR_USERINFO | CVAR_ARCHIVE},
 	{ &cg_cameraMode, "com_cameraMode", "0", CVAR_CHEAT},
 
-	{ &pmove_fixed, "pmove_fixed", "0", 0},
-	{ &pmove_msec, "pmove_msec", "8", 0},
+	/* Original reserved userinfo cvar: survives cvar_restart. */
+	{ NULL, "x", "", CVAR_USERINFO | CVAR_ROM | CVAR_NORESTART },
+	{ &pmove_fixed, "pmove_fixed", "0", CVAR_ARCHIVE},
+	{ &pmove_msec, "pmove_msec", "8", CVAR_CHEAT},
 
 	{ &cg_noTaunt, "cg_noTaunt", "0", CVAR_ARCHIVE},						// NERVE - SMF
 	{ &cg_voiceSpriteTime, "cg_voiceSpriteTime", "6000", CVAR_ARCHIVE},		// DHM - Nerve
@@ -1117,6 +1118,7 @@ static void CG_RegisterSounds( void ) {
 
 	NITMOD_RegisterPrivateMessageSound();
 	NITMOD_RegisterHitSounds();
+	NITMOD_RegisterFixedSounds();
 
 	// NERVE - SMF - voice commands
 	CG_LoadVoiceChats();
@@ -1366,6 +1368,7 @@ static void CG_RegisterGraphics( void ) {
 	CG_LoadingString( cgs.mapname );
 
 	trap_R_LoadWorldMap( cgs.mapname );
+	nitmodPlayerGlowShader = trap_R_RegisterShader("models/players/common/specGlow");
 
 	CG_LoadingString( "entities" );
 
@@ -2725,9 +2728,10 @@ Will perform callbacks to make the loading info screen update.
 #define DEBUG_INITPROFILE_INIT int elapsed, dbgTime = trap_Milliseconds();
 #define DEBUG_INITPROFILE_EXEC(f) if( developer.integer ) { CG_Printf("^5%s passed in %i msec\n", f, elapsed = trap_Milliseconds()-dbgTime );  dbgTime += elapsed; }
 #endif // _DEBUG
-void CG_Init( int serverMessageNum, int serverCommandSequence, int clientNum, qboolean demoPlayback ) {
+void CG_Init( int serverMessageNum, int serverCommandSequence, int clientNum, qboolean demoPlayback, qboolean isLegacyClient ) {
 	const char	*s;
 	int			i;
+	char engineVersion[256];
 #ifdef _DEBUG
 	DEBUG_INITPROFILE_INIT
 #endif // _DEBUG
@@ -2741,7 +2745,17 @@ void CG_Init( int serverMessageNum, int serverCommandSequence, int clientNum, qb
 	memset( cg_weapons, 0, sizeof(cg_weapons) );
 	memset( cg_items, 0, sizeof(cg_items) );
 	NITMOD_ClearConfigStrings();
+	CG_NITMOD_NxACTransferReset();
+	CG_NITMOD_NxACReset();
 	CG_NitmodResetAutoexec();
+
+	/* Original CG_Init: ETLegacy (fifth argument == 1) owns etVersion.
+	 * Classic engines need the dynamic userinfo registration here. */
+	if(isLegacyClient != qtrue) {
+		trap_Cvar_VariableStringBuffer("version", engineVersion, sizeof(engineVersion));
+		trap_Cvar_Register(NULL, "etVersion", engineVersion, CVAR_USERINFO | CVAR_ROM | CVAR_NORESTART);
+		trap_Cvar_Set("etVersion", engineVersion);
+	}
 
 	cgs.initing = qtrue;
 
@@ -2799,6 +2813,7 @@ void CG_Init( int serverMessageNum, int serverCommandSequence, int clientNum, qb
 
 	CG_ParseServerinfo();
 	NITMOD_UpdateWeaponScripts(qfalse);
+	NITMOD_UpdateSvCvars();
 	CG_ParseWolfinfo();		// NERVE - SMF
 	CG_NitmodMapAutoexec();
 	// RegisterCvars ran before the server protocol was known.
@@ -2962,6 +2977,7 @@ Called before every level change or subsystem restart
 =================
 */
 void CG_Shutdown( void ) {
+	CG_NITMOD_NxACTransferReset();
 	// some mods may need to do cleanup work here,
 	// like closing files or archiving session data
 

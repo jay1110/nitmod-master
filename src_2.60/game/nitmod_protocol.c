@@ -209,3 +209,21 @@ int NITMOD_ParseProtocolSigned( const char *text, int *value ) {
 	*value = magnitude == minimumMagnitude ? INT_MIN : -(int)magnitude;
 	return 1;
 }
+
+/* Match the original i386 libc conversion independently of host long size. */
+int NITMOD_ParseOriginalDecimal32( const char *text ) {
+	unsigned int value = 0, limit, digit;
+	int negative = 0;
+	if( !text ) return 0;
+	while( *text == ' ' || (*text >= '\t' && *text <= '\r') ) ++text;
+	if( *text == '-' || *text == '+' ) negative = *text++ == '-';
+	limit = negative ? 2147483648u : 2147483647u;
+	while( *text >= '0' && *text <= '9' ) {
+		digit = (unsigned int)(*text++ - '0');
+		if( value > (limit - digit) / 10u )
+			return negative ? (-2147483647 - 1) : 2147483647;
+		value = value * 10u + digit;
+	}
+	if( negative && value == 2147483648u ) return (-2147483647 - 1);
+	return negative ? -(int)value : (int)value;
+}

@@ -50,9 +50,10 @@ static qboolean G_NITMOD_MapNameSafe( const char *name ) {
 	return qtrue;
 }
 
+/* Original G_mapvoteinfo_read ELF 0x79590 uses case-sensitive map identity. */
 static int G_NITMOD_MapVoteFind( const char *name ) {
 	int i;
-	for( i = 0; i < mapVoteCount; ++i ) if( !Q_stricmp(mapVoteMaps[i].name, name) ) return i;
+	for( i = 0; i < mapVoteCount; ++i ) if( !strcmp(mapVoteMaps[i].name, name) ) return i;
 	return -1;
 }
 
@@ -118,22 +119,11 @@ qboolean G_NITMOD_MapVoteActive( void ) {
 }
 
 static qboolean G_NITMOD_MapExcluded( const char *name ) {
-	const char *scan = g_excludedMaps.string;
-	char token[MAX_QPATH];
-
-	while( *scan ) {
-		int length = 0;
-		while( *scan == ' ' || *scan == ',' || *scan == ';' ) ++scan;
-		while( scan[length] && scan[length] != ' ' && scan[length] != ',' &&
-			scan[length] != ';' && length < (int)sizeof(token) - 1 ) ++length;
-		if( length ) {
-			Q_strncpyz( token, scan, length + 1 );
-			if( !Q_stricmp( token, name ) ) return qtrue;
-		}
-		scan += length;
-		if( *scan && length == 0 ) ++scan;
-	}
-	return qfalse;
+	char pattern[MAX_QPATH + 2];
+	/* Original BeginIntermission ELF 0x799e6..0x79a0f searches the
+	 * case-sensitive, colon-delimited name, including both colons. */
+	Com_sprintf( pattern, sizeof(pattern), ":%s:", name );
+	return strstr( g_excludedMaps.string, pattern ) != NULL;
 }
 
 static void G_NITMOD_MapVoteLoad( void ) {
@@ -145,7 +135,7 @@ static void G_NITMOD_MapVoteLoad( void ) {
 
 	trap_GetServerinfo( serverInfo, sizeof(serverInfo) );
 	Q_strncpyz( current, Info_ValueForKey(serverInfo, "mapname"), sizeof(current) );
-	if( mapVoteMapName[0] && !Q_stricmp(mapVoteMapName, current) ) return;
+	if( mapVoteMapName[0] && !strcmp(mapVoteMapName, current) ) return;
 
 	memset( mapVoteMaps, 0, sizeof(mapVoteMaps) );
 	mapVoteCount = 0;
@@ -178,7 +168,7 @@ static void G_NITMOD_MapVoteLoad( void ) {
 	for( index = 0; index < mapVoteCount; ++index ) {
 		nitmodMapVoteEntry_t *entry = &mapVoteMaps[index];
 		if( G_NITMOD_MapExcluded(entry->name) ) entry->available = qfalse;
-		if( !Q_stricmp(entry->name, current) ) {
+		if( !strcmp(entry->name, current) ) {
 			++entry->timesPlayed;
 			entry->lastPlayed = 0;
 			if( g_minMapAge.integer >= 0 ) entry->available = qfalse;
@@ -200,6 +190,14 @@ static void G_NITMOD_MapVoteLoad( void ) {
 	}
 	for( index = 0; index < G_NITMOD_MapVoteVisibleCount(); ++index )
 		++mapVoteMaps[mapVoteVisible[index]].voteEligible;
+}
+
+void G_NITMOD_MapVoteBeginIntermission( void ) {
+	if( !G_NITMOD_MapVoteActive() ) return;
+	/* Original BeginIntermission fixes candidate eligibility before the
+	 * intermission starts, including a new round on the same map. */
+	mapVoteMapName[0] = 0;
+	G_NITMOD_MapVoteLoad();
 }
 
 static int G_NITMOD_MapVoteVisibleCount( void ) {
@@ -328,7 +326,9 @@ qboolean G_NITMOD_MapVoteExitLevel( void ) {
 qboolean G_NITMOD_MapVoteExitReady( void ) {
 	int i, humans = 0, voters = 0;
 
-	if( !G_NITMOD_MapVoteActive() || !(g_mapVoteFlags.integer & 2) ) return qtrue;
+	/* Original CheckIntermissionExit ELF 0x7bd9e..0x7bdc9 applies this
+	 * voted-status gate in every gametype, before ready/timeout checks. */
+	if( !(g_mapVoteFlags.integer & 2) ) return qtrue;
 	for( i = 0; i < level.numConnectedClients && i < MAX_CLIENTS; ++i ) {
 		int clientNum = level.sortedClients[i];
 		gclient_t *client;
@@ -339,5 +339,7 @@ qboolean G_NITMOD_MapVoteExitReady( void ) {
 		if( client->ps.eFlags & EF_VOTED ) ++voters;
 	}
 	if( !humans ) return qtrue;
-	return (float)voters / (float)humans * 100.0f >= g_intermissionReadyPercent.value;
+	/* Original x87 comparison has no Float32 ratio store. The blocking
+	 * comparison is strictly less; an unordered threshold does not block. */
+	return !((double)voters / (double)humans * 100.0 < (double)g_intermissionReadyPercent.value);
 }

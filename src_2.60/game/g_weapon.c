@@ -9,6 +9,8 @@
 #include <limits.h>
 
 #include "g_local.h"
+#include "g_nitmod_mdx.h"
+#include "g_nitmod_hitboxdebug.h"
 #include "g_nitmod_weapon_definition.h"
 #include "g_nitmod_config.h"
 #include "g_nitmod_restrictions.h"
@@ -16,6 +18,58 @@
 #include "g_nitmod_legacy_cvars.h"
 #include "g_nitmod_entities.h"
 #include "nitmod_skills.h"
+#include "nitmod_weapon_charge.h"
+#include "nitmod_support_time.h"
+#include "g_nitmod_charge.h"
+
+/* Original jP_DoChargeCost, ELF 0xf0f00: duration follows the current
+ * class, independently of the skill selecting the weapon's reward table. */
+static int G_NITMOD_ChargeDuration(const gentity_t *ent, int skill) {
+ int team=ent->client->sess.sessionTeam-TEAM_AXIS;
+ switch(skill) {
+ case SK_FIRST_AID: return level.medicChargeTime[team];
+ case SK_EXPLOSIVES_AND_CONSTRUCTION: return level.engineerChargeTime[team];
+ case SK_SIGNALS: return level.lieutenantChargeTime[team];
+ case SK_MILITARY_INTELLIGENCE_AND_SCOPED_WEAPONS: return level.covertopsChargeTime[team];
+ default: return level.soldierChargeTime[team];
+ }
+}
+
+qboolean G_NITMOD_ChargeAction(gentity_t *ent, nitmodSkillTable_t table, int skill, qboolean updateState) {
+ float fraction;
+ int timestamp, duration, result;
+ if(!ent || !ent->client || skill<0 || skill>=SK_NUM_SKILLS) return qfalse;
+ if(G_NITMOD_LegacyCvarInteger("g_noCharge",0) ||
+    G_NITMOD_ConfiguredWarMode()==1 || G_NITMOD_ConfiguredWarMode()==3) return qtrue;
+ if(ent->client->sess.sessionTeam!=TEAM_AXIS && ent->client->sess.sessionTeam!=TEAM_ALLIES) return qfalse;
+ if(!NITMOD_GameplayTableValue(table,ent->client->sess.nitmodSkillMasks[skill],&fraction)) return qfalse;
+ duration=G_NITMOD_ChargeDuration(ent,BG_ClassSkillForClass(ent->client->sess.playerType));
+ timestamp=ent->client->ps.classWeaponTime;
+ result=NITMOD_ApplyChargeCost(level.time,duration,fraction,0,0,&timestamp);
+ if(updateState && result>=0) ent->client->ps.classWeaponTime=timestamp;
+ return result==1;
+}
+
+qboolean G_NITMOD_ChargeWeapon(gentity_t *ent, int weapon) {
+ nitmodSkillTable_t table;
+ int skill;
+ if(!NITMOD_WeaponChargeTable(weapon,&table,&skill)) return qtrue;
+ return G_NITMOD_ChargeAction(ent,table,skill,qtrue);
+}
+
+/* Original jP_UnDoChargeCost, ELF 0xf0de0: explicit skill duration, no
+ * full-charge clamp, and a noCharge bypass (there is no war-mode bypass). */
+void G_NITMOD_RefundCharge(gentity_t *ent, nitmodSkillTable_t table, int skill, float scale) {
+ float fraction;
+ double candidate;
+ if(!ent || !ent->client || skill<0 || skill>=SK_NUM_SKILLS ||
+    G_NITMOD_LegacyCvarInteger("g_noCharge",0)) return;
+ if(ent->client->sess.sessionTeam!=TEAM_AXIS && ent->client->sess.sessionTeam!=TEAM_ALLIES) return;
+ if(!NITMOD_GameplayTableValue(table,ent->client->sess.nitmodSkillMasks[skill],&fraction)) return;
+ fraction*=scale; /* Original callers pass a binary32 argument. */
+ candidate=(double)ent->client->ps.classWeaponTime-(double)G_NITMOD_ChargeDuration(ent,skill)*fraction;
+ if(candidate>=INT_MIN && candidate<(double)INT_MAX+1.0) ent->client->ps.classWeaponTime=(int)candidate;
+}
 
 vec3_t	forward, right, up;
 vec3_t	muzzleEffect;
@@ -228,19 +282,18 @@ void Weapon_Knife( gentity_t *ent ) {
 
 		if( DotProduct( eforward, pforward ) > 0.6f )		// from behind(-ish)
 		{
-			damage = 100;	// enough to drop a 'normal' (100 health) human with one jab
-			mod = MOD_KNIFE;
+			/* Original backstab: dead targets reach -175; live targets use
+			 * health only with Covert reward16 and the class/g_skills bit4. */
+			damage = traceEnt->health <= 0 ? traceEnt->health + 175 :
+				((ent->client->sess.nitmodSkillMasks[SK_MILITARY_INTELLIGENCE_AND_SCOPED_WEAPONS] & 16u) &&
+				 (ent->client->sess.playerType == PC_COVERTOPS ||
+				  (G_NITMOD_LegacyCvarInteger("g_skills", 0) & 4))) ? traceEnt->health : 100;
 			if(!(traceEnt->r.svFlags&SVF_BOT) && !OnSameTeam(ent,traceEnt))
 				G_NITMOD_GlobalStatsEvent(ent->s.number,13);
-
-			// rain - only do this if they have a positive health
-			if ( traceEnt->health > 0 && ent->client->sess.skill[SK_MILITARY_INTELLIGENCE_AND_SCOPED_WEAPONS] >= 4 ) {
-				damage = traceEnt->health;
-			}
 		}
 	}
 
-	G_Damage( traceEnt, ent, ent, vec3_origin, tr.endpos, (damage + rand()%5), 0, mod);
+	G_Damage(traceEnt, ent, ent, forward, tr.endpos, damage, DAMAGE_NO_KNOCKBACK, mod);
 }
 
 // JPW NERVE
@@ -489,6 +542,7 @@ void G_PlaceTripmine(gentity_t* ent) {
 	   (beamTrace.surfaceFlags & (SURF_SKY | SURF_NOIMPACT))) return;
 
 
+	G_NITMOD_ChargeWeapon(ent,WP_TRIPMINE);
 	bomb = G_Spawn();
 	bomb->r.svFlags	= SVF_BROADCAST;
 	bomb->classname = "tripmine";
@@ -669,44 +723,69 @@ void Weapon_MagicAmmoAdmin(gentity_t *ent, const vec3_t origin, const vec3_t vel
 
 // START - Mad Doc - TDF
 // took this out of Weapon_Syringe so we can use it from other places
-static void G_NITMOD_RecordRevive( gentity_t *medic ) {
-	int options;
-	int window;
-	int count;
-
+/* Original ReviveEntity 0xf259f and Weapon_Syringe 0xf2fd9 deliberately
+ * count healing separately: bit 2 includes heals; bit 16 includes them in
+ * multirevives. A real revive always advances the multirevive timer. */
+static void G_NITMOD_RecordReviveSpree( gentity_t *medic, qboolean healing ) {
+	int options, window, count;
 	if( !medic || !medic->client ) return;
 	options = G_NITMOD_LegacyCvarInteger("n_reviveSpreeOptions", 1);
-	count = ++medic->client->nitmodReviveSpree;
-	if( count > medic->client->nitmodBestReviveSpree )
-		medic->client->nitmodBestReviveSpree = count;
-
-	/* Original Nitmod emits a revive-spree tier every five revives. */
-	if( (options & 1) && count >= 5 && !(count % 5) )
-		nitmod_Announce(medic->s.number, count, 4);
-
-	if( !(options & 16) ) {
-		medic->client->nitmodLastReviveTime = level.time;
-		return;
+	if( !healing || (options & 2) ) {
+		count = ++medic->client->nitmodReviveSpree;
+		if( count > medic->client->nitmodBestReviveSpree )
+			medic->client->nitmodBestReviveSpree = count;
+		if( (healing || (options & 1)) && count >= 5 && !(count % 5) )
+			nitmod_Announce(medic->s.number, count, 4);
 	}
-
+	if( healing && !(options & 16) ) return;
 	window = G_NITMOD_LegacyCvarInteger("n_multiReviveTime", 2000);
-	if( window < 1 ) {
-		medic->client->nitmodMultiReviveCount = 1;
-	} else if( !medic->client->nitmodLastReviveTime ||
-		level.time - medic->client->nitmodLastReviveTime > window ) {
-		medic->client->nitmodMultiReviveCount = 1;
-	} else {
-		++medic->client->nitmodMultiReviveCount;
+	if( window > 0 ) {
+		if( level.time - medic->client->nitmodLastReviveTime > window ) {
+			medic->client->nitmodMultiReviveCount = 1;
+		} else {
+			++medic->client->nitmodMultiReviveCount;
+			if( medic->client->nitmodMultiReviveCount >= 2 &&
+				medic->client->nitmodMultiReviveCount <= 5 )
+				nitmod_Announce(medic->s.number,
+					medic->client->nitmodMultiReviveCount - 2, 5);
+			else if( medic->client->nitmodMultiReviveCount > 5 )
+				medic->client->nitmodMultiReviveCount = 1;
+		}
 	}
 	medic->client->nitmodLastReviveTime = level.time;
+}
 
-	if( medic->client->nitmodMultiReviveCount >= 2 &&
-		medic->client->nitmodMultiReviveCount <= 5 ) {
-		nitmod_Announce(medic->s.number,
-			medic->client->nitmodMultiReviveCount - 2, 5);
-	} else if( medic->client->nitmodMultiReviveCount > 5 ) {
-		medic->client->nitmodMultiReviveCount = 1;
+static void G_NITMOD_RecordRevive( gentity_t *medic ) {
+	G_NITMOD_RecordReviveSpree(medic, qfalse);
+}
+
+/* Original 0xf2ec1..0xf306b: a poisoned teammate is cured regardless of
+ * g_medics. With bit 8 enabled, the subsequent health threshold still decides
+ * syringe consumption, even if that poison cure has already occurred. */
+static qboolean G_NITMOD_SyringeHeal( gentity_t *medic, gentity_t *target ) {
+	unsigned int options = G_NITMOD_ConfiguredMedicOptions();
+	int maximum;
+	if( target->client->sess.sessionTeam != medic->client->sess.sessionTeam ) return qfalse;
+	if( target->client->ps.eFlags & NITMOD_EF_POISONED ) {
+		G_NITMOD_ClearPoison(target);
+		NITMOD_PlaySoundEvent(target, 8);
+		if( !(options & 8) ) return qtrue;
 	}
+	if( !(options & 8) ) return qfalse;
+	maximum = target->client->ps.stats[STAT_MAX_HEALTH];
+	if( (double)target->health > (double)maximum * 0.25 ) return qfalse;
+	target->health = (medic->client->sess.nitmodSkillMasks[SK_FIRST_AID] & 8u) ?
+		maximum : (int)((double)maximum * 0.5);
+	NITMOD_PlaySoundEvent(target, 8);
+	medic->client->sess.nitmodTeamHits -= 2.0f;
+	target->client->pers.nitmodLastReviverClient = medic->s.clientNum;
+	if( !target->isProp ) {
+		AddScore(medic, 1);
+		G_AddSkillPoints(medic, SK_FIRST_AID, 2.0f);
+		G_DebugAddSkillPoints(medic, SK_FIRST_AID, 2.0f, "syringe heal a player");
+	}
+	G_NITMOD_RecordReviveSpree(medic, qtrue);
+	return qtrue;
 }
 
 qboolean ReviveEntity(gentity_t *ent, gentity_t *traceEnt)
@@ -719,16 +798,12 @@ qboolean ReviveEntity(gentity_t *ent, gentity_t *traceEnt)
 	int			ammoclip[MAX_WEAPONS];	// JPW NERVE ammo in clip
 	int			weapons[MAX_WEAPONS/(sizeof(int)*8)];	// JPW NERVE 64 bits for weapons held
 //	gentity_t	*traceEnt,
-	gentity_t	*te;
-
-
-
 
 	// heal the dude
 	// copy some stuff out that we'll wanna restore
 	VectorCopy(traceEnt->client->ps.origin, org);
 	headshot = traceEnt->client->ps.eFlags & EF_HEADSHOT;
-	if( !ent || ent->client->sess.skill[SK_FIRST_AID] >= 3 )
+	if( !ent || (ent->client->sess.nitmodSkillMasks[SK_FIRST_AID] & 8u) )
 		healamt = traceEnt->client->ps.stats[STAT_MAX_HEALTH];
 	else
 		healamt = traceEnt->client->ps.stats[STAT_MAX_HEALTH] * 0.5;
@@ -784,9 +859,8 @@ qboolean ReviveEntity(gentity_t *ent, gentity_t *traceEnt)
 	// DHM - Nerve :: Mark that the medicine was indeed dispensed
 	usedSyringe = qtrue;
 
-	// sound
-	te = G_TempEntity( traceEnt->r.currentOrigin, EV_GENERAL_SOUND );
-	te->s.eventParm = G_SoundIndex( "sound/misc/vo_revive.wav" );
+	/* Original ReviveEntity 0xf29d0 uses private sound-bank slot 8. */
+	NITMOD_PlaySoundEvent(traceEnt, 8);
 
 	// Xian -- This was gay and I always hated it.
 	if ( g_fastres.integer > 0 )
@@ -820,23 +894,29 @@ void Weapon_Syringe(gentity_t *ent) {
 	qboolean	usedSyringe = qfalse;		// DHM - Nerve
 	gentity_t	*traceEnt;
 
-	AngleVectors (ent->client->ps.viewangles, forward, right, up);
-	CalcMuzzlePointForActivate( ent, forward, right, up, muzzleTrace );
-	VectorMA (muzzleTrace, 48, forward, end);			// CH_ACTIVATE_DIST
-	//VectorMA (muzzleTrace, -16, forward, muzzleTrace);	// DHM - Back up the start point in case medic is
-														// right on top of intended revivee.
-	trap_Trace (&tr, muzzleTrace, NULL, NULL, end, ent->s.number, MASK_SHOT);
-
-	if (tr.startsolid) {
-		VectorMA (muzzleTrace, 8, forward, end);			// CH_ACTIVATE_DIST
-		trap_Trace(&tr, muzzleTrace, NULL, NULL, end, ent->s.number, MASK_SHOT);
+	AngleVectors(ent->client->ps.viewangles, forward, right, up);
+	/* Original 0xf2d6d: unsnapped 64-unit historical melee trace, including
+	 * the lowered crouching/leaning muzzle used by the poison syringe. */
+	VectorCopy(ent->s.pos.trBase, muzzleTrace);
+	if( ent->health <= 0 ) muzzleTrace[2] += 25;
+	else if( ent->client->ps.viewangles[PITCH] > 30 &&
+		(ent->client->ps.eFlags & EF_CROUCHING) ) muzzleTrace[2] += 30;
+	else muzzleTrace[2] += ent->client->ps.viewheight;
+	VectorMA(muzzleTrace, ent->client->ps.leanf, right, muzzleTrace);
+	muzzleTrace[2] -= fabs(ent->client->ps.leanf / 3.5f);
+	VectorMA(muzzleTrace, 64, forward, end);
+	G_HistoricalTrace(ent, &tr, muzzleTrace, NULL, NULL, end, ent->s.number, MASK_SHOT);
+	if( tr.startsolid ) {
+		VectorMA(muzzleTrace, 8, forward, end);
+		G_HistoricalTrace(ent, &tr, muzzleTrace, NULL, NULL, end, ent->s.number, MASK_SHOT);
 	}
 
-	if (tr.fraction < 1.0) {
+	if (tr.fraction < 1.0 && tr.entityNum >= 0 && tr.entityNum < MAX_GENTITIES) {
 		traceEnt = &g_entities[ tr.entityNum ];
 		if (traceEnt->client != NULL) {
 
-			if ( (traceEnt->client->ps.pm_type == PM_DEAD) && (traceEnt->client->sess.sessionTeam == ent->client->sess.sessionTeam)) {
+			if ( (traceEnt->client->ps.pm_type == PM_DEAD) && (traceEnt->client->sess.sessionTeam == ent->client->sess.sessionTeam) &&
+				!(traceEnt->client->ps.eFlags & EF_SPARE0)) {
 				// Mad Doc - TDF moved all the revive stuff into its own function
 				usedSyringe = ReviveEntity( ent, traceEnt );
 
@@ -850,6 +930,7 @@ void Weapon_Syringe(gentity_t *ent) {
 					G_LogPrintf("Medic_Revive: %d %d\n", ent - g_entities, traceEnt - g_entities);
 					if(!(traceEnt->r.svFlags&SVF_BOT)) G_NITMOD_GlobalStatsEvent(ent->s.number,4);
 					Bot_Event_Revived(traceEnt - g_entities, ent);
+					ent->client->sess.nitmodTeamHits -= 2.0f;
 				}
 
 				if( !traceEnt->isProp ) { // Gordon: flag for if they were teamkilled or not
@@ -863,6 +944,8 @@ void Weapon_Syringe(gentity_t *ent) {
 				if( g_gametype.integer == GT_WOLF_LMS ) {
 					CalculateRanks();
 				}
+			} else if( traceEnt->client->ps.pm_type != PM_DEAD ) {
+				usedSyringe = G_NITMOD_SyringeHeal(ent, traceEnt);
 			}
 		}
 	}
@@ -1865,10 +1948,13 @@ void Weapon_Engineer( gentity_t *ent ) {
 			ent->client->ps.classWeaponTime = level.time - level.engineerChargeTime[ent->client->sess.sessionTeam-1];
 		}
 
-		if( ent->client->sess.skill[SK_EXPLOSIVES_AND_CONSTRUCTION] >= 3 ) {
-			ent->client->ps.classWeaponTime += .66f * 150;
-		} else {
-			ent->client->ps.classWeaponTime += 150;
+		{
+			float repairCost;
+			/* Original Engineer_MG42 0xf4356..0xf43aa truncates the
+			 * table factor BEFORE multiplying by150: unlocked .66 costs0. */
+			NITMOD_GameplayTableValue(NITMOD_TABLE_REPAIR,
+				ent->client->sess.nitmodSkillMasks[SK_EXPLOSIVES_AND_CONSTRUCTION],&repairCost);
+			ent->client->ps.classWeaponTime += (int)repairCost * 150;
 		}
 
 		if ( ent->client->ps.classWeaponTime > level.time ) {
@@ -1934,12 +2020,7 @@ void Weapon_Engineer( gentity_t *ent ) {
 
 				Add_Ammo(ent, mineWeapon, 1, qfalse);
 
-				// rain - #202 - give back the correct charge amount
-				if (ent->client->sess.skill[SK_EXPLOSIVES_AND_CONSTRUCTION] >= 3) {
-					ent->client->ps.classWeaponTime -= .33f * level.engineerChargeTime[ent->client->sess.sessionTeam-1];
-				} else {
-					ent->client->ps.classWeaponTime -= .5f * level.engineerChargeTime[ent->client->sess.sessionTeam-1];
-				}
+				G_NITMOD_RefundCharge(ent,NITMOD_TABLE_LANDMINE,SK_EXPLOSIVES_AND_CONSTRUCTION,1.0f);
 				ent->client->sess.aWeaponStats[WS_LANDMINE].atts--;
 				return;
 //bani
@@ -1957,11 +2038,7 @@ void Weapon_Engineer( gentity_t *ent ) {
 					G_FreeEntity( traceEnt );
 
 					Add_Ammo(ent, mineWeapon, 1, qfalse);
-					// rain - #202 - give back the correct charge amount
-					if (ent->client->sess.skill[SK_EXPLOSIVES_AND_CONSTRUCTION] >= 3)
-						ent->client->ps.classWeaponTime -= .33f * level.engineerChargeTime[ent->client->sess.sessionTeam-1];
-					else
-						ent->client->ps.classWeaponTime -= .5f * level.engineerChargeTime[ent->client->sess.sessionTeam-1];
+					G_NITMOD_RefundCharge(ent,NITMOD_TABLE_LANDMINE,SK_EXPLOSIVES_AND_CONSTRUCTION,1.0f);
 
 					ent->client->sess.aWeaponStats[WS_LANDMINE].atts--;
 					return;
@@ -2592,84 +2669,48 @@ qboolean G_AvailableAirstrikes( gentity_t* ent ) {
 	int team;
 	if( !ent || !ent->client ) return qfalse;
 	team = ent->client->sess.sessionTeam;
-	if( team != TEAM_AXIS && team != TEAM_ALLIES ) return qfalse;
-	return level.nitmodAirstrikeCounter[team - TEAM_AXIS] < 1;
+	/* Original 0xf76a5: every non-Axis caller uses the Allies counter. */
+	return level.nitmodAirstrikeCounter[team == TEAM_AXIS ? 0 : 1] < 1;
 }
 
 void G_AddAirstrikeToCounters( gentity_t* ent ) {
 	int seconds, team;
 	if( !ent || !ent->client ) return;
 	team = ent->client->sess.sessionTeam;
-	if( team != TEAM_AXIS && team != TEAM_ALLIES ) return;
 	seconds = G_NITMOD_LegacyCvarInteger("team_airstrikeTime", 10);
-	if( seconds < 0 ) seconds = 0;
-	if( seconds > INT_MAX / 1000 ) seconds = INT_MAX / 1000;
-	level.nitmodAirstrikeCounter[team - TEAM_AXIS] += seconds * 1000;
+	/* Original 0xf775a/0xf7770: signed seconds, including negative values. */
+	team = team == TEAM_AXIS ? 0 : 1;
+	level.nitmodAirstrikeCounter[team] =
+		NITMOD_SupportAddTime(level.nitmodAirstrikeCounter[team], seconds);
 }
 
 static qboolean G_NITMOD_AvailableArtillery( const gentity_t *ent ) {
 	int team;
 	if( !ent || !ent->client ) return qfalse;
 	team = ent->client->sess.sessionTeam;
-	if( team != TEAM_AXIS && team != TEAM_ALLIES ) return qfalse;
-	return level.nitmodArtilleryCounter[team - TEAM_AXIS] < 1;
+	/* Original G_AvailableArty 0xf76e0 routes every non-Axis team to Allies. */
+	return level.nitmodArtilleryCounter[team == TEAM_AXIS ? 0 : 1] < 1;
 }
 
 static void G_NITMOD_AddArtilleryCounter( const gentity_t *ent ) {
 	int seconds, team;
 	if( !ent || !ent->client ) return;
 	team = ent->client->sess.sessionTeam;
-	if( team != TEAM_AXIS && team != TEAM_ALLIES ) return;
 	seconds = G_NITMOD_LegacyCvarInteger("team_artyTime", 10);
-	if( seconds < 0 ) seconds = 0;
-	if( seconds > INT_MAX / 1000 ) seconds = INT_MAX / 1000;
-	level.nitmodArtilleryCounter[team - TEAM_AXIS] += seconds * 1000;
+	team = team == TEAM_AXIS ? 0 : 1;
+	level.nitmodArtilleryCounter[team] =
+		NITMOD_SupportAddTime(level.nitmodArtilleryCounter[team], seconds);
 }
 
 #define NUMBOMBS 10
 #define BOMBSPREAD 150
 extern void G_SayTo( gentity_t *ent, gentity_t *other, int mode, int color, const char *name, const char *message, qboolean localize );
 
-static int G_NITMOD_FieldOpsSupportCost(const gentity_t *ent) {
-	int team, charge;
-
-	if(!ent || !ent->client) return 0;
-	team = ent->client->sess.sessionTeam;
-	if(team != TEAM_AXIS && team != TEAM_ALLIES) return 0;
-	charge = level.lieutenantChargeTime[team - TEAM_AXIS];
-	return ent->client->sess.skill[SK_SIGNALS] >= 2 ? (int)(charge * 0.66f) : charge;
-}
-
-static void G_NITMOD_ConsumeFieldOpsSupport(gentity_t *ent) {
-	int charge, cost, team;
-
-	if(!ent || !ent->client) return;
-	team = ent->client->sess.sessionTeam;
-	if(team != TEAM_AXIS && team != TEAM_ALLIES) return;
-	charge = level.lieutenantChargeTime[team - TEAM_AXIS];
-	cost = G_NITMOD_FieldOpsSupportCost(ent);
-	if(level.time - ent->client->ps.classWeaponTime > charge)
-		ent->client->ps.classWeaponTime = level.time - charge;
-	ent->client->ps.classWeaponTime += cost;
-}
-
-/* g_fieldOps bit 2 restores a rejected support call completely; bit 4
- * restores half.  With neither bit set the original consumes the full call. */
+/* g_fieldOps bit 2 takes precedence over bit 4, as in the original. */
 static void G_NITMOD_RefundRejectedFieldOpsSupport(gentity_t *ent) {
-	int options, refund, charge, minimum, team;
-
-	if(!ent || !ent->client) return;
-	team = ent->client->sess.sessionTeam;
-	if(team != TEAM_AXIS && team != TEAM_ALLIES) return;
-	options = G_NITMOD_LegacyCvarInteger("g_fieldOps", 0);
-	if(options & 2) refund = G_NITMOD_FieldOpsSupportCost(ent);
-	else if(options & 4) refund = G_NITMOD_FieldOpsSupportCost(ent) / 2;
-	else return;
-	charge = level.lieutenantChargeTime[team - TEAM_AXIS];
-	minimum = level.time - charge;
-	ent->client->ps.classWeaponTime -= refund;
-	if(ent->client->ps.classWeaponTime < minimum)
-		ent->client->ps.classWeaponTime = minimum;
+ int options=G_NITMOD_LegacyCvarInteger("g_fieldOps",0);
+ if(options&2) G_NITMOD_RefundCharge(ent,NITMOD_TABLE_ARTILLERY,SK_SIGNALS,1.0f);
+ else if(options&4) G_NITMOD_RefundCharge(ent,NITMOD_TABLE_ARTILLERY,SK_SIGNALS,0.5f);
 }
 
 void weapon_checkAirStrikeThink1( gentity_t *ent ) {
@@ -2714,7 +2755,7 @@ qboolean weapon_checkAirStrike( gentity_t *ent ) {
 
 	// cancel the airstrike if FF off and player joined spec
 	// FIXME: this is a stupid workaround. Just store the parent team in the enitity itself and use that - no need to look up the parent
-	if (!g_friendlyFire.integer && ent->parent->client && ent->parent->client->sess.sessionTeam == TEAM_SPECTATOR)
+	if (!(g_friendlyFire.integer & 1) && g_gametype.integer != GT_WOLF_DM && ent->parent->client && ent->parent->client->sess.sessionTeam == TEAM_SPECTATOR)
 	{
 		ent->splashDamage = 0;	// no damage
 		ent->think = G_ExplodeMissile;
@@ -2780,6 +2821,59 @@ qboolean weapon_checkAirStrike( gentity_t *ent ) {
 void G_RailTrail( vec_t* start, vec_t* end );
 
 
+/* Original weapon_callAirStrike ELF 0xef950: g_asblock is a bitmask,
+ * and the bypass is Signals reward bit 8, independent of numeric skill level. */
+static qboolean G_NITMOD_AirstrikeBlocked(gentity_t *ent, const vec3_t sky, trace_t *trace) {
+	int options = G_NITMOD_LegacyCvarInteger("g_asblock", 0);
+	qboolean ignorePlayers = ent->parent && ent->parent->client && (options & 4) &&
+		(ent->parent->client->sess.nitmodSkillMasks[SK_SIGNALS] & 8u);
+	if(!ignorePlayers && (options & 2)) {
+		int i, count, entities[MAX_GENTITIES];
+		vec3_t mins, maxs;
+		for(i = 0; i < 3; ++i) {
+			mins[i] = (float)(int)ent->r.currentOrigin[i] - 8.f;
+			maxs[i] = (float)(int)ent->r.currentOrigin[i] + 8.f;
+		}
+		if(g_debugBullets.integer > 1) {
+			gentity_t *box;
+			vec3_t start, end;
+			G_Printf("mins: %f, %f, %f\n", mins[0], mins[1], mins[2]);
+			G_Printf("maxs: %f, %f, %f\n", maxs[0], maxs[1], maxs[2]);
+			for(i = 0; i < 3; ++i) {
+				start[i] = ent->r.currentOrigin[i] - 8.f;
+				end[i] = ent->r.currentOrigin[i] + 8.f;
+			}
+			box = G_TempEntity(start, EV_RAILTRAIL);
+			VectorCopy(end, box->s.origin2);
+			box->s.dmgFlags = 1;
+		}
+		count = trap_EntitiesInBox(mins, maxs, entities, MAX_GENTITIES);
+		for(i = 0; i < count; ++i) {
+			int number = entities[i];
+			if(number < 0 || number >= MAX_GENTITIES || !g_entities[number].client) continue;
+			if((options & 1) && ent->parent && ent->parent->client)
+				trap_SendServerCommand(-1, va("cpm \"%s ^7blocked %s^7's airstrike!\"",
+					g_entities[number].client->pers.netname, ent->parent->client->pers.netname));
+			return qtrue;
+		}
+	}
+	if(ignorePlayers) G_TempTraceIgnorePlayersAndBodies();
+	trap_Trace(trace, ent->s.pos.trBase, NULL, NULL, sky, ent->s.number, MASK_SHOT);
+	if(ignorePlayers) G_ResetTempTraceIgnoreEnts();
+	if(trace->fraction < 1.f && !(trace->surfaceFlags & SURF_NOIMPACT)) {
+		int number = trace->entityNum;
+		if((options & 1) && number >= 0 && number < MAX_GENTITIES && g_entities[number].client &&
+			ent->parent && ent->parent->client)
+			trap_SendServerCommand(-1, va("cpm \"%s ^7blocked %s'^7s airstrike!\"",
+				g_entities[number].client->pers.netname, ent->parent->client->pers.netname));
+		return qtrue;
+	}
+	/* The original repeats the normal trace after restoring temporarily ignored
+	 * entities (0xefb03..0xefb31); preserve its distinct, silent rejection path. */
+	trap_Trace(trace, ent->s.pos.trBase, NULL, NULL, sky, ent->s.number, MASK_SHOT);
+	return trace->fraction < 1.f && !(trace->surfaceFlags & SURF_NOIMPACT);
+}
+
 void weapon_callAirStrike( gentity_t *ent ) {
 	int i, j;
 	vec3_t bombaxis, lookaxis, pos, bomboffset, fallaxis, temp, dir, skypoint;
@@ -2804,8 +2898,7 @@ void weapon_callAirStrike( gentity_t *ent ) {
 		te->r.svFlags |= SVF_BROADCAST;
 	}
 
-	trap_Trace( &tr, ent->s.pos.trBase, NULL, NULL, bomboffset, ent->s.number, MASK_SHOT );
-	if ((tr.fraction < 1.0) && (!(tr.surfaceFlags & SURF_NOIMPACT)) ) { //SURF_SKY)) ) { // JPW NERVE changed for trenchtoast foggie prollem
+	if( G_NITMOD_AirstrikeBlocked(ent, bomboffset, &tr) ) {
 		G_SayTo( ent->parent, ent->parent, 2, COLOR_YELLOW, "Pilot: ", "Aborting, can't see target.", qtrue );
 
 		G_GlobalClientEvent( EV_AIRSTRIKEMESSAGE, 1, ent->parent-g_entities );
@@ -3030,11 +3123,8 @@ void Weapon_Artillery(gentity_t *ent) {
 		return;
 	}
 
-	// TAT - 10/27/2002 - moved energy check into a func, so I can use same check in bot code
-	if( !ReadyToCallArtillery(ent) ) {
-		return;
-	}
-	G_NITMOD_ConsumeFieldOpsSupport(ent);
+	if(G_NITMOD_ConfiguredWarMode()>=1 && G_NITMOD_ConfiguredWarMode()<=4) return;
+	if(!G_NITMOD_ChargeAction(ent,NITMOD_TABLE_ARTILLERY,SK_SIGNALS,qtrue)) return;
 
 	if( ent->client->sess.sessionTeam == TEAM_AXIS ) {
 		if( !G_NITMOD_AvailableArtillery( ent ) ) {
@@ -3611,8 +3701,11 @@ void Bullet_Fire (gentity_t *ent, float spread, int damage, qboolean distance_fa
 	G_NITMOD_WeaponDamageOverrides(ent->s.weapon, &damage, NULL, NULL);
 	distance_falloff = G_NITMOD_WeaponFalloffMode(ent->s.weapon, distance_falloff);
 
-	// Gordon: skill thing should be here Arnout! 
+	// Original Bullet_Fire jump table: deployed MG muzzle and numeric Light Weapons level3.
 	switch( ent->s.weapon ) {
+		case WP_MOBILE_MG42_SET:
+			VectorMA(muzzleTrace, 48.0f, forward, muzzleTrace);
+			break;
 		// light weapons
 		case WP_LUGER:
 		case WP_COLT:
@@ -3621,12 +3714,27 @@ void Bullet_Fire (gentity_t *ent, float spread, int damage, qboolean distance_fa
 		case WP_STEN:
 		case WP_SILENCER:
 		case WP_SILENCED_COLT:
-			if( ent->client->sess.skill[SK_LIGHT_WEAPONS] >= 4 )
+		case WP_AKIMBO_COLT:
+		case WP_AKIMBO_LUGER:
+		case WP_AKIMBO_SILENCEDCOLT:
+		case WP_AKIMBO_SILENCEDLUGER:
+			if( ent->client->sess.skill[SK_LIGHT_WEAPONS] >= 3 )
 				spread *= .65f;
 			break;
 	}
 
+	/* Original Bullet_Fire 0xf9e80..0xf9ee5: modes1/2 replace the
+	 * adjusted spread with twice the weapon's base spread for <1000ms.
+	 * The signed comparison also admits a future prone timestamp. */
+	if(ent->client && (ent->client->ps.eFlags & EF_PRONE)) {
+		int delay = G_NITMOD_LegacyCvarInteger("n_proneDelay", 0);
+		if((delay == 1 || delay == 2) &&
+		   (long long)level.time - ent->client->pmext.proneTime < 1000)
+			spread = 2.0f * G_GetWeaponSpread(ent->s.weapon);
+	}
+
 	Bullet_Endpos(ent, spread, &end);
+	if(g_antilag.integer & 4) G_NITMOD_DrawShotHitboxes(ent);
 
 	G_HistoricalTraceBegin( ent );
 
@@ -3646,7 +3754,9 @@ Bullet_Fire_Extended
 ==============
 */
 qboolean Bullet_Fire_Extended(gentity_t *source, gentity_t *attacker, vec3_t start, vec3_t end, float spread, int damage, qboolean distance_falloff) {
-	trace_t		tr;
+	trace_t		tr,mdxWater;
+	int mdxRegion=-1;
+	qboolean mdxTrace=G_NITMOD_LegacyCvarInteger("g_hitboxes",0)!=0;
 	gentity_t	*tent;
 	gentity_t	*traceEnt;
 	qboolean hitClient = qfalse;
@@ -3661,7 +3771,8 @@ qboolean Bullet_Fire_Extended(gentity_t *source, gentity_t *attacker, vec3_t sta
 		waslinked = qtrue;
 	}
 
-	G_Trace(source, &tr, start, NULL, NULL, end, source->s.number, MASK_SHOT);
+	if(mdxTrace) mdxRegion=G_NITMOD_MDXTraceBullets(source,&tr,&mdxWater,start,end);
+	else G_Trace(source, &tr, start, NULL, NULL, end, source->s.number, MASK_SHOT);
 
 	//bani - prevent shooting ourselves in the head when prone, firing through a breakable
 	if( waslinked == qtrue ) {
@@ -3767,7 +3878,8 @@ qboolean Bullet_Fire_Extended(gentity_t *source, gentity_t *attacker, vec3_t sta
 
 		tent = G_TempEntity( tr.endpos, EV_BULLET_HIT_WALL );
 
-		G_Trace(source, &tr2, start, NULL, NULL, end, source->s.number, MASK_WATER | MASK_SHOT);
+		if(mdxTrace) tr2=mdxWater;
+		else G_Trace(source, &tr2, start, NULL, NULL, end, source->s.number, MASK_WATER | MASK_SHOT);
 
 		if((tr.entityNum != tr2.entityNum && tr2.fraction != 1)) {
 			vec3_t v;
@@ -3789,7 +3901,9 @@ qboolean Bullet_Fire_Extended(gentity_t *source, gentity_t *attacker, vec3_t sta
 	tent->s.otherEntityNum = attacker->s.number;
 
 	if ( traceEnt->takedamage) {
+		if(mdxTrace) G_NITMOD_MDXBeginDamage(attacker,traceEnt,mdxRegion);
 		G_Damage( traceEnt, attacker, attacker, forward, tr.endpos, damage, ( distance_falloff ? DAMAGE_DISTANCEFALLOFF : 0 ), GetAmmoTableData(attacker->s.weapon)->mod );
+		if(mdxTrace) G_NITMOD_MDXEndDamage();
 
 		// allow bullets to "pass through" func_explosives if they break by taking another simultanious shot
 		if( traceEnt->s.eType == ET_EXPLOSIVE ) {
@@ -4427,6 +4541,10 @@ void FireWeapon( gentity_t *ent ) {
 		}
 	}
 
+	/* Original FireWeapon ignores the return of the late charge payment.
+	 * Tripmines pay after placement validation; packs own their negotiated path. */
+	if(ent->s.weapon!=WP_TRIPMINE && ent->s.weapon!=WP_AMMO && ent->s.weapon!=WP_MEDKIT)
+		G_NITMOD_ChargeWeapon(ent,ent->s.weapon);
 	// fire the specific weapon
 	switch( ent->s.weapon ) {
 	case WP_KNIFE:
@@ -4441,15 +4559,6 @@ void FireWeapon( gentity_t *ent ) {
 		break;
 
 	case WP_SMOKE_MARKER:
-		if( level.time - ent->client->ps.classWeaponTime > level.lieutenantChargeTime[ent->client->sess.sessionTeam-1] ) {
-			ent->client->ps.classWeaponTime = level.time - level.lieutenantChargeTime[ent->client->sess.sessionTeam-1];
-		}
-
-		if( ent->client->sess.skill[SK_SIGNALS] >= 2 ) {
-			ent->client->ps.classWeaponTime += .66f * level.lieutenantChargeTime[ent->client->sess.sessionTeam-1];
-		} else {
-			ent->client->ps.classWeaponTime = level.time;
-		}
 		weapon_grenadelauncher_fire(ent, WP_SMOKE_MARKER);
 		break;
 	// -NERVE - SMF
@@ -4460,7 +4569,6 @@ void FireWeapon( gentity_t *ent ) {
 		G_NITMOD_PoisonAttack(ent);
 		break;
 	case WP_MEDIC_ADRENALINE:
-		ent->client->ps.classWeaponTime = level.time;
 		Weapon_AdrenalineSyringe(ent);
 		break;
 	case WP_AMMO:
@@ -4551,16 +4659,6 @@ void FireWeapon( gentity_t *ent ) {
 		Bullet_Fire( ent, THOMPSON_SPREAD*aimSpreadScale, THOMPSON_DAMAGE, qtrue );
 		break;
 	case WP_PANZERFAUST:
-		if( level.time - ent->client->ps.classWeaponTime > level.soldierChargeTime[ent->client->sess.sessionTeam-1] ) {
-			ent->client->ps.classWeaponTime = level.time - level.soldierChargeTime[ent->client->sess.sessionTeam-1];
-		}
-
-		if( ent->client->sess.skill[SK_HEAVY_WEAPONS] >= 1 ) {
-			ent->client->ps.classWeaponTime += .66f * level.soldierChargeTime[ent->client->sess.sessionTeam-1];
-		} else {
-			ent->client->ps.classWeaponTime = level.time;
-		}
-
 		Weapon_Panzerfaust_Fire(ent);
 		if( ent->client ) {
 			vec3_t forward;
@@ -4570,23 +4668,9 @@ void FireWeapon( gentity_t *ent ) {
 		break;
 	case WP_GPG40:
 	case WP_M7:
-		if( level.time - ent->client->ps.classWeaponTime > level.engineerChargeTime[ent->client->sess.sessionTeam-1] ) {
-			ent->client->ps.classWeaponTime = level.time - level.engineerChargeTime[ent->client->sess.sessionTeam-1];
-		}
-
-		ent->client->ps.classWeaponTime += .5f * level.engineerChargeTime[ent->client->sess.sessionTeam-1];
 		weapon_gpg40_fire( ent, ent->s.weapon );
 		break;
 	case WP_MORTAR_SET:
-		if( level.time - ent->client->ps.classWeaponTime > level.soldierChargeTime[ent->client->sess.sessionTeam-1] ) {
-			ent->client->ps.classWeaponTime = level.time - level.soldierChargeTime[ent->client->sess.sessionTeam-1];
-		}
-
-		if( ent->client->sess.skill[SK_HEAVY_WEAPONS] >= 1 ) {
-			ent->client->ps.classWeaponTime += .5f*(1-0.3f) * level.soldierChargeTime[ent->client->sess.sessionTeam-1];
-		} else {
-			ent->client->ps.classWeaponTime += .5f * level.soldierChargeTime[ent->client->sess.sessionTeam-1];
-		}
 		weapon_mortar_fire( ent, ent->s.weapon );
 		break;
 	case WP_GRENADE_LAUNCHER:
@@ -4598,43 +4682,6 @@ void FireWeapon( gentity_t *ent ) {
 	case WP_SATCHEL:
 	case WP_SMOKE_BOMB:
 	case WP_POISON_BOMB:
-		if( ent->s.weapon == WP_SMOKE_BOMB || ent->s.weapon == WP_POISON_BOMB || ent->s.weapon == WP_SATCHEL ) {
-			if( level.time - ent->client->ps.classWeaponTime > level.covertopsChargeTime[ent->client->sess.sessionTeam-1] ) {
-				ent->client->ps.classWeaponTime = level.time - level.covertopsChargeTime[ent->client->sess.sessionTeam-1];
-			}
-
-			if( ent->client->sess.skill[SK_MILITARY_INTELLIGENCE_AND_SCOPED_WEAPONS] >= 2 ) {
-				ent->client->ps.classWeaponTime += .66f * level.covertopsChargeTime[ent->client->sess.sessionTeam-1];
-			} else {
-				ent->client->ps.classWeaponTime = level.time;
-			}
-		}
-
-		if( ent->s.weapon == WP_LANDMINE || ent->s.weapon == WP_POISON_MINE ) {
-			if( level.time - ent->client->ps.classWeaponTime > level.engineerChargeTime[ent->client->sess.sessionTeam-1] ) {
-				ent->client->ps.classWeaponTime = level.time - level.engineerChargeTime[ent->client->sess.sessionTeam-1];
-			}
-
-			if( ent->client->sess.skill[SK_EXPLOSIVES_AND_CONSTRUCTION] >= 3 ) {
-				// rain - bug #202 - use 33%, not 66%, when upgraded.
-				// do not penalize the happy fun engineer.
-				ent->client->ps.classWeaponTime += .33f * level.engineerChargeTime[ent->client->sess.sessionTeam-1];
-			} else {
-				ent->client->ps.classWeaponTime += .5f * level.engineerChargeTime[ent->client->sess.sessionTeam-1];
-			}
-		}
-
-		if (ent->s.weapon == WP_DYNAMITE || ent->s.weapon == WP_BOMB) {
-			if( level.time - ent->client->ps.classWeaponTime > level.engineerChargeTime[ent->client->sess.sessionTeam-1] ) {
-				ent->client->ps.classWeaponTime = level.time - level.engineerChargeTime[ent->client->sess.sessionTeam-1];
-			}
-
-			if( ent->client->sess.skill[SK_EXPLOSIVES_AND_CONSTRUCTION] >= 3 ) {
-				ent->client->ps.classWeaponTime += .66f * level.engineerChargeTime[ent->client->sess.sessionTeam-1];
-			} else {
-				ent->client->ps.classWeaponTime = level.time;
-			}
-		}
 		weapon_grenadelauncher_fire( ent, ent->s.weapon );
 		break;
 	case WP_FLAMETHROWER:

@@ -1,9 +1,12 @@
 #include "g_local.h"
+#include "g_nitmod_admin.h"
 
-/* Original G_NextCampaign_v / G_RestartCampaign_v. Permission-6 bypass
- * remains denied for players until the Nitmod permission owner is ported. */
+/* Original G_NextCampaign_v 0xe90cc and G_RestartCampaign_v 0xe920c:
+ * a disabled vote needs BOTH referee status and permission 6 (novotelimit). */
 static int CampaignVoteRequest(gentity_t *ent, int allowed) {
-    return ((!ent || allowed) && g_gametype.integer == GT_WOLF_CAMPAIGN) ? G_OK : G_INVALID;
+    if(ent && !allowed && !(ent->client && ent->client->sess.referee &&
+        G_NITMOD_AdminPrivilege((int)(ent - g_entities), "novotelimit"))) return G_INVALID;
+    return g_gametype.integer == GT_WOLF_CAMPAIGN ? G_OK : G_INVALID;
 }
 
 int G_NITMOD_NextCampaignVote(gentity_t *ent, unsigned int index,

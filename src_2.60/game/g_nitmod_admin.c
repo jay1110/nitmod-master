@@ -13,7 +13,7 @@
 #include <time.h>
 typedef struct { int number; char name[36],flags[1024],gtext[1024],gsound[1024]; } adminLevel_t;
 static adminLevel_t levels[64];
-static int levelCount,levelsReady;
+static int levelCount,levelsReady,levelSavePending;
 static int LevelGeneration(char *path,int *next) {
     static char list[65536]; char *p=list,*end=list+sizeof(list); int i,count,max=0,committed=0;
     memset(list,0,sizeof(list)); count=trap_FS_GetFileList("levels.db.d","",list,sizeof(list));
@@ -95,6 +95,7 @@ int G_NITMOD_LoadAdminLevels(void) {
     fileHandle_t file=0; int length,i,used=0; char *buffer,*cursor,*token;
     char path[MAX_QPATH]; int nextGeneration;
     adminLevel_t *next; adminLevel_t *current=0;
+    if(levelSavePending) return levelsReady;
     levelsReady=0; levelCount=0;
     if(!LevelGeneration(path,&nextGeneration)) return 0;
     length=trap_FS_FOpenFile(path,&file,FS_READ);
@@ -221,11 +222,55 @@ static int FlingClient(gentity_t *ent,int mode) {
     VectorMA(ent->client->ps.velocity,1500,direction,ent->client->ps.velocity);
     return 1;
 }
-static int PenaltyStore(const nitmodDatabasePenalty_t *penalty,int mute,int add) {
-    int length,ok; void *before=NITMOD_DBExport(&length); if(!before) return 0;
-    ok=NITMOD_DBPenaltySave(mute,penalty,add) && G_NITMOD_DatabaseFlush();
-    if(!ok) NITMOD_DBOpenWorking(before,length);
-    NITMOD_DBFreeExport(before); return ok;
+/* Database completions own text/identity snapshots, never entity pointers or
+ * va() buffers. Account connection generations reject reused client slots. */
+typedef struct {
+    int actor,target,action,dropTime;
+    unsigned int actorGeneration,targetGeneration,targets[MAX_CLIENTS];
+    unsigned char selected[MAX_CLIENTS];
+    char success[1200],failure[256],drop[1200];
+} adminDbCompletion_t;
+static int AdminDbClient(int n,unsigned int generation) {
+    return n>=0 && n<MAX_CLIENTS && g_entities[n].client &&
+        g_entities[n].client->pers.connected!=CON_DISCONNECTED &&
+        G_NITMOD_AccountConnectionGeneration(n)==generation;
+}
+static void AdminDbContext(adminDbCompletion_t *ctx,int actor,const char *command) {
+    memset(ctx,0,sizeof(*ctx));ctx->actor=actor;ctx->target=-1;
+    ctx->actorGeneration=G_NITMOD_AccountConnectionGeneration(actor);
+    Com_sprintf(ctx->failure,sizeof(ctx->failure),"^1%s error: ^9Database write failed\n",command);
+}
+static void AdminDbTarget(adminDbCompletion_t *ctx,int target,int action) {
+    ctx->target=target;ctx->action=action;
+    ctx->targetGeneration=G_NITMOD_AccountConnectionGeneration(target);
+}
+static void AdminDbDone(int ok,const void *opaque) {
+    const adminDbCompletion_t *ctx=opaque;int i;
+    if(ok && AdminDbClient(ctx->target,ctx->targetGeneration)) {
+        gclient_t *client=g_entities[ctx->target].client;
+        if(ctx->action==1) { client->sess.muted=qfalse;client->sess.nitmodCensorMuteTime=-1;client->nitmodMuteUntil=0;ClientUserinfoChanged(ctx->target); }
+        /* Original !mute keeps the censor timestamp: its dynamic language
+         * timer and the persisted mute are checked independently. */
+        else if(ctx->action==2) ClientUserinfoChanged(ctx->target);
+        else if(ctx->action==3) trap_DropClient(ctx->target,ctx->drop,ctx->dropTime);
+    }
+    /* Original kick policy still kicks if optional temporary-ban storage
+     * fails, but only after that storage operation has a final outcome. */
+    if(ctx->action==4 && AdminDbClient(ctx->target,ctx->targetGeneration))
+        trap_DropClient(ctx->target,ctx->drop,ctx->dropTime);
+    if(ok) for(i=0;i<MAX_CLIENTS;++i)
+        if(ctx->selected[i] && AdminDbClient(i,ctx->targets[i])) trap_DropClient(i,ctx->drop,0);
+    if(ctx->actor<0 || AdminDbClient(ctx->actor,ctx->actorGeneration)) {
+        const char *text=ok?ctx->success:ctx->failure;if(*text)Print(ctx->actor,text);
+    } else if(!ok) G_LogPrintf("[Admin] Deferred database operation failed after actor disconnect\n");
+}
+static void PenaltyStore(const nitmodDatabasePenalty_t *penalty,int mute,int add,const adminDbCompletion_t *ctx) {
+    int length;void *before=NITMOD_DBExport(&length);
+    if(!before){AdminDbDone(0,ctx);return;}
+    if(!NITMOD_DBPenaltySave(mute,penalty,add)) {
+        NITMOD_DBInstallWorking(before,length);NITMOD_DBFreeExport(before);AdminDbDone(0,ctx);return;
+    }
+    G_NITMOD_DatabaseCommit(before,length,AdminDbDone,ctx,sizeof(*ctx));
 }
 static int PenaltyCommand(int n,const char *command,int argc,char args[][1024]) {
     nitmodDatabasePenalty_t penalty,existing; nitmodDatabaseAccount_t account,actor;
@@ -280,8 +325,9 @@ static int PenaltyCommand(int n,const char *command,int argc,char args[][1024]) 
     if(argc<2) { Print(n,va("^9usage: ^g!%s [target]\n",command)); return 1; }
     if(!strcmp(command,"unban")) {
         if(!Number(args[1],&i) || i<1 || NITMOD_DBPenaltyAt(0,i-1,&penalty)!=1) { Print(n,"^1unban error: ^9invalid ban #\n"); return 1; }
-        if(!PenaltyStore(&penalty,0,0)) Print(n,"^1unban error: ^9Database write failed\n");
-        else Print(n,va("^xunban: ^9ban ^g#%d ^9removed\n",i)); return 1;
+        { adminDbCompletion_t ctx;AdminDbContext(&ctx,n,"unban");
+          Com_sprintf(ctx.success,sizeof(ctx.success),"^xunban: ^9ban ^g#%d ^9removed\n",i);
+          PenaltyStore(&penalty,0,0,&ctx); } return 1;
     }
     if(!strcmp(command,"banguid")) {
         if(NITMOD_DBAccountByID(args[1],&account)!=1) { Print(n,"^1banguid error: ^9Player not found.\n"); return 1; }
@@ -314,9 +360,9 @@ static int PenaltyCommand(int n,const char *command,int argc,char args[][1024]) 
             if(argc>2 && (!Number(args[2],&selection) || selection<1 || selection>count)) { Print(n,"^9invalid number\n"); return 1; }
             if(NITMOD_DBPenaltyAt(1,matches[selection-1],&penalty)!=1) { Print(n,"^1unmute error: ^9Database query failed\n"); return 1; }
         }
-        if(!PenaltyStore(&penalty,1,0)) Print(n,"^1unmute error: ^9Database write failed\n");
-        else { g_entities[target].client->sess.muted=qfalse; g_entities[target].client->nitmodMuteUntil=0;
-               ClientUserinfoChanged(target); Print(n,"^xunmute: ^9Player has been unmuted\n"); }
+        { adminDbCompletion_t ctx;AdminDbContext(&ctx,n,"unmute");AdminDbTarget(&ctx,target,1);
+          Q_strncpyz(ctx.success,"^xunmute: ^9Player has been unmuted\n",sizeof(ctx.success));
+          PenaltyStore(&penalty,1,0,&ctx); }
         return 1;
     }
     if(argc>2) {
@@ -339,7 +385,7 @@ static int PenaltyCommand(int n,const char *command,int argc,char args[][1024]) 
     if(!strcmp(account.ip,"localhost") || !strcmp(account.ip,"127.0.0.1") || (target>=0 && g_entities[target].client->pers.localClient)) {
         Print(n,"^1Admin error: ^9Cannot ban or mute server host.\n"); return 1;
     }
-    i=NITMOD_DBPenaltyCheck(mute,"",account.user.guid,account.mac,time,&existing,&expired);
+    i=NITMOD_DBPenaltyPeek(mute,"",account.user.guid,account.mac,time,&existing,&expired);
     if(i!=0) { Print(n,i>0?"^1Admin error: ^9Player already banned/muted\n":"^1Admin error: ^9Database query failed\n"); return 1; }
     Q_strncpyz(penalty.name,account.user.name,sizeof(penalty.name)); Q_strncpyz(penalty.ip,account.ip,sizeof(penalty.ip));
     Q_strncpyz(penalty.mac,account.mac,sizeof(penalty.mac)); Q_strncpyz(penalty.actor,n<0?"console":g_entities[n].client->pers.netname,sizeof(penalty.actor));
@@ -347,16 +393,16 @@ static int PenaltyCommand(int n,const char *command,int argc,char args[][1024]) 
     penalty.expires=seconds?time+seconds:0;
     for(i=start;i<argc;++i) { if(i>start) Q_strcat(penalty.reason,sizeof(penalty.reason)," "); Q_strcat(penalty.reason,sizeof(penalty.reason),args[i]); }
     if(!*penalty.reason) Q_strncpyz(penalty.reason,mute?"muted by admin":"banned by admin",sizeof(penalty.reason));
-    if(!PenaltyStore(&penalty,mute,1)) { Print(n,"^1Admin error: ^9Database write failed\n"); return 1; }
-    if(target>=0) {
-        if(mute) ClientUserinfoChanged(target);
-        else trap_DropClient(target,va("You have been banned %s, Reason: %s",seconds?va("for %i seconds",seconds):"^1PERMANENTLY",penalty.reason),0);
-    }
-    if(!strcmp(command,"banguid")) for(i=0;i<MAX_CLIENTS;++i) {
-        if(G_NITMOD_ClientAccount(i,&actor) && !Q_stricmp(actor.user.guid,account.user.guid))
-            trap_DropClient(i,va("You have been banned %s, Reason: %s",seconds?va("for %i seconds",seconds):"^1PERMANENTLY",penalty.reason),0);
-    }
-    Print(n,va("^x%s: ^7%s ^9has been %s\n",command,penalty.name,mute?"muted":"banned")); return 1;
+    { adminDbCompletion_t ctx;AdminDbContext(&ctx,n,command);AdminDbTarget(&ctx,target,mute?2:3);
+      Q_strncpyz(ctx.failure,"^1Admin error: ^9Database write failed\n",sizeof(ctx.failure));
+      Com_sprintf(ctx.drop,sizeof(ctx.drop),"You have been banned %s, Reason: %s",seconds?va("for %i seconds",seconds):"^1PERMANENTLY",penalty.reason);
+      if(!strcmp(command,"banguid")) for(i=0;i<MAX_CLIENTS;++i)
+          if(G_NITMOD_ClientAccount(i,&actor) && !Q_stricmp(actor.user.guid,account.user.guid)) {
+              ctx.selected[i]=1;ctx.targets[i]=G_NITMOD_AccountConnectionGeneration(i);
+          }
+      Com_sprintf(ctx.success,sizeof(ctx.success),"^x%s: ^7%s ^9has been %s\n",command,penalty.name,mute?"muted":"banned");
+      PenaltyStore(&penalty,mute,1,&ctx);
+    } return 1;
 }
 static int KnownPrivilege(const char *name) {
     static const char names[]="readconfig time setlevel kick ban unban put pause unpause listplayers records mute unmute showbans help gibme admintest cancelvote passvote spec999 shuffle rename splat splata slap burn warn news lock unlock nade pip pop restart reset fling throw launch disorient orient resetxp resetmyxp nextmap swap swap_restart revive panzerwar sniperwar disguise poison ammopack medpack pants give finger uptime glow freeze unfreeze blind unblind about stats levedit levinfo levlist spec banguid userlist useredit userinfo seen delrecords dbsave userdelete levdelete levadd crazygravity immunity nocensorflood silentcmds specchat balanceimmunity noreason novotelimit permban teamcmds inactivity incognito novote pmspec adminchat nopm all";
@@ -378,6 +424,34 @@ static int EditFlags(char *flags,const char *flag,int grant) {
         if(*flags) Q_strcat(flags,1024," "); Q_strcat(flags,1024,flag);
     }
     return 1;
+}
+typedef struct {
+    adminDbCompletion_t notice;
+    adminLevel_t *oldLevels,*newLevels;
+    int oldCount,newCount,beforeLength,afterLength;
+    void *dbBefore,*dbAfter;
+} levelDbCompletion_t;
+static void LevelDbFree(levelDbCompletion_t *ctx) {
+    NITMOD_DBFreeExport(ctx->dbBefore);NITMOD_DBFreeExport(ctx->dbAfter);
+    free(ctx->oldLevels);free(ctx->newLevels);free(ctx);levelSavePending=0;
+}
+static void LevelDbUndoDone(int ok,const void *opaque) {
+    levelDbCompletion_t *ctx=*(levelDbCompletion_t *const *)opaque;
+    if(!ok)G_LogPrintf("[Admin] Failed to persist targeted level migration rollback\n");
+    AdminDbDone(0,&ctx->notice);LevelDbFree(ctx);
+}
+static void LevelDbDone(int ok,const void *opaque) {
+    levelDbCompletion_t *ctx=*(levelDbCompletion_t *const *)opaque;
+    if(!ok){AdminDbDone(0,&ctx->notice);LevelDbFree(ctx);return;}
+    memcpy(levels,ctx->newLevels,sizeof(levels));levelCount=ctx->newCount;
+    if(SaveLevels()){AdminDbDone(1,&ctx->notice);LevelDbFree(ctx);return;}
+    memcpy(levels,ctx->oldLevels,sizeof(levels));levelCount=ctx->oldCount;
+    /* Undo only this migration's changed fields against the latest DB image.
+     * A stale whole-image restore would erase other committed XP/accounts. */
+    { void *base=ctx->dbAfter,*changed=ctx->dbBefore;int baseLength=ctx->afterLength,changedLength=ctx->beforeLength;
+      ctx->dbAfter=ctx->dbBefore=NULL;
+      G_NITMOD_DatabaseSubmitImages(base,baseLength,changed,changedLength,LevelDbUndoDone,&ctx,sizeof(ctx));
+    }
 }
 static int LevelCommand(int n,const char *command,int argc,char args[][1024]) {
     adminLevel_t *entry,*before; int i,number,oldCount=levelCount,to=0,length=0,ok,migrate=0; void *databaseBefore=NULL;
@@ -406,7 +480,7 @@ static int LevelCommand(int n,const char *command,int argc,char args[][1024]) {
         }
         databaseBefore=NITMOD_DBExport(&length); if(!databaseBefore) goto abortEdit;
         migrate=1;
-        if(!NITMOD_DBMigrateUserLevel(number,to) || !G_NITMOD_DatabaseFlush()) goto failed;
+        if(!NITMOD_DBMigrateUserLevel(number,to)) goto failed;
         i=(int)(entry-levels); memmove(&levels[i],&levels[i+1],(levelCount-i-1)*sizeof(*entry)); --levelCount;
     } else {
         if(argc<3) { Print(n,"^9usage: ^g!levedit [level] [grant|revoke|name|gtext|gsound] [args]^7\n"); goto abortEdit; }
@@ -421,12 +495,29 @@ static int LevelCommand(int n,const char *command,int argc,char args[][1024]) {
             value[0]=0; for(i=3;i<argc;++i) { if(i>3) Q_strcat(value,capacity," "); Q_strcat(value,capacity,args[i]); if(value==entry->gsound) break; }
         }
     }
+    if(migrate) {
+        levelDbCompletion_t *ctx=calloc(1,sizeof(*ctx));
+        if(!ctx)goto failed;
+        ctx->dbBefore=sqlite3_malloc(length);ctx->newLevels=malloc(sizeof(levels));
+        ctx->dbAfter=NITMOD_DBExport(&ctx->afterLength);
+        if(!ctx->dbBefore || !ctx->newLevels || !ctx->dbAfter) {
+            NITMOD_DBFreeExport(ctx->dbBefore);NITMOD_DBFreeExport(ctx->dbAfter);free(ctx->newLevels);free(ctx);goto failed;
+        }
+        memcpy(ctx->dbBefore,databaseBefore,length);ctx->beforeLength=length;
+        memcpy(ctx->newLevels,levels,sizeof(levels));ctx->newCount=levelCount;
+        ctx->oldLevels=before;ctx->oldCount=oldCount;
+        AdminDbContext(&ctx->notice,n,command);
+        Com_sprintf(ctx->notice.success,sizeof(ctx->notice.success),"^x%s: ^9level ^7%d successfully deleted^7\n",command,number);
+        Com_sprintf(ctx->notice.failure,sizeof(ctx->notice.failure),"^1%s error: ^9Persistence failed\n",command);
+        memcpy(levels,before,sizeof(levels));levelCount=oldCount;levelSavePending=1;
+        G_NITMOD_DatabaseCommit(databaseBefore,length,LevelDbDone,&ctx,sizeof(ctx));return 1;
+    }
     ok=SaveLevels(); if(!ok) goto failed;
     Print(n,va("^x%s: ^9level ^7%d successfully %s^7\n",command,number,!strcmp(command,"levadd")?"added":!strcmp(command,"levdelete")?"deleted":"updated"));
     NITMOD_DBFreeExport(databaseBefore); free(before); return 1;
 failed:
     if(migrate && databaseBefore) {
-        if(!NITMOD_DBOpenWorking(databaseBefore,length) || !G_NITMOD_DatabaseFlush()) G_LogPrintf("[Admin] Failed to persist level migration rollback\n");
+        if(!NITMOD_DBInstallWorking(databaseBefore,length)) G_LogPrintf("[Admin] Failed to restore uncommitted level migration\n");
     }
     Print(n,va("^1%s error: ^9Persistence failed\n",command));
 abortEdit:
@@ -493,8 +584,9 @@ static int UserCommand(int n,const char *command,int argc,char args[][1024]) {
         return 1;
     }
     if(!strcmp(command,"userdelete")) {
-        if(!G_NITMOD_StoreAccount(&account,0)) Print(n,"^1userdelete error: ^9Database write failed\n");
-        else Print(n,va("^xuserdelete: ^9User ^7%s ^9(UserID ^g%s^9) successfully deleted from database^7\n",account.user.name,id));
+        { adminDbCompletion_t ctx;AdminDbContext(&ctx,n,"userdelete");
+          Com_sprintf(ctx.success,sizeof(ctx.success),"^xuserdelete: ^9User ^7%s ^9(UserID ^g%s^9) successfully deleted from database^7\n",account.user.name,id);
+          G_NITMOD_StoreAccountAsync(&account,0,AdminDbDone,&ctx,sizeof(ctx)); }
         return 1;
     }
     if(argc<3) { Print(n,"^9usage: ^g!useredit [UserID] [grant|revoke|level|gtext|gsound] [args]^7\n"); return 1; }
@@ -520,8 +612,9 @@ static int UserCommand(int n,const char *command,int argc,char args[][1024]) {
             Q_strcat(account.user.flags,sizeof(account.user.flags),args[3]);
         }
     } else { Print(n,"^1useredit error: ^9Unknown action^7\n"); return 1; }
-    if(!G_NITMOD_StoreAccount(&account,2)) Print(n,"^1useredit error: ^9Database write failed\n");
-    else Print(n,va("^xuseredit: ^7%s ^9updated\n",account.user.name));
+    { adminDbCompletion_t ctx;AdminDbContext(&ctx,n,"useredit");
+      Com_sprintf(ctx.success,sizeof(ctx.success),"^xuseredit: ^7%s ^9updated\n",account.user.name);
+      G_NITMOD_StoreAccountAsync(&account,2,AdminDbDone,&ctx,sizeof(ctx)); }
     return 1;
 }
 
@@ -633,7 +726,49 @@ static int SupportedAdminCommand(const char *cursor) { if(!Q_stricmp(cursor,"glo
        Q_stricmp(cursor,"mute") && Q_stricmp(cursor,"unmute") && Q_stricmp(cursor,"unban") && Q_stricmp(cursor,"showbans") &&
        Q_stricmp(cursor,"userlist") && Q_stricmp(cursor,"userinfo") && Q_stricmp(cursor,"useredit") && Q_stricmp(cursor,"userdelete") && Q_stricmp(cursor,"seen") &&
        Q_stricmp(cursor,"levadd") && Q_stricmp(cursor,"levdelete") && Q_stricmp(cursor,"levlist") && Q_stricmp(cursor,"levinfo") && Q_stricmp(cursor,"levedit") && Q_stricmp(cursor,"delrecords") && Q_stricmp(cursor,"resetxp") && Q_stricmp(cursor,"resetmyxp")); }
-int G_NITMOD_AdminCommand(int n,const char *command) {
+typedef struct {
+    int enabled, attempted;
+    char command[64], invoked[64], arguments[1024];
+} adminLogRequest_t;
+
+/* Original _shrubbot_log: one append per dispatched or denied command. */
+static void AdminCommandLog(int clientNum, const adminLogRequest_t *request) {
+    char path[MAX_QPATH], name[MAX_NETNAME], guid[33], info[MAX_INFO_STRING];
+    char timestamp[20], line[1024];
+    fileHandle_t file = 0;
+    qtime_t now;
+    if (!request->enabled) return;
+    G_NITMOD_LegacyCvarString("g_logAdmin", path, sizeof(path), "");
+    if (!path[0]) return;
+    if (trap_FS_FOpenFile(path, &file, FS_APPEND) < 0 || !file) {
+        G_Printf("_shrubbot_log: error could not open %s\n", path);
+        return;
+    }
+    if (trap_RealTime(&now) == -1) Q_strncpyz(timestamp, "Time error!", sizeof(timestamp));
+    else Com_sprintf(timestamp, sizeof(timestamp), "%04d-%02d-%02d %02d:%02d:%02d",
+        now.tm_year + 1900, now.tm_mon + 1, now.tm_mday, now.tm_hour, now.tm_min, now.tm_sec);
+    Q_strncpyz(name, "console", sizeof(name));
+    Q_strncpyz(guid, "XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX", sizeof(guid));
+    if (clientNum >= 0 && clientNum < level.maxclients && g_entities[clientNum].client) {
+        Q_strncpyz(name, g_entities[clientNum].client->pers.netname, sizeof(name));
+        Q_CleanStr(name);
+        if (!name[0]) Q_strncpyz(name, "console", sizeof(name));
+        trap_GetUserinfo(clientNum, info, sizeof(info));
+        Q_strncpyz(guid, Info_ValueForKey(info, "n_guid"), sizeof(guid));
+    }
+    if (request->attempted)
+        Com_sprintf(line, sizeof(line), "%s [%2i] [%s '%s']: attempted \"%s%s%s\"\n",
+            timestamp, clientNum, guid, name, request->invoked,
+            request->arguments[0] ? " " : "", request->arguments);
+    else
+        Com_sprintf(line, sizeof(line), "%s [%2i] [%s '%s']: %s %s\n",
+            timestamp, clientNum, guid, name, request->command, request->arguments);
+    trap_FS_Write(line, strlen(line), file);
+    trap_FS_FCloseFile(file);
+}
+
+static int DispatchAdminCommand(int n,const char *command,adminLogRequest_t *log) {
+
     static char args[16][1024]; /* engine command dispatch is single threaded */
     char *cursor,*token; int argc=0,i,target,number,custom; const char *resolved; nitmodDatabaseAccount_t account,actor;
     if(!Q_stricmp(command,"say") || ((!Q_stricmp(command,"say_team") || !Q_stricmp(command,"say_buddy")) && G_NITMOD_AdminPrivilege(n,"teamcmds"))) {
@@ -647,12 +782,19 @@ int G_NITMOD_AdminCommand(int n,const char *command) {
         for(i=0;i<argc;++i) trap_Argv(i,args[i],sizeof(args[i]));
     }
     if(!argc) return 0;
+    Q_strncpyz(log->invoked,args[0],sizeof(log->invoked));
     cursor=args[0]; if(*cursor=='!') ++cursor; Q_strlwr(cursor);
     resolved=ResolveAdminCommand(cursor,&custom);if(!resolved) return 0;
-    if(custom>=0) return ExecuteCustom(n,custom,argc,args);
+    if(!G_NITMOD_DatabaseReady() || levelSavePending) {
+        Print(n,"^9Database operation pending; retry this command after completion.\n");return 1;
+    }
+    Q_strncpyz(log->command,cursor,sizeof(log->command));
+    for(i=1;i<argc;++i) { if(i>1) Q_strcat(log->arguments,sizeof(log->arguments)," ");Q_strcat(log->arguments,sizeof(log->arguments),args[i]); }
+    if(custom>=0) { log->enabled=1;log->attempted=!CustomAllowed(n,custom);return ExecuteCustom(n,custom,argc,args); }
     cursor=(char *)resolved;
     if(!SupportedAdminCommand(cursor)) return 0;
-    if(!G_NITMOD_AdminAllowed(n,cursor)) { Print(n,va("^x%s: ^1Permission denied\n",cursor)); return 1; }
+    log->enabled=1;
+    if(!G_NITMOD_AdminAllowed(n,cursor)) { log->attempted=1;Print(n,va("^x%s: ^1Permission denied\n",cursor)); return 1; }
 
     if(!strcmp(cursor,"glow")) {
         int all,j,count,changed=0;
@@ -1059,7 +1201,9 @@ int G_NITMOD_AdminCommand(int n,const char *command) {
             Com_sprintf(penalty.reason,sizeof(penalty.reason),"^7You have been kicked, Reason: %s^7",reason);
             Com_sprintf(penalty.made,sizeof(penalty.made),"%02d/%02d/%02d %02d:%02d:%02d",now.tm_mon+1,now.tm_mday,(now.tm_year+1900)%100,now.tm_hour,now.tm_min,now.tm_sec);
             penalty.expires=(int)expires;
-            if(!PenaltyStore(&penalty,0,1)) Print(n,"^1kick error: ^9Database write failed\n");
+            { adminDbCompletion_t ctx;AdminDbContext(&ctx,n,"kick");AdminDbTarget(&ctx,target,4);ctx.dropTime=120;
+              Com_sprintf(ctx.drop,sizeof(ctx.drop),"^7You have been kicked, Reason: %s^7",reason);
+              PenaltyStore(&penalty,0,1,&ctx);return 1; }
             }
         }
         trap_DropClient(target,va("^7You have been kicked, Reason: %s^7",reason),120);return 1;
@@ -1272,26 +1416,33 @@ int G_NITMOD_AdminCommand(int n,const char *command) {
         if(n>=0 && (!G_NITMOD_ClientAccount(n,&actor) || EffectiveLevel(actor.user.level)<EffectiveLevel(account.user.level))) {
             Print(n,"^1resetxp error: ^9Specified player has a higher ^7 admin level than you.\n"); return 1;
         }
-        if(!G_NITMOD_AccountResetXP(target)) Print(n,"^1resetxp error: ^9Database write failed\n");
-        else Print(n,va("^x%s: ^9XP has been reset for player ^7%s\n",cursor,account.user.name));
+        { adminDbCompletion_t ctx;AdminDbContext(&ctx,n,"resetxp");
+          Com_sprintf(ctx.success,sizeof(ctx.success),"^x%s: ^9XP has been reset for player ^7%s\n",cursor,account.user.name);
+          G_NITMOD_AccountResetXPAsync(target,AdminDbDone,&ctx,sizeof(ctx)); }
         return 1;
     }
     if(!strcmp(cursor,"levadd") || !strcmp(cursor,"levdelete") || !strcmp(cursor,"levlist") || !strcmp(cursor,"levinfo") || !strcmp(cursor,"levedit")) return LevelCommand(n,cursor,argc,args);
     if(!strcmp(cursor,"delrecords")) {
-        int length,ok; void *before; const char *map; nitmodDatabaseRecords_t record;
+        int length; void *before; const char *map; nitmodDatabaseRecords_t record;adminDbCompletion_t ctx;
         if(!G_NITMOD_LegacyCvarInteger("n_mapRecords",0)) { Print(n,"^xdelrecords: ^gSorry, map records are not enabled.\n"); return 1; }
         if(argc<2) { Print(n,"^9usage: ^g!delrecord [map_name|DELETEALL]^7\n"); return 1; }
         map=!strcmp(args[1],"DELETEALL")?NULL:args[1];
         if(map && NITMOD_DBRecords(map,&record)!=1) { Print(n,va("^9delrecords : ^9map records not found for '^g%s^9'\n",map)); return 1; }
         before=NITMOD_DBExport(&length); if(!before) return 1;
-        ok=NITMOD_DBClearRecords(map) && G_NITMOD_DatabaseFlush();
-        if(!ok) { NITMOD_DBOpenWorking(before,length); Print(n,"^1delrecords error: ^9Database write failed\n"); }
-        else Print(n,map?va("^xdelrecords: ^9Map records for ^g%s^9 successfully deleted from database^7\n",map):"^xdelrecords: ^9Sucessfully deleted all map records^7\n");
-        NITMOD_DBFreeExport(before); return 1;
+        AdminDbContext(&ctx,n,"delrecords");
+        Q_strncpyz(ctx.success,map?va("^xdelrecords: ^9Map records for ^g%s^9 successfully deleted from database^7\n",map):"^xdelrecords: ^9Sucessfully deleted all map records^7\n",sizeof(ctx.success));
+        if(!NITMOD_DBClearRecords(map)) {
+            NITMOD_DBInstallWorking(before,length);NITMOD_DBFreeExport(before);AdminDbDone(0,&ctx);
+        } else G_NITMOD_DatabaseCommit(before,length,AdminDbDone,&ctx,sizeof(ctx));
+        return 1;
     }
     if(!strcmp(cursor,"userlist") || !strcmp(cursor,"userinfo") || !strcmp(cursor,"useredit") || !strcmp(cursor,"userdelete") || !strcmp(cursor,"seen")) return UserCommand(n,cursor,argc,args);
     if(!strcmp(cursor,"readconfig")) { G_NITMOD_LoadAdminLevels(); G_NITMOD_LoadAdminCommands(); return 1; }
-    if(!strcmp(cursor,"dbsave")) { if(!G_NITMOD_DatabaseFlush()) Print(n,"^1Database save failed\n"); return 1; }
+    if(!strcmp(cursor,"dbsave")) {
+        adminDbCompletion_t ctx;int length;void *before=NITMOD_DBExport(&length);AdminDbContext(&ctx,n,"dbsave");
+        Q_strncpyz(ctx.failure,"^1Database save failed\n",sizeof(ctx.failure));
+        if(!before)AdminDbDone(NITMOD_DBUserCount()<0,&ctx);else G_NITMOD_DatabaseCommit(before,length,AdminDbDone,&ctx,sizeof(ctx));return 1;
+    }
     if(!strcmp(cursor,"ban") || !strcmp(cursor,"banguid") || !strcmp(cursor,"mute") || !strcmp(cursor,"unmute") ||
        !strcmp(cursor,"unban") || !strcmp(cursor,"showbans")) return PenaltyCommand(n,cursor,argc,args);
     if(!strcmp(cursor,"admintest")) {
@@ -1314,8 +1465,9 @@ int G_NITMOD_AdminCommand(int n,const char *command) {
         Print(n,"^1setlevel error: ^9you can't setlevel higher than your level\n"); return 1;
     }
     account.user.level=number;
-    if(!G_NITMOD_StoreAccount(&account,2)) Print(n,"^1setlevel error: ^9Database write failed\n");
-    else Print(n,va("^xsetlevel: ^7%s^9's level set to ^x%d\n",account.user.name,number));
+    { adminDbCompletion_t ctx;AdminDbContext(&ctx,n,"setlevel");
+      Com_sprintf(ctx.success,sizeof(ctx.success),"^xsetlevel: ^7%s^9's level set to ^x%d\n",account.user.name,number);
+      G_NITMOD_StoreAccountAsync(&account,2,AdminDbDone,&ctx,sizeof(ctx)); }
     return 1;
 }
 
@@ -1323,4 +1475,13 @@ void G_NITMOD_UpdateAdminGlow(gentity_t *ent) {
     if(!ent || !ent->client) return;
     if(ent->client->nitmodGlowing) ent->s.time2|=NITMOD_ES_GLOW;
     else ent->s.time2&=~NITMOD_ES_GLOW;
+}
+
+int G_NITMOD_AdminCommand(int clientNum, const char *command) {
+    adminLogRequest_t log;
+    int handled;
+    memset(&log,0,sizeof(log));
+    handled=DispatchAdminCommand(clientNum,command,&log);
+    AdminCommandLog(clientNum,&log);
+    return handled;
 }

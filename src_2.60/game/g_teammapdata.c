@@ -1,4 +1,5 @@
 #include "g_local.h"
+#include "g_nitmod_legacy_cvars.h"
 
 /*
 ===================
@@ -890,7 +891,7 @@ void G_UpdateTeamMapData( void ) {
 		}
 
 		if( ent->client->sess.playerType == PC_FIELDOPS ) {
-			if( ent->client->sess.skill[SK_SIGNALS] >= 4 && ent->health > 0 ) {
+			if( (ent->client->sess.nitmodSkillMasks[SK_SIGNALS] & 16u) && ent->health > 0 ) {
 				vec3_t pos[3];
 
 				f1 = ent->client->sess.sessionTeam == TEAM_ALLIES ? qtrue : qfalse;
@@ -929,71 +930,81 @@ void G_UpdateTeamMapData( void ) {
 					}
 				}
 			}
-		} else if( ent->client->sess.playerType == PC_COVERTOPS ) {
+		}
+		/* Original Battle Sense reward16 plus g_skills bit8 allows every
+		 * class to spot mines; it does not grant the Covert player spotting. */
+		if( ent->client->sess.playerType == PC_COVERTOPS ||
+			((G_NITMOD_LegacyCvarInteger("g_skills", 0) & 8) &&
+			 (ent->client->sess.nitmodSkillMasks[SK_BATTLE_SENSE] & 16u)) ) {
 			if( ent->health > 0 ) {
 				f1 = ent->client->sess.sessionTeam == TEAM_ALLIES ? qtrue : qfalse;
 				f2 = ent->client->sess.sessionTeam == TEAM_AXIS ?	qtrue : qfalse;
 
-				G_SetupFrustum( ent );
+				if(ent->client->sess.playerType == PC_COVERTOPS) {
+					G_SetupFrustum( ent );
 
-				for( j = 0, ent2 = g_entities; j < level.num_entities; j++, ent2++ ) {
-					if( !ent2->inuse || ent2 == ent ) {
-						continue;
-					}
+					for( j = 0, ent2 = g_entities; j < level.num_entities; j++, ent2++ ) {
+						if( !ent2->inuse || ent2 == ent ) {
+							continue;
+						}
 
-					switch(ent2->s.eType) {
-					case ET_PLAYER:
-						{
-						vec3_t pos[3];
-						VectorCopy( ent2->client->ps.origin, pos[0] );
-						pos[0][2] += ent2->client->ps.mins[2];
-						VectorCopy( ent2->client->ps.origin, pos[1] );
-						VectorCopy( ent2->client->ps.origin, pos[2] );
-						pos[2][2] += ent2->client->ps.maxs[2];
-						if(ent2->health > 0 && (G_VisibleFromBinoculars( ent, ent2, pos[0] ) ||
-												G_VisibleFromBinoculars( ent, ent2, pos[1] ) ||
-												G_VisibleFromBinoculars( ent, ent2, pos[2] ) ) ) {
-							if(ent2->client->sess.sessionTeam != ent->client->sess.sessionTeam) {
-								int k;
+						switch(ent2->s.eType) {
+						case ET_PLAYER:
+							{
+							vec3_t pos[3];
+							VectorCopy( ent2->client->ps.origin, pos[0] );
+							pos[0][2] += ent2->client->ps.mins[2];
+							VectorCopy( ent2->client->ps.origin, pos[1] );
+							VectorCopy( ent2->client->ps.origin, pos[2] );
+							pos[2][2] += ent2->client->ps.maxs[2];
+							if(ent2->health > 0 && (G_VisibleFromBinoculars( ent, ent2, pos[0] ) ||
+													G_VisibleFromBinoculars( ent, ent2, pos[1] ) ||
+													G_VisibleFromBinoculars( ent, ent2, pos[2] ) ) ) {
+								if(ent2->client->sess.sessionTeam != ent->client->sess.sessionTeam) {
+									int k;
 
-								switch(ent2->client->sess.sessionTeam) {
-								case TEAM_AXIS:
-									mEnt = G_FindMapEntityData( &mapEntityData[0], ent2-g_entities );
-									if( mEnt && level.time - mEnt->startTime > 5000) {
-										for( k = 0; k < MAX_CLIENTS; k++ ) {
-											if(g_entities[k].inuse && g_entities[k].client && g_entities[k].client->sess.sessionTeam == ent->client->sess.sessionTeam) {
-												trap_SendServerCommand( k, va( "tt \"ENEMY SPOTTED <STOP> CHECK COMMAND MAP FOR DETAILS <STOP>\"\n" ));
+									switch(ent2->client->sess.sessionTeam) {
+									case TEAM_AXIS:
+										mEnt = G_FindMapEntityData( &mapEntityData[0], ent2-g_entities );
+										if( mEnt && level.time - mEnt->startTime > 5000) {
+											for( k = 0; k < MAX_CLIENTS; k++ ) {
+												if(g_entities[k].inuse && g_entities[k].client && g_entities[k].client->sess.sessionTeam == ent->client->sess.sessionTeam) {
+													trap_SendServerCommand( k, va( "tt \"ENEMY SPOTTED <STOP> CHECK COMMAND MAP FOR DETAILS <STOP>\"\n" ));
+												}
 											}
 										}
-									}
-									break;
+										break;
 
-								case TEAM_ALLIES:
-									mEnt = G_FindMapEntityData( &mapEntityData[1], ent2-g_entities );
-									if( mEnt && level.time - mEnt->startTime > 5000) {
-										for( k = 0; k < MAX_CLIENTS; k++ ) {
-											if(g_entities[k].inuse && g_entities[k].client && g_entities[k].client->sess.sessionTeam == ent->client->sess.sessionTeam) {
-												trap_SendServerCommand( k, va( "tt \"ENEMY SPOTTED <STOP> CHECK COMMAND MAP FOR DETAILS <STOP>\"\n" ));
+									case TEAM_ALLIES:
+										mEnt = G_FindMapEntityData( &mapEntityData[1], ent2-g_entities );
+										if( mEnt && level.time - mEnt->startTime > 5000) {
+											for( k = 0; k < MAX_CLIENTS; k++ ) {
+												if(g_entities[k].inuse && g_entities[k].client && g_entities[k].client->sess.sessionTeam == ent->client->sess.sessionTeam) {
+													trap_SendServerCommand( k, va( "tt \"ENEMY SPOTTED <STOP> CHECK COMMAND MAP FOR DETAILS <STOP>\"\n" ));
+												}
 											}
 										}
-									}
-									break;
+										break;
 
-								default:
-									break;
+									default:
+										break;
+									}
 								}
-							}
 
-							G_UpdateTeamMapData_Player(ent2, f1, f2);
+								G_UpdateTeamMapData_Player(ent2, f1, f2);
+							}
+							break;
+							}
+						default:
+							break;
 						}
-						break;
-						}
-					default:
-						break;
 					}
+
 				}
 
-				if(ent->client->ps.eFlags & EF_ZOOMING) {
+				if((ent->client->ps.eFlags & EF_ZOOMING) &&
+					ent->client->sess.sessionTeam != TEAM_SPECTATOR &&
+					!(ent->client->ps.pm_flags & PMF_LIMBO)) {
 					G_SetupFrustum_ForBinoculars( ent );
 
 					for(j = 0, ent2 = g_entities; j < level.num_entities; j++, ent2++) {

@@ -14,7 +14,7 @@ vmCvar_t cg_pingColors;
 void CG_NitmodScoreKeyDown(void) {
 	double sincePress = (double)cg.time - cg.nitmodScoreLastPress;
 	double sinceToggle = (double)cg.time - cg.nitmodScoreLastToggle;
-	if (!NITMOD_UsesOriginalProtocol()) return;
+	if (!NITMOD_UsesNitmodHud()) return;
 	if (!cg.showScores && cg.nitmodScorePressSeen && sincePress >= 0 &&
 	    sincePress <= 249 && sinceToggle > 500) {
 		cg.nitmodScoreSortKD = !cg.nitmodScoreSortKD;
@@ -36,7 +36,7 @@ int CG_NitmodScoreOrder(int *order, int capacity) {
 		if (client < 0 || client >= MAX_CLIENTS) continue;
 		order[count++] = i;
 	}
-	if (NITMOD_UsesOriginalProtocol() && cg.nitmodScoreSortKD) {
+	if (NITMOD_UsesNitmodHud() && cg.nitmodScoreSortKD) {
 		for (i = 1; i < count; ++i) {
 			int row = order[i], j = i;
 			const score_t *a = &cg.scores[row];
@@ -86,7 +86,7 @@ qboolean CG_NitmodCountryFlagUV(int code, float *s0, float *t0, float *s1, float
 
 static qboolean CG_NitmodDrawCountryFlag(float x, float y, const clientInfo_t *client) {
 	float s0, t0, s1, t1;
-	if(!client || !NITMOD_UsesOriginalProtocol() || !cg_countryflags.integer ||
+	if(!client || !NITMOD_UsesNitmodHud() || !cg_countryflags.integer ||
 	   !cgs.media.countryFlags || !CG_NitmodCountryFlagUV(client->countryCode, &s0, &t0, &s1, &t1)) return qfalse;
 	CG_DrawPicST(x - 11, y - 7, 32, 32, s0, t0, s1, t1, cgs.media.countryFlags);
 	return qtrue;
@@ -270,7 +270,7 @@ int WM_DrawObjectives( int x, int y, int width, float fade ) {
 			w = CG_Text_Width_Ext( s, 0.25f, 0, &cgs.media.limboFont1 );
 
 			CG_Text_Paint_Ext( x + 300 - w*0.5f, y + 13, 0.25f, 0.25f, tclr, s, 0, 0, 0, &cgs.media.limboFont1 );
-		} else if(NITMOD_UsesOriginalProtocol()) {
+		} else if(NITMOD_UsesNitmodHud()) {
 			char cycle[64];
 			if(CG_NitmodScoreboardCycleText(NITMOD_GameState(), cgs.gametype, cycle, sizeof(cycle))) {
 				int w = CG_Text_Width_Ext(cycle, .25f, 0, &cgs.media.limboFont1);
@@ -388,14 +388,14 @@ static void WM_DrawClientScore( int x, int y, score_t *score, float *color, floa
 
 		totalwidth = INFO_CLASS_WIDTH + INFO_SCORE_WIDTH + INFO_LATENCY_WIDTH - 8;
 
-		s = NITMOD_UsesOriginalProtocol() ? CG_NitmodSpectatorLabel(ci, score->ping) : CG_TranslateString( "^3SPECTATOR" );
+		s = NITMOD_UsesNitmodHud() ? CG_NitmodSpectatorLabel(ci, score->ping) : CG_TranslateString( "^3SPECTATOR" );
 		w = CG_DrawStrlen( s ) * SMALLCHAR_WIDTH;
 
 		CG_DrawSmallString( tempx + totalwidth - w, y, s, fade );
 		return;
 	}
 	// OSP - allow MV clients see the class of its merged client's on the scoreboard
-	else if (NITMOD_UsesOriginalProtocol()) {
+	else if (NITMOD_UsesNitmodHud()) {
 		CG_DrawStringExt(tempx, y + 1, va("^2%i^7/^1%i", score->kills, score->deaths),
 			hcolor, qfalse, qfalse, 7, 14, 7);
 	}
@@ -527,13 +527,13 @@ static void WM_DrawClientScore_Small( int x, int y, score_t *score, float *color
 
 		totalwidth = INFO_CLASS_WIDTH + INFO_SCORE_WIDTH + INFO_LATENCY_WIDTH - 8;
 
-		s = NITMOD_UsesOriginalProtocol() ? CG_NitmodSpectatorLabel(ci, score->ping) : CG_TranslateString( "^3SPECTATOR" );
+		s = NITMOD_UsesNitmodHud() ? CG_NitmodSpectatorLabel(ci, score->ping) : CG_TranslateString( "^3SPECTATOR" );
 		w = CG_DrawStrlen( s ) * MINICHAR_WIDTH;
 
 		CG_DrawSmallString( tempx + totalwidth - w, y, s, fade );
 		return;
 	}
-	else if (NITMOD_UsesOriginalProtocol()) {
+	else if (NITMOD_UsesNitmodHud()) {
 		CG_DrawStringExt(tempx, y, va("^2%i^7/^1%i", score->kills, score->deaths),
 			hcolor, qfalse, qfalse, MINICHAR_WIDTH, MINICHAR_HEIGHT, 8);
 	}
@@ -621,7 +621,7 @@ static int WM_TeamScoreboard( int x, int y, team_t team, float fade, int maxrows
 	int order[MAX_CLIENTS], orderedCount = CG_NitmodScoreOrder(order, MAX_CLIENTS);
 	int count = 0;
 	qboolean compact;
-	qboolean original = NITMOD_UsesOriginalProtocol(), lives = qtrue;
+	qboolean original = NITMOD_UsesNitmodHud(), lives = qtrue;
 	int rowHeight;
 	vec4_t tclr =	{ 0.6f,		0.6f,		0.6f,		1.0f };
 	if(original) {
@@ -722,7 +722,7 @@ static int WM_TeamScoreboard( int x, int y, team_t team, float fade, int maxrows
 	CG_DrawSmallString( tempx, y, CG_TranslateString( "Name" ), fade );
 	tempx += INFO_PLAYER_WIDTH;
 
-	CG_DrawSmallString( tempx, y, NITMOD_UsesOriginalProtocol() ? "K/D" : CG_TranslateString( "Class" ), fade );
+	CG_DrawSmallString( tempx, y, NITMOD_UsesNitmodHud() ? "K/D" : CG_TranslateString( "Class" ), fade );
 	tempx += INFO_CLASS_WIDTH;
 
 	if( cgs.gametype == GT_WOLF_LMS ) {
@@ -899,7 +899,7 @@ static qboolean CG_DrawScoreboardContent(void) {
 	{
 		nitmodScoreboardPlan_t plan = CG_NitmodScoreboardPlan(cgs.gametype,
 			cg.snap->ps.pm_type == PM_INTERMISSION);
-		if(NITMOD_UsesOriginalProtocol() && plan.deathmatch) {
+		if(NITMOD_UsesNitmodHud() && plan.deathmatch) {
 			CG_NitmodDMScoreboard(x, y, fade, plan.axisRows,
 				cg.snap->ps.pm_type == PM_INTERMISSION);
 			return qtrue;

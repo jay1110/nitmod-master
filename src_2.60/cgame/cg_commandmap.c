@@ -123,14 +123,17 @@ static qboolean CG_ScissorEntIsCulled( mapEntityData_t* mEnt, mapScissor_t *scis
 			|| mEnt->automapTransformed[1] > scissor->br[1] )
 			return qtrue;
 	} else {
-		float distSquared;
+		float distSquared, radius;
 		vec2_t distVec;
 
 		distVec[0] = mEnt->automapTransformed[0] - ( scissor->tl[0] + ( 0.5f * ( scissor->br[0] - scissor->tl[0] ) ) );
 		distVec[1] = mEnt->automapTransformed[1] - ( scissor->tl[1] + ( 0.5f * ( scissor->br[1] - scissor->tl[1] ) ) );
 		distSquared = distVec[0]*distVec[0] + distVec[1]*distVec[1];
 
-		if( distSquared > Square( 0.5f * (scissor->br[0] - scissor->tl[0]) ) )
+		/* Original map entities/spawns/mortar: mode 2 uses half-width;
+		 * other Nitmod modes use 0.8. Keep stock ET circular clipping. */
+		radius = (NITMOD_UsesNitmodHud() && cg_drawCompass.integer != 2 ? 0.8f : 0.5f) * (scissor->br[0] - scissor->tl[0]);
+		if( distSquared > Square( radius ) )
 			return qtrue;
 	}
 
@@ -145,14 +148,17 @@ static qboolean CG_ScissorPointIsCulled( vec2_t vec, mapScissor_t *scissor ) {
 			|| vec[1] > scissor->br[1] )
 			return qtrue;
 	} else {
-		float distSquared;
+		float distSquared, radius;
 		vec2_t distVec;
 
 		distVec[0] = vec[0] - ( scissor->tl[0] + ( 0.5f * ( scissor->br[0] - scissor->tl[0] ) ) );
 		distVec[1] = vec[1] - ( scissor->tl[1] + ( 0.5f * ( scissor->br[1] - scissor->tl[1] ) ) );
 		distSquared = distVec[0]*distVec[0] + distVec[1]*distVec[1];
 
-		if( distSquared > Square( 0.5f * (scissor->br[0] - scissor->tl[0]) ) )
+		/* Original map entities/spawns/mortar: mode 2 uses half-width;
+		 * other Nitmod modes use 0.8. Keep stock ET circular clipping. */
+		radius = (NITMOD_UsesNitmodHud() && cg_drawCompass.integer != 2 ? 0.8f : 0.5f) * (scissor->br[0] - scissor->tl[0]);
+		if( distSquared > Square( radius ) )
 			return qtrue;
 	}
 
@@ -570,7 +576,8 @@ void CG_DrawMapEntity( mapEntityData_t *mEnt, float x, float y, float w, float h
 		if( scissor ) {
 			icon_extends[0] *= (scissor->zoomFactor / 5.159);
 			icon_extends[1] *= (scissor->zoomFactor / 5.159);
-			if(original) {
+			/* The zoomed symbol stays centered on both Nitmod layouts. */
+			if(NITMOD_UsesNitmodHud()) {
 				icon_pos[0] += icon_size - icon_extends[0] * .5f;
 				icon_pos[1] += icon_size - icon_extends[1] * .5f;
 			}

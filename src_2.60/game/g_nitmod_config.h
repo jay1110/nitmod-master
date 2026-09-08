@@ -11,6 +11,7 @@
 void G_NITMOD_ClearConfigStrings( void );
 void G_NITMOD_ResetClient( int clientNum );
 void G_NITMOD_ResetGameplayClient( int clientNum );
+const char *G_NITMOD_CheckConnection(int clientNum, const char *userinfo, qboolean isBot);
 void G_NITMOD_CacheClientAddress( gentity_t *ent, const char *address );
 qboolean NITMOD_ValidateNGuid( const char *nguid, char *reason, int reasonSize );
 void NITMOD_SendChunkedPrint( int clientNum, const char *text );

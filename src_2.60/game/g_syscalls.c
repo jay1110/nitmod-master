@@ -977,3 +977,28 @@ void trap_SendMessage( int clientNum, char *buf, int buflen ) {
 messageStatus_t trap_MessageStatus( int clientNum ) {
 	return syscall( G_MESSAGESTATUS, clientNum );
 }
+
+#ifdef __EMSCRIPTEN__
+/* Re-negotiate so VM extension activation cannot become stale across a map
+ * restart. The host owns roles, handles, endpoints and memory bounds. */
+int trap_NITMOD_NxACTransport(int op,int handle,void *buffer,int length,int value) {
+    char text[32];int getValue,extension;
+    trap_Cvar_VariableStringBuffer("//trap_GetValue",text,sizeof(text));getValue=atoi(text);
+    if(getValue<=0)return op==0?0:-1;
+    text[0]=0;if(!syscall(getValue,text,sizeof(text),"trap_NitmodNxACTransport1"))return op==0?0:-1;
+    extension=atoi(text);if(extension<=0)return op==0?0:-1;
+    return syscall(extension,op,handle,buffer,length,value);
+}
+#endif
+
+#ifdef __EMSCRIPTEN__
+int trap_NITMOD_DatabaseStorage(int op,int token,const char *path,int revision,void *buffer,int length) {
+    char text[32]; int getValue,extension;
+    trap_Cvar_VariableStringBuffer("//trap_GetValue",text,sizeof(text)); getValue=atoi(text);
+    if(getValue<=0) return op==0?0:-1;
+    text[0]=0;
+    if(!syscall(getValue,text,sizeof(text),"trap_NitmodDatabaseStorage1")) return op==0?0:-1;
+    extension=atoi(text); if(extension<=0) return op==0?0:-1;
+    return syscall(extension,op,token,path,revision,buffer,length);
+}
+#endif

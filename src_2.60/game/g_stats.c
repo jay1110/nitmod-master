@@ -247,7 +247,8 @@ void G_AddSkillPoints( gentity_t *ent, skillType_t skill, float points ) {
 	oldScore = ent->client->ps.persistant[PERS_SCORE];
 	level.teamXP[skill][ent->client->sess.sessionTeam - TEAM_AXIS] += points;
 	ent->client->sess.skillpoints[skill] += points;
-	if( maxXP >= 0 && (float)oldScore + points >= (float)maxXP ) {
+	/* Original 0xcf787..0xcf79d uses FILD for both integer operands. */
+	if( maxXP >= 0 && (double)oldScore + points >= (double)maxXP ) {
 		memset(ent->client->sess.skillpoints, 0, sizeof(ent->client->sess.skillpoints));
 		memset(ent->client->sess.skill, 0, sizeof(ent->client->sess.skill));
 		/* Original G_ResetXP recalculates all seven skills (and Lua hooks).
@@ -294,12 +295,12 @@ void G_AddSkillPoints( gentity_t *ent, skillType_t skill, float points ) {
 	}
 }
 
-/* Original Nitmod G_XPDecay (qagame 0x000df300), mapped onto the typed ET
+/* Original Nitmod G_XPDecay (qagame 0x000cf330), mapped onto the typed ET
  * session and team-XP fields. The option bits are intentionally independent:
  * 1 enables decay, 4 protects the current class skill, 8 protects spectators,
  * 16 limits decay to active play, 32 limits active-play decay to spectators,
  * 64 protects Battle Sense and 128 protects Light Weapons. */
-void G_NITMOD_XPDecay( gentity_t *ent, int minutes, qboolean force ) {
+void G_NITMOD_XPDecay( gentity_t *ent, int seconds, qboolean force ) {
 	static const skillType_t classSkills[NUM_PLAYER_CLASSES] = {
 		SK_HEAVY_WEAPONS, SK_FIRST_AID, SK_EXPLOSIVES_AND_CONSTRUCTION,
 		SK_SIGNALS, SK_MILITARY_INTELLIGENCE_AND_SCOPED_WEAPONS
@@ -307,7 +308,7 @@ void G_NITMOD_XPDecay( gentity_t *ent, int minutes, qboolean force ) {
 	int options, skill, teamIndex;
 	float rate, floor;
 
-	if(!ent || !ent->client || minutes <= 0) return;
+	if(!ent || !ent->client) return;
 	options = G_NITMOD_LegacyCvarInteger("g_XPDecay", 0);
 	rate = G_NITMOD_LegacyCvarValue("g_XPDecayRate", 0.f);
 	floor = G_NITMOD_LegacyCvarValue("g_XPDecayFloor", 0.f);
@@ -323,7 +324,9 @@ void G_NITMOD_XPDecay( gentity_t *ent, int minutes, qboolean force ) {
 
 	teamIndex = ent->client->sess.sessionTeam - TEAM_AXIS;
 	for(skill = 0; skill < SK_NUM_SKILLS; ++skill) {
-		float oldPoints, loss;
+		float oldPoints;
+		double loss, removed;
+		int oldSkill, scoreTeam;
 		if(!force) {
 			if((options & 4) && ent->client->sess.playerType >= 0 &&
 				ent->client->sess.playerType < NUM_PLAYER_CLASSES &&
@@ -333,19 +336,32 @@ void G_NITMOD_XPDecay( gentity_t *ent, int minutes, qboolean force ) {
 		}
 		oldPoints = ent->client->sess.skillpoints[skill];
 		if(oldPoints < floor) continue;
-		loss = minutes * rate;
-		if(loss > oldPoints - floor) loss = oldPoints - floor;
+		loss = (double)seconds * rate;
+		if((double)oldPoints - loss < floor) loss = (double)oldPoints - floor;
 		if(loss > oldPoints) loss = oldPoints;
-		if(loss <= 0.f) continue;
 
-		ent->client->sess.skillpoints[skill] = oldPoints - loss;
+		/* Original also reevaluates at zero loss, and negative rates add XP.
+		 * The saved field is binary32, while x87 subtracts before that store. */
+		oldSkill = ent->client->sess.skill[skill];
+		ent->client->sess.skillpoints[skill] = (float)((double)oldPoints - loss);
 		G_SetPlayerSkill(ent->client, (skillType_t)skill);
+		if(oldSkill != ent->client->sess.skill[skill] &&
+			ent->client->pers.connected == CON_CONNECTED) {
+			G_UpgradeSkill(ent, (skillType_t)skill);
+		}
+		/* Lua may change XP during either callback. Debit the resulting field
+		 * difference as Original 0xcf4f6..0xcf555 does, without a zero floor. */
+		removed = (double)oldPoints - ent->client->sess.skillpoints[skill];
+		scoreTeam = ent->client->ps.persistant[PERS_TEAM];
+		if(scoreTeam >= 0 && scoreTeam < TEAM_NUM_TEAMS) {
+			level.teamScores[scoreTeam] = NITMOD_XPInteger(
+				(double)level.teamScores[scoreTeam] - removed);
+		}
+		/* Original indexes a two-column team-XP array with spectator/free
+		 * teams as well. Keep its valid writes, without reproducing that OOB. */
 		if(teamIndex >= 0 && teamIndex < 2) {
-			level.teamXP[skill][teamIndex] -= loss;
-			if(level.teamXP[skill][teamIndex] < 0.f) level.teamXP[skill][teamIndex] = 0.f;
-			level.teamScores[ent->client->sess.sessionTeam] -= loss;
-			if(level.teamScores[ent->client->sess.sessionTeam] < 0)
-				level.teamScores[ent->client->sess.sessionTeam] = 0;
+			level.teamXP[skill][teamIndex] =
+				(float)((double)level.teamXP[skill][teamIndex] - removed);
 		}
 	}
 }

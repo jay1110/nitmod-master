@@ -64,7 +64,8 @@ int G_NITMOD_PickupClassMask(int weapon, unsigned int *mask) {
 void G_NITMOD_LoadMapWeaponDefinitions(void) {
     int weapon;
     unsigned int mask;
-    char info[MAX_INFO_STRING] = "";
+    char info[MAX_INFO_STRING];
+    trap_GetConfigstring(CS_NITMOD_INFO, info, sizeof(info));
     /* Original G_InitGame sends this directory in CS36. The reconstructed
      * ET layout reserves CS40 so intermission/filter/charge slots stay valid. */
     Info_SetValueForKey(info, "W", G_NITMOD_WeaponScriptsDirectory());

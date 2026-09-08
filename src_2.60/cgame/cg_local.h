@@ -2089,6 +2089,8 @@ typedef struct {
 	oidInfo_t			oidInfo[MAX_OID_TRIGGERS];
 
 	qboolean			initing;
+	int nitmodFixedPhysics;
+	int nitmodFixedPhysicsFps;
 } cgs_t;
 
 //==============================================================================
@@ -2483,6 +2485,7 @@ void CG_Fade( int r, int g, int b, int a, int time, int duration );
 qboolean CG_EntOnFire( centity_t *cent);	// Ridah
 void CG_Player( centity_t *cent );
 void CG_ResetPlayerEntity( centity_t *cent );
+extern qhandle_t nitmodPlayerGlowShader;
 void CG_AddRefEntityWithPowerups( refEntity_t *ent, int powerups, int team, entityState_t *es, const vec3_t fireRiseDir );
 void CG_NewClientInfo( int clientNum );
 sfxHandle_t	CG_CustomSound( int clientNum, const char *soundName );
@@ -2502,6 +2505,7 @@ int	CG_PointContents( const vec3_t point, int passEntityNum );
 void CG_Trace( trace_t *result, const vec3_t start, const vec3_t mins, const vec3_t maxs, const vec3_t end, int skipNumber, int mask );
 void CG_FTTrace( trace_t *result, const vec3_t start, const vec3_t mins, const vec3_t maxs, const vec3_t end, int skipNumber, int mask );
 void CG_PredictPlayerState( void );
+void CG_NitmodResetMovementDelayPrediction(void);
 //void CG_LoadDeferredPlayers( void );
 
 

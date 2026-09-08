@@ -10,11 +10,13 @@
 #include "cg_nitmod_events.h"
 #include "cg_nitmod_stats.h"
 #include "cg_nitmod_config.h"
+#include "cg_nitmod_hudstats.h"
 #include "../game/nitmod_announcements.h"
 
 static char nitmodConfigStrings[NITMOD_MAX_CONFIGSTRINGS][NITMOD_CONFIGSTRING_CHARS];
 static unsigned int nitmodServerCapabilities;
 static char nitmodWeaponScriptsDir[256];
+static char nitmodMatchConfigName[256];
 static qboolean nitmodPackBypass, nitmodPackSettingsReady;
 static nitmodSimpleConfig_t nitmodSimpleConfig;
 static nitmodGameState_t nitmodGameState;
@@ -28,7 +30,7 @@ vmCvar_t cg_logFile, cg_clientLog, cg_drawCam, cg_locationMaxChars;
 vmCvar_t cg_TDMScorePos, cg_earlyTransition;
 
 qboolean CG_NitmodBulletImpactVisible(int weapon, const vec3_t origin) {
-    int distance = NITMOD_UsesOriginalProtocol() ? cg_markDistance.integer : 384;
+    int distance = NITMOD_UsesNitmodHud() ? cg_markDistance.integer : 384;
     return weapon == WP_FG42SCOPE || weapon == WP_GARAND_SCOPE || weapon == WP_K43_SCOPE ||
         Distance(cg.refdef_current->vieworg, origin) < distance;
 }
@@ -37,7 +39,7 @@ qboolean CG_NitmodBulletImpactVisible(int weapon, const vec3_t origin) {
  * Only visual trajectories are shifted, never the network state or prediction. */
 int CG_NitmodProjectileTime(const entityState_t *state) {
     int frame, extra;
-    if(!state || !cg.snap || !NITMOD_UsesOriginalProtocol() ||
+    if(!state || !cg.snap || !NITMOD_UsesNitmodHud() ||
        state->eType != ET_MISSILE || cg_projectileNudge.integer <= 0) return cg.time;
     /* Invalid server values must not divide by zero or overflow timestamps. */
     if(nitmod_sv_fps.integer <= 0) return cg.time;
@@ -54,7 +56,7 @@ qboolean CG_NitmodProjectileLerp(centity_t *cent) {
     int time;
     vec3_t start, delta;
     trace_t trace;
-    if(!cent || !cg.snap || !NITMOD_UsesOriginalProtocol() ||
+    if(!cent || !cg.snap || !NITMOD_UsesNitmodHud() ||
        cent->currentState.eType != ET_MISSILE || cg_projectileNudge.integer <= 0) return qfalse;
     time = CG_NitmodProjectileTime(&cent->currentState);
     BG_EvaluateTrajectory(&cent->currentState.pos, time, cent->lerpOrigin, qfalse, cent->currentState.effect2Time);
@@ -490,7 +492,7 @@ qboolean NITMOD_ClientSkillUnlocked(int client, int skill, int level) {
 
 const char *CG_NitmodSpectatorLabel(const clientInfo_t *client, int ping) {
     if(ping == -1) return "^3CONNECTING";
-    if(!client || !NITMOD_UsesOriginalProtocol()) return "^3SPECTATOR";
+    if(!client || !NITMOD_UsesNitmodHud()) return "^3SPECTATOR";
     if(client->nitmodTV) return client->nitmodShoutcaster ? "^5TV^7|^3SHOUTCASTER" : "^5TV^7|^3SPECTATOR";
     return client->nitmodShoutcaster ? "^3SHOUTCASTER" : "^3SPECTATOR";
 }
@@ -578,6 +580,118 @@ void NITMOD_FormatBanner(const char *text, char *out, int size) {
 	}
 	out[used] = 0;
 }
+/* Original G_UpdateSvCvars/CG_UpdateSvCvars uses a single InfoString:
+ * N=count, C0..C127="mode name value1 value2". This is a client clamp,
+ * separate from the NxAC query/violation protocol. Original wire CS38
+ * collides with ET CS_CHARGETIMES; native Nitmod reserves CS41 instead. */
+typedef struct {
+    char name[256], value1[256], value2[256];
+    int mode;
+} nitmodSvCvar_t;
+static nitmodSvCvar_t nitmodSvCvars[128];
+static int nitmodSvCvarCount;
+
+/* Match strtok(..., " ") without its process-global cursor. The Original
+ * takes the first four words and ignores any additional words. */
+static char *NITMOD_SvCvarWord(char **cursor) {
+    char *start = *cursor;
+    while(*start == ' ') ++start;
+    if(!*start) { *cursor = start; return NULL; }
+    *cursor = start;
+    while(**cursor && **cursor != ' ') ++*cursor;
+    if(**cursor) *(*cursor)++ = 0;
+    return start;
+}
+
+void NITMOD_UpdateSvCvars(void) {
+    nitmodSvCvar_t parsed[128];
+    const char *info, *number;
+    int count, i, index;
+    if(cg.demoPlayback) return;
+    if(!NITMOD_UsesNitmodHud()) { nitmodSvCvarCount = 0; return; }
+    index = NITMOD_UsesOriginalProtocol() ? 38 : CS_NITMOD_SVCVARS;
+    info = cgs.gameState.stringData + cgs.gameState.stringOffsets[index];
+    number = Info_ValueForKey(info, "N");
+    if(!number[0]) { nitmodSvCvarCount = 0; return; }
+    /* A malformed server update must not partially replace working rules. */
+    if(!NITMOD_ParseProtocolInteger(number, &count) || count < 0 || count > 128) return;
+    memset(parsed, 0, sizeof(parsed));
+    for(i = 0; i < count; ++i) {
+        char row[MAX_INFO_STRING], key[16], *cursor, *mode, *name, *a, *b;
+        const char *value;
+        Com_sprintf(key, sizeof(key), "C%i", i);
+        value = Info_ValueForKey(info, key);
+        if(strlen(value) >= sizeof(row)) return;
+        Q_strncpyz(row, value, sizeof(row)); cursor = row;
+        mode = NITMOD_SvCvarWord(&cursor); name = NITMOD_SvCvarWord(&cursor);
+        a = NITMOD_SvCvarWord(&cursor); b = NITMOD_SvCvarWord(&cursor);
+        if(!mode || !name || !a || !NITMOD_ParseProtocolInteger(mode, &parsed[i].mode) ||
+           parsed[i].mode < 0 || parsed[i].mode > 8 || strlen(name) >= 256 ||
+           strlen(a) >= 256 || (b && strlen(b) >= 256)) return;
+        Q_strncpyz(parsed[i].name, name, sizeof(parsed[i].name));
+        Q_strncpyz(parsed[i].value1, a, sizeof(parsed[i].value1));
+        if(b) Q_strncpyz(parsed[i].value2, b, sizeof(parsed[i].value2));
+    }
+    memcpy(nitmodSvCvars, parsed, count * sizeof(parsed[0]));
+    nitmodSvCvarCount = count;
+}
+
+void NITMOD_ApplySvCvars(void) {
+    int i;
+    if(cg.demoPlayback || !NITMOD_UsesNitmodHud()) return;
+    for(i = 0; i < nitmodSvCvarCount; ++i) {
+        const nitmodSvCvar_t *rule = &nitmodSvCvars[i];
+        char current[256];
+        float x, a, b;
+        double integer;
+        trap_Cvar_VariableStringBuffer(rule->name, current, sizeof(current));
+        x = (float)strtod(current, NULL);
+        a = (float)strtod(rule->value1, NULL);
+        b = (float)strtod(rule->value2, NULL);
+        /* Original CG_DrawActiveFrame 0xbe130..0xbe9f8. In particular,
+         * zero disables IN/OUT bounds; LE uses decimal strtol rather than
+         * the common float conversion, and OUT may issue two ordered sets. */
+        switch(rule->mode) {
+        case 0:
+            if(Q_stricmp(rule->value1, current)) trap_Cvar_Set(rule->name, rule->value1);
+            break;
+        case 1:
+            if(x <= a) trap_Cvar_Set(rule->name, va("%f", (double)a + 1.0));
+            break;
+        case 2:
+            if(x < a) trap_Cvar_Set(rule->name, rule->value1);
+            break;
+        case 3:
+            if(x >= a) trap_Cvar_Set(rule->name, va("%f", (double)a - 1.0));
+            break;
+        case 4:
+            integer = (double)strtol(current, NULL, 10);
+            /* Preserve the Original i386 long range on native LP64 too. */
+            if(integer > 2147483647.0) integer = 2147483647.0;
+            if(integer < -2147483648.0) integer = -2147483648.0;
+            if(strtod(rule->value1, NULL) != 0.0 && strtod(rule->value1, NULL) < integer)
+                trap_Cvar_Set(rule->name, rule->value1);
+            break;
+        case 5:
+            if(a != 0.f && x < a) trap_Cvar_Set(rule->name, rule->value1);
+            if(b != 0.f && x > b) trap_Cvar_Set(rule->name, rule->value2);
+            break;
+        case 6:
+            if(a != 0.f && x >= a && (b == 0.f || x < b))
+                trap_Cvar_Set(rule->name, va("%f", strtod(rule->value1, NULL) - 1.0));
+            if(b != 0.f && x <= b && x > a)
+                trap_Cvar_Set(rule->name, va("%f", strtod(rule->value2, NULL) + 1.0));
+            break;
+        case 7:
+            if(!strstr(current, rule->value1)) trap_Cvar_Set(rule->name, rule->value2);
+            break;
+        case 8:
+            if(strstr(current, rule->value1)) trap_Cvar_Set(rule->name, rule->value2);
+            break;
+        }
+    }
+}
+
 static int nitmodKDCursor;
 typedef struct {
 	char name[256];
@@ -645,6 +759,7 @@ void NITMOD_ApplyForcedCvars(void) {
 }
 
 qboolean NITMOD_DisplayCommand(const char *command) {
+	if(CG_NitmodNativeHudStatsCommand(command)) return qtrue;
 	if(NITMOD_UsesNitmodHud() && !strcmp(command, "sl")) {
 		char info[MAX_INFO_STRING];
 		trap_Args(info, sizeof(info));
@@ -803,6 +918,10 @@ qboolean NITMOD_UsesOriginalProtocol(void) {
 qboolean NITMOD_UsesNitmodHud(void) {
 	return !Q_stricmp(Info_ValueForKey(CG_ConfigString(CS_SERVERINFO), "gamename"), "nitmod");
 }
+const char *NITMOD_MatchConfigName(void) {
+	return nitmodMatchConfigName;
+}
+
 const char *NITMOD_WeaponScriptsDir(void) {
 	return nitmodWeaponScriptsDir;
 }
@@ -813,11 +932,15 @@ void NITMOD_UpdateWeaponScripts(qboolean reload) {
 	char directory[sizeof(nitmodWeaponScriptsDir)];
 	const char *info;
 	int weapon, index = NITMOD_UsesOriginalProtocol() ? 36 : CS_NITMOD_INFO;
-	if(!NITMOD_UsesNitmodHud()) directory[0] = 0;
+	if(!NITMOD_UsesNitmodHud()) {
+		directory[0] = 0;
+		nitmodMatchConfigName[0] = 0;
+	}
 	else {
 		/* Do not pass original 36 through the native-to-wire CS adapter. */
 		info = cgs.gameState.stringData + cgs.gameState.stringOffsets[index];
 		Q_strncpyz(directory, Info_ValueForKey(info, "W"), sizeof(directory));
+		Q_strncpyz(nitmodMatchConfigName, Info_ValueForKey(info, "X"), sizeof(nitmodMatchConfigName));
 	}
 	if(!Q_stricmp(directory, nitmodWeaponScriptsDir)) return;
 	Q_strncpyz(nitmodWeaponScriptsDir, directory, sizeof(nitmodWeaponScriptsDir));
@@ -861,6 +984,110 @@ int NITMOD_CoreConfigFromWire(int index) {
 int NITMOD_TagConnectBase(void) {
 	return NITMOD_UsesOriginalProtocol() ? 0x309 : CS_TAGCONNECTS;
 }
+/* Original CG_RegisterSounds fixed bank at cgs+0x2038f84. These private
+ * sound IDs are independent of map-provided CS_SOUNDS/NCS assets. */
+static const char *const nitmodFixedSoundPaths[NITMOD_FIXED_SOUND_COUNT] = {
+    "sound/player/default/blank.wav", /* 0 */
+    "sound/weapons/artillery/artillery_fly_1.wav", /* 1 */
+    "sound/weapons/artillery/artillery_fly_2.wav", /* 2 */
+    "sound/weapons/artillery/artillery_fly_3.wav", /* 3 */
+    "sound/player/gib.wav", /* 4 */
+    "sound/player/land_hurt.wav", /* 5 */
+    "sound/world/build.wav", /* 6 */
+    "sound/world/chaircreak.wav", /* 7 */
+    "sound/misc/vo_revive.wav", /* 8 */
+    "sound/player/gurp1.wav", /* 9 */
+    "sound/player/gurp2.wav", /* 10 */
+    "sound/weapons/landmine/mine_on.wav", /* 11 */
+    "sound/misc/referee.wav", /* 12 */
+    "sound/misc/vote.wav", /* 13 */
+    "sound/nit/firstblood.wav", /* 14 */
+    "sound/nit/firstheadshot.wav", /* 15 */
+    "sound/weapons/airstrike/airstrike_plane.wav", /* 16 */
+    "sound/movers/doors/default_door_locked.wav", /* 17 */
+    "sound/movers/doors/door1_open.wav", /* 18 */
+    "sound/movers/doors/door1_endo.wav", /* 19 */
+    "sound/movers/doors/door1_close.wav", /* 20 */
+    "sound/movers/doors/door1_endc.wav", /* 21 */
+    "sound/movers/doors/door1_loopo.wav", /* 22 */
+    "sound/movers/doors/door1_loopc.wav", /* 23 */
+    "sound/movers/doors/door1_locked.wav", /* 24 */
+    "sound/movers/doors/door1_openq.wav", /* 25 */
+    "sound/movers/doors/door1_endoq.wav", /* 26 */
+    "sound/movers/doors/door1_closeq.wav", /* 27 */
+    "sound/movers/doors/door1_endcq.wav", /* 28 */
+    "sound/movers/doors/door2_open.wav", /* 29 */
+    "sound/movers/doors/door2_endo.wav", /* 30 */
+    "sound/movers/doors/door2_close.wav", /* 31 */
+    "sound/movers/doors/door2_endc.wav", /* 32 */
+    "sound/movers/doors/door2_loopo.wav", /* 33 */
+    "sound/movers/doors/door2_loopc.wav", /* 34 */
+    "sound/movers/doors/door2_locked.wav", /* 35 */
+    "sound/movers/doors/door2_openq.wav", /* 36 */
+    "sound/movers/doors/door2_endoq.wav", /* 37 */
+    "sound/movers/doors/door2_closeq.wav", /* 38 */
+    "sound/movers/doors/door2_endcq.wav", /* 39 */
+    "sound/movers/doors/door3_open.wav", /* 40 */
+    "sound/movers/doors/door3_endo.wav", /* 41 */
+    "sound/movers/doors/door3_close.wav", /* 42 */
+    "sound/movers/doors/door3_endc.wav", /* 43 */
+    "sound/movers/doors/door3_loopo.wav", /* 44 */
+    "sound/movers/doors/door3_loopc.wav", /* 45 */
+    "sound/movers/doors/door3_locked.wav", /* 46 */
+    "sound/movers/doors/door3_openq.wav", /* 47 */
+    "sound/movers/doors/door3_endoq.wav", /* 48 */
+    "sound/movers/doors/door3_closeq.wav", /* 49 */
+    "sound/movers/doors/door3_endcq.wav", /* 50 */
+    "sound/movers/doors/door4_open.wav", /* 51 */
+    "sound/movers/doors/door4_endo.wav", /* 52 */
+    "sound/movers/doors/door4_close.wav", /* 53 */
+    "sound/movers/doors/door4_endc.wav", /* 54 */
+    "sound/movers/doors/door4_loopo.wav", /* 55 */
+    "sound/movers/doors/door4_loopc.wav", /* 56 */
+    "sound/movers/doors/door4_locked.wav", /* 57 */
+    "sound/movers/doors/door4_openq.wav", /* 58 */
+    "sound/movers/doors/door4_endoq.wav", /* 59 */
+    "sound/movers/doors/door4_closeq.wav", /* 60 */
+    "sound/movers/doors/door4_endcq.wav", /* 61 */
+    "sound/movers/doors/door5_open.wav", /* 62 */
+    "sound/movers/doors/door5_endo.wav", /* 63 */
+    "sound/movers/doors/door5_close.wav", /* 64 */
+    "sound/movers/doors/door5_endc.wav", /* 65 */
+    "sound/movers/doors/door5_loopo.wav", /* 66 */
+    "sound/movers/doors/door5_loopc.wav", /* 67 */
+    "sound/movers/doors/door5_locked.wav", /* 68 */
+    "sound/movers/doors/door5_openq.wav", /* 69 */
+    "sound/movers/doors/door5_endoq.wav", /* 70 */
+    "sound/movers/doors/door5_closeq.wav", /* 71 */
+    "sound/movers/doors/door5_endcq.wav", /* 72 */
+    "sound/movers/doors/door6_open.wav", /* 73 */
+    "sound/movers/doors/door6_endo.wav", /* 74 */
+    "sound/movers/doors/door6_close.wav", /* 75 */
+    "sound/movers/doors/door6_endc.wav", /* 76 */
+    "sound/movers/doors/door6_loopo.wav", /* 77 */
+    "sound/movers/doors/door6_loopc.wav", /* 78 */
+    "sound/movers/doors/door6_locked.wav", /* 79 */
+    "sound/movers/doors/door6_openq.wav", /* 80 */
+    "sound/movers/doors/door6_endoq.wav", /* 81 */
+    "sound/movers/doors/door6_closeq.wav", /* 82 */
+    "sound/movers/doors/door6_endcq.wav", /* 83 */
+ };
+static sfxHandle_t nitmodFixedSounds[NITMOD_FIXED_SOUND_COUNT];
+static qboolean nitmodFixedSoundsRegistered;
+
+void NITMOD_RegisterFixedSounds(void) {
+    int i;
+    if(nitmodFixedSoundsRegistered) return;
+    for(i=0;i<NITMOD_FIXED_SOUND_COUNT;++i)
+        nitmodFixedSounds[i]=trap_S_RegisterSound(nitmodFixedSoundPaths[i],qfalse);
+    nitmodFixedSoundsRegistered=qtrue;
+}
+
+sfxHandle_t NITMOD_FixedSound(int index) {
+    if(index<0 || index>=NITMOD_FIXED_SOUND_COUNT || nitmodFixedSounds[index]<=0) return 0;
+    return nitmodFixedSounds[index];
+}
+
 static sfxHandle_t nitmodHeadHitSound;
 static sfxHandle_t nitmodTeamHitSound;
 static sfxHandle_t nitmodSnapshotHeadSound, nitmodSnapshotBodySound;
@@ -878,14 +1105,21 @@ void NITMOD_RegisterHitSounds(void) {
 void NITMOD_SnapshotHitSounds(const playerState_t *oldState, const playerState_t *newState) {
     const int *oldValues, *newValues;
     qboolean body, head;
-    if(!oldState || !newState || !NITMOD_UsesOriginalProtocol() || !nitmodHitSounds.integer ||
+    int headIndex, bodyIndex;
+    if(!oldState || !newState || !NITMOD_UsesNitmodHud() || !nitmodHitSounds.integer ||
        newState->clientNum < 0 || newState->clientNum >= MAX_CLIENTS ||
        oldState->clientNum != newState->clientNum || newState->persistant[PERS_TEAM] == TEAM_SPECTATOR)
         return;
-    oldValues = NITMOD_WirePersistant(oldState);
-    newValues = NITMOD_WirePersistant(newState);
-    body = newValues[NITMOD_WIRE_PERS_BODYHITS] > oldValues[NITMOD_WIRE_PERS_BODYHITS];
-    head = newValues[NITMOD_WIRE_PERS_HITS] > oldValues[NITMOD_WIRE_PERS_HITS];
+    if(NITMOD_UsesOriginalProtocol()) {
+        oldValues = NITMOD_WirePersistant(oldState);
+        newValues = NITMOD_WirePersistant(newState);
+        headIndex = NITMOD_WIRE_PERS_HITS; bodyIndex = NITMOD_WIRE_PERS_BODYHITS;
+    } else {
+        oldValues = oldState->persistant; newValues = newState->persistant;
+        headIndex = PERS_NITMOD_HEAD_HITS; bodyIndex = PERS_NITMOD_BODY_HITS;
+    }
+    body = newValues[bodyIndex] > oldValues[bodyIndex];
+    head = newValues[headIndex] > oldValues[headIndex];
     if(!body && !head) return;
     if(body && nitmodSnapshotBodySound > 0)
         trap_S_StartSound(NULL, newState->clientNum, CHAN_VOICE, nitmodSnapshotBodySound);
@@ -902,7 +1136,10 @@ static qboolean NITMOD_HasArgumentCount( const char *command, int expected ) {
 }
 
 void NITMOD_ClearConfigStrings( void ) {
+	CG_NitmodResetMovementDelayPrediction();
+	CG_NitmodResetNativeHudStats();
 	nitmodWeaponScriptsDir[0] = 0;
+	nitmodMatchConfigName[0] = 0;
 	clientSkillThresholdsReady = qfalse;
 	CG_NitmodObituaryReset();
 	CG_NitmodHudReset();
@@ -910,8 +1147,12 @@ void NITMOD_ClearConfigStrings( void ) {
 	nitmodClassLimitsReceived = qfalse;
 	nitmodClassHealthReceived = qfalse;
 	memset( nitmodClassMaxHealth, 0, sizeof( nitmodClassMaxHealth ) );
+	nitmodSvCvarCount = 0;
+	memset(nitmodSvCvars, 0, sizeof(nitmodSvCvars));
 	nitmodForcedCvarCount = 0;
 	memset(nitmodForcedCvars, 0, sizeof(nitmodForcedCvars));
+	memset(nitmodFixedSounds,0,sizeof(nitmodFixedSounds));
+	nitmodFixedSoundsRegistered=qfalse;
 	nitmodHeadHitSound = nitmodTeamHitSound = 0;
 	nitmodSnapshotHeadSound = nitmodSnapshotBodySound = 0;
 	nitmodBanner[0] = 0;
@@ -1087,8 +1328,7 @@ void NITMOD_ClassHealthCommand( void ) {
 		return;
 	}
 	for( playerClass = PC_SOLDIER; playerClass <= PC_COVERTOPS; ++playerClass ) {
-		if( !NITMOD_ParseProtocolInteger( CG_Argv( playerClass + 1 ), &values[playerClass] ) ||
-			values[playerClass] < 0 || values[playerClass] > 32767 ) {
+		if( !NITMOD_ParseProtocolSigned( CG_Argv( playerClass + 1 ), &values[playerClass] ) ) {
 			return;
 		}
 	}

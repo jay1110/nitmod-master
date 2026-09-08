@@ -592,6 +592,7 @@ typedef struct {
 	int             rifleGrenadeStatus; // versioned Nitmod equipment sidecar
 	int			ignoreClients[MAX_CLIENTS / (sizeof(int)*8)];
 	qboolean	muted;
+	int nitmodCensorMuteTime; // original sess +0xca4; -1 disables language timer
 	float		skillpoints[SK_NUM_SKILLS];		// Arnout: skillpoints
 	float		startskillpoints[SK_NUM_SKILLS];// Gordon: initial skillpoints at map beginning
 	float		startxptotal;
@@ -611,6 +612,7 @@ typedef struct {
 	int nitmodHeadHits, nitmodBodyHits; /* Original live-hit totals used by ClientBegin. */
 	int             nitmodNewton; // original sess.newton: falling deaths
 	int             shoutcaster;
+	qboolean        nitmodEttvSlave; /* Original protocol 284 session identity. */
 	int             uci; // original GeoIP country/atlas index
 	int			game_points;
 	int			kills;
@@ -805,6 +807,13 @@ struct gclient_s {
 	 * private qagame state: only the resulting ps.ping crosses the VM ABI. */
 	int			nitmodPingSamples[64];
 	unsigned int nitmodPingSampleHead;
+	/* Original antiwarp command ring and per-frame correction latches. */
+	usercmd_t nitmodWarpCommands[512];
+	int nitmodWarpHead, nitmodWarpCount, nitmodWarpTime;
+	float nitmodWarpBudget;
+	int nitmodLastUpdateFrame;
+	qboolean nitmodWarpPending, nitmodWarpCorrected;
+
 	int			buttons;
 	int			oldbuttons;
 	int			latched_buttons;
@@ -1334,6 +1343,7 @@ qboolean G_RadiusDamage (vec3_t origin, gentity_t *inflictor, gentity_t *attacke
 qboolean etpro_RadiusDamage( vec3_t origin, gentity_t *inflictor, gentity_t *attacker, float damage, float radius, gentity_t *ignore, int mod, qboolean clientsonly );
 void body_die( gentity_t *self, gentity_t *inflictor, gentity_t *attacker, int damage, int meansOfDeath );
 void TossClientItems( gentity_t *self );
+void G_NITMOD_EndReviveSpree(gentity_t *victim, gentity_t *attacker);
 gentity_t* G_BuildHead(gentity_t *ent);
 gentity_t* G_BuildLeg(gentity_t *ent);
 
@@ -1344,6 +1354,8 @@ gentity_t* G_BuildLeg(gentity_t *ent);
 #define DAMAGE_NO_PROTECTION		0x00000020  // armor, shields, invulnerability, and godmode have no effect
 #define DAMAGE_NO_TEAM_PROTECTION	0x00000010  // armor, shields, invulnerability, and godmode have no effect
 #define DAMAGE_DISTANCEFALLOFF		0x00000040	// distance falloff
+/* Original Nitmod damage flag 0x20, kept distinct from ET no-protection. */
+#define DAMAGE_NITMOD_INSTANT_KILL   0x00000080
 
 //
 // g_missile.c
@@ -1456,6 +1468,7 @@ qboolean SpotWouldTelefrag( gentity_t *spot );
 qboolean G_CheckForExistingModelInfo( bg_playerclass_t* classInfo, const char *modelName, animModelInfo_t **modelInfo );
 void G_StartPlayerAppropriateSound(gentity_t *ent, char* soundType);
 void SetWolfSpawnWeapons( gclient_t *client );
+void G_NITMOD_AddClassSpecificTools( gclient_t *client );
 qboolean AddWeaponToPlayer( gclient_t *client, weapon_t weapon, int ammo, int ammoclip, qboolean setcurrent );
 void limbo( gentity_t *ent, qboolean makeCorpse ); // JPW NERVE
 void reinforce(gentity_t *ent); // JPW NERVE
@@ -1668,7 +1681,7 @@ void BotSetIdealViewAngles(int clientNum, vec3_t angle);
 void Cmd_Activate_f (gentity_t *ent);
 void Cmd_Activate2_f (gentity_t *ent);
 qboolean Do_Activate_f(gentity_t *ent, gentity_t *traceEnt);
-void G_LeaveTank( gentity_t* ent, qboolean position );
+void G_LeaveTank( gentity_t* ent, qboolean position, qboolean applyDelay );
 
 
 // Ridah
@@ -2299,6 +2312,7 @@ mapEntityData_t *G_AllocMapEntityData( mapEntityData_Team_t *teamList );
 mapEntityData_t *G_FindMapEntityData( mapEntityData_Team_t *teamList, int entNum );
 mapEntityData_t *G_FindMapEntityDataSingleClient( mapEntityData_Team_t *teamList, mapEntityData_t *start, int entNum, int clientNum );
 
+void nitrox_ResetNumObjectives(void);
 void G_ResetTeamMapData();
 void G_UpdateTeamMapData();
 
@@ -2540,6 +2554,8 @@ void G_weaponRankings_cmd(gentity_t *ent, unsigned int dwCommand, qboolean state
 void G_weaponStats_cmd(gentity_t *ent, unsigned int dwCommand, qboolean fDump);
 void G_weaponStatsLeaders_cmd(gentity_t* ent, qboolean doTop, qboolean doWindow);
 void G_VoiceTo( gentity_t *ent, gentity_t *other, int mode, const char *id, qboolean voiceonly, float selection );
+void G_Voice( gentity_t *ent, gentity_t *target, int mode, const char *id, qboolean voiceonly );
+void G_SendVoiceChat( int clientNum, const char *id );
 
 
 
@@ -2618,6 +2634,8 @@ void G_RemoveReferee(void);
 void G_MuteClient(void);
 void G_UnMuteClient(void);
 qboolean G_NITMOD_ClientMuted(gentity_t *ent);
+qboolean G_NITMOD_ClientFloodStatus(gentity_t *ent);
+void G_NITMOD_UpdateCensorMute(gentity_t *ent);
 void G_NITMOD_SetClientMute(gentity_t *ent, qboolean muted, int durationSeconds);
 
 

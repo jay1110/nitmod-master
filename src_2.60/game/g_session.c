@@ -1,5 +1,7 @@
 #include "g_local.h"
 #include "g_nitmod_config.h"
+#include "g_nitmod_banners.h"
+#include "g_nitmod_legacy_cvars.h"
 #include "g_nitmod_equipment.h"
 #include "nitmod_skills.h"
 #include "../../pak/ui/menudef.h"
@@ -70,10 +72,13 @@ void G_WriteClientSessionData( gclient_t *client, qboolean restart )
 		);
 
 	trap_Cvar_Set( va( "session%i", client - level.clients ), s );
+	trap_Cvar_Set(va("nitmod_censormute%i", client - level.clients),
+		va("%i", client->sess.nitmodCensorMuteTime));
 	/* Separate key keeps existing 26-column sessions readable unchanged. */
 	trap_Cvar_Set(va("nitmod_newton%i", client - level.clients),
 		va("%i", client->sess.nitmodNewton));
 	trap_Cvar_Set(va("nitmod_shoutcaster%i", client - level.clients), va("%i", client->sess.shoutcaster));
+	trap_Cvar_Set(va("nitmod_ettv%i", client - level.clients), va("%i", client->sess.nitmodEttvSlave));
 	trap_Cvar_Set(va("nitmod_headhits%i", client - level.clients), va("%i", client->sess.nitmodHeadHits));
 	trap_Cvar_Set(va("nitmod_bodyhits%i", client - level.clients), va("%i", client->sess.nitmodBodyHits));
 	trap_Cvar_Set(va("nitmod_killingspree%i", client-level.clients), "0");
@@ -169,6 +174,7 @@ void G_ReadSessionData( gclient_t *client )
 	client->sess.nitmodNewton = trap_Cvar_VariableIntegerValue(
 		va("nitmod_newton%i", client - level.clients));
 	client->sess.shoutcaster = trap_Cvar_VariableIntegerValue(va("nitmod_shoutcaster%i", client - level.clients));
+	client->sess.nitmodEttvSlave = trap_Cvar_VariableIntegerValue(va("nitmod_ettv%i", client - level.clients)) != 0;
 	client->sess.nitmodKillingSpree=trap_Cvar_VariableIntegerValue(va("nitmod_killingspree%i", client-level.clients));
 	client->sess.nitmodHeadHits=trap_Cvar_VariableIntegerValue(va("nitmod_headhits%i", client-level.clients));
 	client->sess.nitmodBodyHits=trap_Cvar_VariableIntegerValue(va("nitmod_bodyhits%i", client-level.clients));
@@ -211,6 +217,10 @@ void G_ReadSessionData( gclient_t *client )
 		&client->sess.spawnObjectiveIndex
 		);
 
+	client->sess.nitmodCensorMuteTime = -1;
+	trap_Cvar_VariableStringBuffer(va("nitmod_censormute%i", client - level.clients), s, sizeof(s));
+	if(*s) client->sess.nitmodCensorMuteTime = atoi(s);
+
 	// OSP -- reinstate MV clients
 	client->pers.mvReferenceList = (mvc_h << 16) | mvc_l;
 	// OSP
@@ -224,13 +234,14 @@ void G_ReadSessionData( gclient_t *client )
 	}
 	// OSP
 
-	// Arnout: likely there are more cases in which we don't want this
-	if( g_gametype.integer != GT_SINGLE_PLAYER &&
-		g_gametype.integer != GT_COOP &&
-		g_gametype.integer != GT_WOLF &&
-		g_gametype.integer != GT_WOLF_STOPWATCH &&
-		!(g_gametype.integer == GT_WOLF_CAMPAIGN && ( g_campaigns[level.currentCampaign].current == 0  || level.newCampaign ) ) &&
-		!(g_gametype.integer == GT_WOLF_LMS && g_currentRound.integer == 0 ) ) {
+	/* Original G_ReadSessionData: natural campaign/LMS continuation, or
+	 * XPSave bit2 across a reset (bit4 also permits ordinary map changes). */
+	if (g_gametype.integer >= GT_WOLF && g_gametype.integer <= GT_WOLF_TDM &&
+		((g_gametype.integer == GT_WOLF_CAMPAIGN && level.currentCampaign >= 0 &&
+		  g_campaigns[level.currentCampaign].current != 0 && !level.newCampaign) ||
+		 (g_gametype.integer == GT_WOLF_LMS && g_currentRound.integer != 0) ||
+		 ((g_XPSave.integer & 2) && ((g_XPSave.integer & 4) ||
+		  trap_Cvar_VariableIntegerValue("g_reset"))))) {
 
 		trap_Cvar_VariableStringBuffer( va( "sessionstats%i", client - level.clients ), s, sizeof(s) );
 
@@ -310,6 +321,7 @@ void G_InitSessionData( gclient_t *client, char *userinfo ) {
 	memset( sess->ignoreClients, 0, sizeof(sess->ignoreClients) );
 //	sess->experience = 0;
 	sess->muted = qfalse;
+	sess->nitmodCensorMuteTime = -1;
 	memset( sess->skill, 0, sizeof(sess->skill) );
 	memset( sess->skillpoints, 0, sizeof(sess->skillpoints) );
 	memset( sess->medals, 0, sizeof(sess->medals) );
@@ -319,7 +331,11 @@ void G_InitSessionData( gclient_t *client, char *userinfo ) {
 	sess->coach_team = 0;
 	sess->referee = (client->pers.localClient) ? RL_REFEREE : RL_NONE;
 	sess->spec_invite = 0;
-	sess->shoutcaster = 0;
+	/* Original G_InitSessionData: ETTV uses protocol 284; bit 2 grants
+	 * shoutcaster privileges only on this initial connection. */
+	sess->nitmodEttvSlave = strtol(Info_ValueForKey(userinfo, "protocol"), NULL, 10) == 284;
+	sess->shoutcaster = sess->nitmodEttvSlave &&
+		(G_NITMOD_LegacyCvarInteger("g_ettv_flags", 3) & 2) ? 1 : 0;
 	sess->nitmodKillingSpree = 0;
 	sess->nitmodHeadHits = sess->nitmodBodyHits = 0;
 	sess->spec_team = 0;
@@ -340,7 +356,7 @@ void G_InitWorldSession( void ) {
 	char	s[MAX_STRING_CHARS];
 	int		gt;
 	int		i, j;
-	int		sessionRound = 0, sessionMapCount = 0;
+	int		sessionBanner = 0, sessionMapCount = 0;
 	char	sessionMap[MAX_QPATH] = "";
 
 	trap_Cvar_VariableStringBuffer( "session", s, sizeof(s) );
@@ -358,18 +374,22 @@ void G_InitWorldSession( void ) {
 		qboolean test = (g_altStopwatchMode.integer != 0 || g_currentRound.integer == 1);
 		int locks = 0;
 		qboolean extendedSession;
+		int sessionFields;
 
 		/* Nitmod persists the map-vote XP-cycle counter in the world session:
-		 * gametype, team locks, round, map count, map name. Accept the old ET
+		 * gametype, team locks, banner index, map count, map name. Accept the old ET
 		 * three-field layout as well so upgrades do not invalidate sessions. */
-		extendedSession = sscanf(s, "%i %i %i %i %63s", &gt, &locks,
-			&sessionRound, &sessionMapCount, sessionMap) == 5;
+		sessionFields = sscanf(s, "%i %i %i %i %63s", &gt, &locks,
+			&sessionBanner, &sessionMapCount, sessionMap);
+		extendedSession = sessionFields == 5;
+		/* Original restores each numeric field as it is read, even if a
+		 * manually shortened session has no trailing map name. */
+		if(sessionFields >= 3) G_NITMOD_SetBannerIndex(sessionBanner);
+		G_NITMOD_SetMapCycleCount(sessionFields >= 4 ? sessionMapCount : 0);
 		if(extendedSession) {
 			teamInfo[TEAM_AXIS].spec_lock = (locks & TEAM_AXIS) ? qtrue : qfalse;
 			teamInfo[TEAM_ALLIES].spec_lock = (locks & TEAM_ALLIES) ? qtrue : qfalse;
-			G_NITMOD_SetMapCycleCount(sessionMapCount);
 		} else {
-			G_NITMOD_SetMapCycleCount(0);
 			if((tmp = strchr(tmp, ' ')) != NULL) {
 				locks = atoi(++tmp);
 				teamInfo[TEAM_AXIS].spec_lock = (locks & TEAM_AXIS) ? qtrue : qfalse;
@@ -380,7 +400,7 @@ void G_InitWorldSession( void ) {
 		// See if we need to clear player stats
 		// FIXME: deal with the multi-map missions
 		if(g_gametype.integer != GT_WOLF_CAMPAIGN) {
-			if(extendedSession || (tmp && (tmp = strchr(tmp, ' ')) != NULL)) {
+			if(extendedSession || (sessionFields < 3 && tmp && (tmp = strchr(tmp, ' ')) != NULL)) {
 				const char *oldMap = extendedSession ? sessionMap : tmp + 1;
 				trap_GetServerinfo(s, sizeof(s));
 				if(Q_stricmp(oldMap, Info_ValueForKey(s, "mapname"))) {
@@ -482,7 +502,7 @@ void G_WriteSessionData( qboolean restart ) {
 	trap_GetServerinfo(strServerInfo, sizeof(strServerInfo));
 	trap_Cvar_Set("session", va("%i %i %i %i %s", g_gametype.integer,
 											(teamInfo[TEAM_AXIS].spec_lock * TEAM_AXIS | teamInfo[TEAM_ALLIES].spec_lock * TEAM_ALLIES),
-											g_currentRound.integer, G_NITMOD_MapCycleCount(),
+											G_NITMOD_BannerIndex(), G_NITMOD_MapCycleCount(),
 											Info_ValueForKey(strServerInfo, "mapname")));
 
 	// Keep stats for all players in sync

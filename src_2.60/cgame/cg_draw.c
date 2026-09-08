@@ -155,7 +155,7 @@ void CG_Text_Paint_Ext( float x, float y, float scalex, float scaley, vec4_t col
 			} else {
 				float yadj = scaley * glyph->top;
 				if (style == ITEM_TEXTSTYLE_SHADOWED || style == ITEM_TEXTSTYLE_SHADOWEDMORE ||
-					(style == 7 && NITMOD_UsesOriginalProtocol())) {
+					(style == 7 && NITMOD_UsesNitmodHud())) {
 					/* Original Nitmod's fine shadow uses a fractional virtual-pixel offset. */
 					float ofs = style == 7 ? 0.75f : (style == ITEM_TEXTSTYLE_SHADOWED ? 1.0f : 2.0f);
 					colorBlack[3] = newColor[3];
@@ -1078,7 +1078,7 @@ void CG_CenterPrint( const char *str, int y, int charWidth ) {
 	int priority = 0;
 
 	// NERVE - SMF - don't draw if this print message is less important
-	if ( cg.centerPrintTime && priority < cg.centerPrintPriority )
+	if ( !NITMOD_UsesNitmodHud() && cg.centerPrintTime && priority < cg.centerPrintPriority )
 		return;
 
 	Q_strncpyz( cg.centerPrint, str, sizeof(cg.centerPrint) );
@@ -1180,7 +1180,7 @@ static void CG_DrawCenterStringContent(void) {
 	int		x, y, w;
 	float	*color;
 
-	if(NITMOD_UsesOriginalProtocol()) { CG_NitmodDrawCenterPrint(); return; }
+	if(NITMOD_UsesNitmodHud()) { CG_NitmodDrawCenterPrint(); return; }
 
 	if ( !cg.centerPrintTime ) {
 		return;
@@ -1647,6 +1647,7 @@ static void CG_DrawCrosshair(void) {
 	float		f;
 	float		x, y;
 	int			weapnum;		// DHM - Nerve
+	nitmodHudAnchor_t previous;
 
 	if ( cg.renderingThirdPerson ) {
 		return;
@@ -1719,13 +1720,28 @@ static void CG_DrawCrosshair(void) {
 		return;
 
 	// no crosshair while leaning
-	if( cg.snap->ps.leanf ) {
+	if( !NITMOD_UsesNitmodHud() && cg.snap->ps.leanf ) {
 		return;
 	}
 
 	// TAT 1/10/2003 - Don't draw crosshair if have exit hintcursor
 	if (cg.snap->ps.serverCursorHint >= HINT_EXIT && cg.snap->ps.serverCursorHint <= HINT_NOEXIT )
 		return;
+
+	/* Original CG_DrawCrosshair 0x3ed75: this r_ Cvar has a Cgame
+	 * consumer. Read the shared engine value; registration belongs to
+	 * CG_RegisterCvars. The first enabled frame only resolves the image. */
+	{
+		static int nitmodDynamicTexture;
+		char value[32];
+		trap_Cvar_VariableStringBuffer("r_dynamicTextures", value, sizeof(value));
+		if(atoi(value)) {
+			if(!nitmodDynamicTexture)
+				nitmodDynamicTexture = trap_R_GetTextureId("textures/effects/envmap_slate.tga");
+			else
+				trap_R_RenderToTexture(nitmodDynamicTexture, 451, 294, 256, 256);
+		}
+	}
 
 	// set color based on health
 	if ( cg_crosshairHealth.integer ) {
@@ -1744,6 +1760,10 @@ static void CG_DrawCrosshair(void) {
 	w *= ( 1 + f*2.0 );
 	h *= ( 1 + f*2.0 );
 	
+	/* Original 0x3edd6 selects centred aspect geometry, then subtracts
+	 * its horizontal bias at 0x3eea3/0x3efb6 before viewport centring.
+	 * LEFT gives that zero-bias scale and avoids inheriting another HUD anchor. */
+	previous = CG_NitmodHudAnchor(NITMOD_HUD_LEFT);
 	x = cg_crosshairX.integer;
 	y = cg_crosshairY.integer;
 	CG_AdjustFrom640( &x, &y, &w, &h );
@@ -1764,6 +1784,7 @@ static void CG_DrawCrosshair(void) {
 
 		trap_R_DrawStretchPic( x + 0.5 * (cg.refdef_current->width - w), y + 0.5 * (cg.refdef_current->height - h), w, h, 0, 0, 1, 1, cg.crosshairShaderAlt[ cg_drawCrosshair.integer % NUM_CROSSHAIRS ] );
 	}
+	CG_NitmodHudAnchor(previous);
 }
 
 static void CG_DrawNoShootIcon( void ) {
@@ -2012,7 +2033,7 @@ static void CG_DrawCrosshairNames( void ) {
 	qboolean original = NITMOD_UsesOriginalProtocol(), disguised = qfalse;
 	qboolean nitmodHud = NITMOD_UsesNitmodHud();
 	if(!cg.snap || cg.snap->ps.clientNum < 0 || cg.snap->ps.clientNum >= MAX_CLIENTS ||
-	   (original && cgs.gametype == 8)) return;
+	   (nitmodHud && cgs.gametype == 8)) return;
 
 	if ( cg_drawCrosshair.integer < 0 ) {
 		return;
@@ -2054,7 +2075,7 @@ static void CG_DrawCrosshairNames( void ) {
 					return;
 				}
 				if(nitmodHud) {
-					CG_NitmodDrawCrosshairLabel(s, color);
+					CG_NitmodDrawCrosshairLabel(s, colorWhite);
 					CG_NitmodDrawCrosshairHealth(playerHealth, maxHealth, color);
 					return;
 				}
@@ -2063,7 +2084,7 @@ static void CG_DrawCrosshairNames( void ) {
 				CG_DrawSmallStringColor( 320 - w / 2, 170, s, color );
 			} else if( cg_entities[cg.crosshairClientNum].currentState.eType == (original ? 33 : ET_CONSTRUCTIBLE_MARKER) ) {
 				s = CG_NitmodCrosshairEntityName(cg.crosshairClientNum, qtrue);
-				if(nitmodHud) { CG_NitmodDrawCrosshairLabel(s, color); return; }
+				if(nitmodHud) { CG_NitmodDrawCrosshairLabel(s, colorWhite); return; }
 				if( *s ) {
 					w = CG_DrawStrlen( s ) * SMALLCHAR_WIDTH;
 					CG_DrawSmallStringColor( 320 - w / 2, 170, s, color );
@@ -2080,7 +2101,7 @@ static void CG_DrawCrosshairNames( void ) {
 			if( cgs.clientinfo[cg.snap->ps.clientNum].team != TEAM_SPECTATOR &&
 				CG_NitmodCanIdentifyDisguise(cg.snap->ps.clientNum) ) {
 				s = CG_TranslateString( "Disguised Enemy!" );
-				if(nitmodHud) { CG_NitmodDrawCrosshairLabel(s, color); return; }
+				if(nitmodHud) { CG_NitmodDrawCrosshairLabel(s, colorRed); return; }
 				w = CG_DrawStrlen( s ) * SMALLCHAR_WIDTH;
 				CG_DrawSmallStringColor( 320 - w / 2, 170, s, color );
 				return;
@@ -2091,7 +2112,7 @@ static void CG_DrawCrosshairNames( void ) {
 
 				drawStuff = qtrue;
 				disguised = qtrue;
-				if(!original) {
+				if(!nitmodHud) {
 
 				// determine player class
 				playerClass = BG_ClassLetterForNumber( (cg_entities[ cg.crosshairClientNum ].currentState.powerups >> PW_OPS_CLASS_1) & 6 );
@@ -2192,9 +2213,9 @@ static void CG_DrawCrosshairNames( void ) {
 		}
 	}
 
-	/* Native disguise encoding still uses its own presentation above. */
-	if(original || (nitmodHud && !disguised && !isTank && drawStuff)) {
-		if(!isTank && (original || NITMOD_ServerSupports(NITMOD_FEATURE_CLASS_HEALTH))) {
+	/* Native snapshots carry class bits one slot above the original wire layout. */
+	if(original || (nitmodHud && !isTank && drawStuff)) {
+		if(!isTank && !disguised && (original || NITMOD_ServerSupports(NITMOD_FEATURE_CLASS_HEALTH))) {
 			int nitmodMaxHealth = CG_NitmodCrosshairMaxHealth(cg.crosshairClientNum);
 			if(nitmodMaxHealth > 0) maxHealth = nitmodMaxHealth;
 		}
@@ -2885,6 +2906,11 @@ static void CG_DrawWarmupContent(void) {
 	if(!sec) {
 		if((cgs.gamestate == GS_WARMUP && !cg.warmup) || cgs.gamestate == GS_WAITING_FOR_PLAYERS) {
 			cw = 10;
+			if(NITMOD_UsesNitmodHud() && NITMOD_MatchConfigName()[0]) {
+				s = va("^3Config:^7%s^7", NITMOD_MatchConfigName());
+				w = CG_DrawStrlen(s);
+				CG_DrawStringExt(340 - w * 6, 62, s, colorWhite, qfalse, qtrue, 10, 14, 0);
+			}
 
 			s1 = va( CG_TranslateString( "^3WARMUP:^7 Waiting on ^2%i^7 %s" ), cgs.minclients, cgs.minclients == 1 ? "player" : "players" );
 			w = CG_DrawStrlen( s1 );
@@ -4602,7 +4628,7 @@ static void CG_Draw2D( void ) {
 			nitmodHudAnchor_t previous = CG_NitmodHudAnchor(NITMOD_UsesNitmodHud() ? NITMOD_HUD_LEFT : NITMOD_HUD_RIGHT);
 			CG_DrawNewCompass();
 			CG_NitmodHudAnchor(previous);
-		} else if ( NITMOD_UsesOriginalProtocol() ) {
+		} else if ( NITMOD_UsesNitmodHud() ) {
 			CG_DrawExpandedAutoMap();
 		}
 

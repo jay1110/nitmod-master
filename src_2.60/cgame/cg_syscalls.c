@@ -2,6 +2,7 @@
 // cg_syscalls.asm is included instead when building a qvm
 #include "cg_local.h"
 #include "cg_nitmod_config.h"
+#include "cg_nitmod_nxac.h"
 
 #include "../game/nitmod_syscall_abi.h"
 static nitmod_syscall_t nitmodSyscall = (nitmod_syscall_t)-1;
@@ -330,7 +331,9 @@ void	trap_R_ClearScene( void ) {
 }
 
 void	trap_R_AddRefEntityToScene( const refEntity_t *re ) {
+	int before = re->renderfx;
 	syscall( CG_R_ADDREFENTITYTOSCENE, re );
+	CG_NITMOD_NxACAfterRender(re,before);
 }
 
 void	trap_R_AddPolyToScene( qhandle_t hShader , int numVerts, const polyVert_t *verts ) {
@@ -874,3 +877,16 @@ int trap_R_GetTextureId( const char *name ) {
 void trap_R_Finish( void ) {
 	syscall( CG_R_FINISH );
 }
+
+#ifdef __EMSCRIPTEN__
+/* Re-negotiate so VM extension activation cannot become stale across a map
+ * restart. The host owns roles, handles, endpoints and memory bounds. */
+int trap_NITMOD_NxACTransport(int op,int handle,void *buffer,int length,int value) {
+    char text[32];int getValue,extension;
+    trap_Cvar_VariableStringBuffer("//trap_GetValue",text,sizeof(text));getValue=atoi(text);
+    if(getValue<=0)return op==0?0:-1;
+    text[0]=0;if(!syscall(getValue,text,sizeof(text),"trap_NitmodNxACTransport1"))return op==0?0:-1;
+    extension=atoi(text);if(extension<=0)return op==0?0:-1;
+    return syscall(extension,op,handle,buffer,length,value);
+}
+#endif

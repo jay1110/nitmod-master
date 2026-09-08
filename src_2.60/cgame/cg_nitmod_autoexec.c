@@ -27,7 +27,7 @@ static qboolean ExecOptionalConfig(const char *stem) {
 void CG_NitmodMapAutoexec(void) {
     int i;
     qboolean valid = qtrue;
-    if(!NITMOD_UsesOriginalProtocol()) return;
+    if(!NITMOD_UsesNitmodHud()) return;
     for(i = 0; i < sizeof(cgs.rawmapname) && cgs.rawmapname[i]; ++i) {
         unsigned char c = cgs.rawmapname[i];
         if(!((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
@@ -47,7 +47,7 @@ void CG_NitmodRespawnAutoexec(qboolean revived) {
     static const char *teams[] = { "free", "axis", "allies", "spectator" };
     const clientInfo_t *client;
     int team, playerClass;
-    if(revived || cg.demoPlayback || !cg.snap || !NITMOD_UsesOriginalProtocol() ||
+    if(revived || cg.demoPlayback || !cg.snap || !NITMOD_UsesNitmodHud() ||
        cg.clientNum < 0 || cg.clientNum >= MAX_CLIENTS) return;
     client = &cgs.clientinfo[cg.clientNum];
     team = client->team; playerClass = client->cls;

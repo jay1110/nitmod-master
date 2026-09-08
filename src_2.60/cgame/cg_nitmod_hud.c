@@ -1,6 +1,7 @@
 #include "../game/nitmod_xp_snapshot.h"
 #include "cg_local.h"
 #include "cg_nitmod_hud.h"
+#include "cg_nitmod_hudstats.h"
 #include "cg_nitmod_config.h"
 #include "cg_nitmod_hints.h"
 #include "cg_nitmod_names.h"
@@ -70,7 +71,7 @@ void CG_NitmodDrawAnnouncement(void) {
     int length;
     vec4_t color = {1, 1, 1, 1};
     nitmodHudAnchor_t previous;
-    if(!NITMOD_UsesOriginalProtocol() || !*cursor) return;
+    if(!NITMOD_UsesNitmodHud() || !*cursor) return;
     color[3] = CG_NitmodMessageAlpha(nitmodAnnouncement.start);
     y = nitmodAnnouncement.y - nitmodAnnouncement.lines * 8.f;
     previous = CG_NitmodHudAnchor(NITMOD_HUD_CENTER);
@@ -96,7 +97,7 @@ void CG_NitmodDrawCenterPrint(void) {
     float y;
     vec4_t color = {1, 1, 1, 1};
     nitmodHudAnchor_t previous;
-    if(!NITMOD_UsesOriginalProtocol() || !cg.centerPrintTime) return;
+    if(!NITMOD_UsesNitmodHud() || !cg.centerPrintTime) return;
     color[3] = CG_NitmodMessageAlpha(cg.centerPrintTime);
     if(!color[3]) { cg.centerPrintTime = cg.centerPrintPriority = 0; return; }
     y = (float)((double)cg.centerPrintY - cg.centerPrintLines * 8.0);
@@ -280,36 +281,40 @@ vmCvar_t cg_drawHUDStats;
 static int bodyshotTime, headshotTime;
 static qboolean bodyshotChanged, headshotChanged;
 
+static qboolean CG_NitmodLiveStat(const playerState_t *state,int row,int *value) {
+    static const int slots[] = {NITMOD_PERS_KILLSPREE,NITMOD_PERS_BODYSHOTS,
+        NITMOD_PERS_HEADSHOTS,NITMOD_PERS_KILLS,NITMOD_PERS_DEATHS};
+    if(!state || row<0 || row>=5) return qfalse;
+    if(NITMOD_UsesOriginalProtocol()) { *value=NITMOD_WirePersistant(state)[slots[row]];return qtrue; }
+    return CG_NitmodNativeHudStat(state,row,value);
+}
 void CG_NitmodLiveStatsTransition(const playerState_t *oldState, const playerState_t *newState) {
-    const int *oldValues, *newValues;
-    if(!NITMOD_UsesOriginalProtocol() || !oldState || !newState) return;
-    oldValues = NITMOD_WirePersistant(oldState);
-    newValues = NITMOD_WirePersistant(newState);
+    int before,after;
+    if(!NITMOD_UsesNitmodHud() || !oldState || !newState) return;
     if(oldState->clientNum != newState->clientNum) {
         bodyshotChanged = headshotChanged = qfalse;
         return;
     }
-    if(newValues[NITMOD_PERS_BODYSHOTS] > oldValues[NITMOD_PERS_BODYSHOTS]) {
+    if(CG_NitmodLiveStat(oldState,1,&before) && CG_NitmodLiveStat(newState,1,&after) && after>before) {
         bodyshotTime = cg.time; bodyshotChanged = qtrue;
     }
-    if(newValues[NITMOD_PERS_HEADSHOTS] > oldValues[NITMOD_PERS_HEADSHOTS]) {
+    if(CG_NitmodLiveStat(oldState,2,&before) && CG_NitmodLiveStat(newState,2,&after) && after>before) {
         headshotTime = cg.time; headshotChanged = qtrue;
     }
 }
 
 qboolean CG_NitmodLiveStatsText(const playerState_t *state, int row, int now, char *out, int size) {
-    static const int slots[] = {NITMOD_PERS_KILLSPREE, NITMOD_PERS_BODYSHOTS,
-        NITMOD_PERS_HEADSHOTS, NITMOD_PERS_KILLS, NITMOD_PERS_DEATHS};
     static const char *labels[] = {"Spree", "BS", "HS", "K", "D"};
     char color = 'f';
+    int value;
     double age;
     if(!out || size <= 0) return qfalse;
     out[0] = 0;
-    if(!state || row < 0 || row >= 5) return qfalse;
+    if(!CG_NitmodLiveStat(state,row,&value)) return qfalse;
     age = (double)now - (row == 1 ? bodyshotTime : headshotTime);
     if(((row == 1 && bodyshotChanged) || (row == 2 && headshotChanged)) && age >= 0 && age < 100)
         color = '2';
-    Com_sprintf(out, size, "^7%s: ^%c%d", labels[row], color, NITMOD_WirePersistant(state)[slots[row]]);
+    Com_sprintf(out, size, "^7%s: ^%c%d", labels[row], color, value);
     return qtrue;
 }
 
@@ -319,9 +324,9 @@ void CG_NitmodDrawLiveStats(void) {
     float width, x;
     int row;
     nitmodHudAnchor_t previous;
-    if(!cg.snap || !NITMOD_UsesOriginalProtocol() || !cg_draw2D.integer || !cg_drawHUDStats.integer ||
+    if(!cg.snap || !NITMOD_UsesNitmodHud() || !cg_draw2D.integer || !cg_drawHUDStats.integer ||
        cg.clientNum < 0 || cg.clientNum >= MAX_CLIENTS || cgs.clientinfo[cg.clientNum].nitmodTV) return;
-    CG_NitmodLiveStatsText(&cg.snap->ps, 0, cg.time, text, sizeof(text));
+    if(!CG_NitmodLiveStatsText(&cg.snap->ps, 0, cg.time, text, sizeof(text))) return;
     width = CG_Text_Width_Ext(text, .17f, 0, &cgs.media.limboFont1);
     x = (cg_HUDFlags.integer & 1) ? 5 : 624 - width;
     previous = CG_NitmodHudAnchor((cg_HUDFlags.integer & 1) ? NITMOD_HUD_LEFT : NITMOD_HUD_RIGHT);

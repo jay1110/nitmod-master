@@ -356,16 +356,25 @@ void G_Script_ScriptLoad( void ) {
 	} else {
 		trap_Cvar_Register( &mapname, "mapname", "", CVAR_SERVERINFO | CVAR_ROM );
 	}
-	Q_strncpyz( filename, "maps/", sizeof(filename) );
-	Q_strcat( filename, sizeof(filename), mapname.string );
-
-	if ( g_gametype.integer == GT_WOLF_LMS ) {
-		Q_strcat( filename, sizeof(filename), "_lms" );
+	/* Original tries the custom directory first, then maps/. Empty custom
+	 * files fall back as well; g_scriptName still overrides the map basename. */
+	{
+		char directory[MAX_QPATH];
+		const char *suffix = g_gametype.integer == GT_WOLF_LMS ? "_lms" :
+			g_gametype.integer == GT_WOLF_DM ? "_dm" : "";
+		trap_Cvar_VariableStringBuffer("g_mapScriptDirectory", directory, sizeof(directory));
+		len = -1;
+		f = 0;
+		if (directory[0]) {
+			Com_sprintf(filename, sizeof(filename), "%s/%s%s.script", directory, mapname.string, suffix);
+			len = trap_FS_FOpenFile(filename, &f, FS_READ);
+			if (len <= 0 && f) { trap_FS_FCloseFile(f); f = 0; }
+		}
+		if (len <= 0) {
+			Com_sprintf(filename, sizeof(filename), "maps/%s%s.script", mapname.string, suffix);
+			len = trap_FS_FOpenFile(filename, &f, FS_READ);
+		}
 	}
-
-	Q_strcat( filename, sizeof(filename), ".script" );
-
-	len = trap_FS_FOpenFile( filename, &f, FS_READ );
 
 	// make sure we clear out the temporary scriptname
 	trap_Cvar_Set( "g_scriptName", "" );
@@ -917,7 +926,7 @@ void script_mover_die(gentity_t *self, gentity_t *inflictor, gentity_t *attacker
 	}
 
 	if( self->tankLink ) {
-		G_LeaveTank( self->tankLink, qtrue );
+		G_LeaveTank( self->tankLink, qtrue, qfalse );
 	}
 
 	self->die = NULL;

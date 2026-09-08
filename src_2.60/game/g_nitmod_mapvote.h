@@ -1,6 +1,7 @@
 #ifndef G_NITMOD_MAPVOTE_H
 #define G_NITMOD_MAPVOTE_H
 
+void G_NITMOD_MapVoteBeginIntermission( void );
 void G_NITMOD_MapVoteSendList( gentity_t *ent );
 void G_NITMOD_MapVoteSendTally( gentity_t *ent );
 void G_NITMOD_MapVoteCast( gentity_t *ent );

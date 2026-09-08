@@ -173,6 +173,7 @@ void CG_Respawn( qboolean revived ) {
 
 	// clear pmext
 	memset( &cg.pmext, 0, sizeof(cg.pmext) );
+	CG_NitmodResetMovementDelayPrediction();
 	
 	cg.pmext.bAutoReload = (cg_autoReload.integer > 0);
 

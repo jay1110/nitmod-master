@@ -16,6 +16,7 @@
 #include "nitmod_weapon_clip.h"
 #include "nitmod_weapon_recoil.h"
 #include "nitmod_skills.h"
+#include "nitmod_weapon_charge.h"
 #ifdef GAMEDLL
 #include "g_nitmod_weapon_definition.h"
 #endif
@@ -39,11 +40,13 @@ pmove_t		*pm;
 pml_t		pml;
 
 /* Original BG_CheckCharge selects duration and reward mask by current class,
- * then selects the table by weapon. Caller only enables this for original
- * protocol prediction until native server negotiation is integrated. */
+ * then selects the table by weapon. Original and negotiated native clients
+ * receive the existing class-mask/duration/bypass transport. */
 static qboolean PM_NITMOD_PackChargeAvailable(const pmove_t *move) {
 	int skill, duration;
+	nitmodSkillTable_t table;
 	float fraction;
+	if(!NITMOD_WeaponChargeTable(move->ps->weapon,&table,&skill)) return qtrue;
 	if(move->nitmodPackChargeBypass) return qtrue;
 	switch(move->ps->stats[STAT_PLAYER_CLASS]) {
 	case PC_MEDIC: skill=SK_FIRST_AID; duration=move->medicChargeTime; break;
@@ -52,7 +55,7 @@ static qboolean PM_NITMOD_PackChargeAvailable(const pmove_t *move) {
 	case PC_COVERTOPS: skill=SK_MILITARY_INTELLIGENCE_AND_SCOPED_WEAPONS; duration=move->covertopsChargeTime; break;
 	default: skill=SK_HEAVY_WEAPONS; duration=move->soldierChargeTime; break;
 	}
-	NITMOD_GameplayTableValue(move->ps->weapon==WP_AMMO ? NITMOD_TABLE_AMMO : NITMOD_TABLE_HEALTH,
+	NITMOD_GameplayTableValue(table,
 		move->nitmodPackSkillMasks[skill], &fraction);
 	return (double)move->cmd.serverTime - move->ps->classWeaponTime >= (double)duration * fraction;
 }
@@ -905,7 +908,7 @@ static qboolean PM_CheckProne (void)
 
 		if( ((pm->ps->pm_flags & PMF_DUCKED && pm->cmd.doubleTap == DT_FORWARD) ||
 			(pm->cmd.wbuttons & WBUTTON_PRONE)) &&
-			pm->cmd.serverTime - -pm->pmext->proneTime > 750 ) {
+			NITMOD_AddWeaponTime32(pm->cmd.serverTime, pm->pmext->proneTime) > 750 ) {
 			trace_t trace;
 
 			pm->mins[0] = pm->ps->mins[0];
@@ -938,7 +941,9 @@ static qboolean PM_CheckProne (void)
 // zinx - what was the reason for this, anyway? removing fixes bug 424
 //			pm->cmd.serverTime - pm->pmext->proneGroundTime > 450 ||
 			((pm->cmd.doubleTap == DT_BACK || pm->cmd.upmove > 10 || pm->cmd.wbuttons & WBUTTON_PRONE) &&
-				 pm->cmd.serverTime - pm->pmext->proneTime > 750) ) {
+				 NITMOD_AddWeaponTime32(pm->cmd.serverTime,
+					NITMOD_AddWeaponTime32(~pm->pmext->proneTime, 1)) >
+					((pm->nitmodProneDelay == 1 || pm->nitmodProneDelay == 3) ? 1750 : 750)) ) {
 			trace_t trace;
 
 			// see if we have the space to stop prone
@@ -962,7 +967,7 @@ static qboolean PM_CheckProne (void)
 				// stop prone
 				pm->ps->eFlags &= ~EF_PRONE;
 				pm->ps->eFlags &= ~EF_PRONE_MOVING;
-				pm->pmext->proneTime = -pm->cmd.serverTime;	// timestamp 'stop prone'
+				pm->pmext->proneTime = NITMOD_AddWeaponTime32(~pm->cmd.serverTime, 1);	// timestamp 'stop prone'
 
 				if( pm->ps->weapon == WP_MOBILE_MG42_SET ) {
 					PM_BeginWeaponChange( WP_MOBILE_MG42_SET, WP_MOBILE_MG42, qfalse );
@@ -1261,8 +1266,9 @@ qboolean BG_NITMOD_CheckAirJump(pmove_t *move) {
 		(ps->pm_flags & (PMF_RESPAWNED | PMF_NITMOD_DOUBLEJUMPED)) ||
 		(move->nitmodDoubleJump == 2 && !(ps->velocity[2] > 0)) || move->cmd.upmove < 10)
 		return qfalse;
-	/* Invalid/nonpositive heights must not inject NaN/Inf into prediction. */
-	if(!(move->nitmodDoubleJumpHeight > 0 && move->nitmodDoubleJumpHeight <= 1.0e30f)) return qfalse;
+	/* Original PM_AirMove 0x283e8 consumes zero/negative finite impulses too.
+	 * Keep the existing finite-range safeguard for invalid prediction input. */
+	if(!(move->nitmodDoubleJumpHeight >= -1.0e30f && move->nitmodDoubleJumpHeight <= 1.0e30f)) return qfalse;
 	if(ps->pm_flags & PMF_JUMP_HELD) {
 		move->cmd.upmove = 0;
 		return qfalse;
@@ -2039,6 +2045,9 @@ Sets mins, maxs, and pm->ps->viewheight
 static void PM_CheckDuck (void)
 {
 	trace_t	trace;
+	qboolean spectator = pm->ps->persistant[PERS_TEAM] == TEAM_SPECTATOR;
+	qboolean oldDucked = (pm->ps->pm_flags & PMF_DUCKED) != 0;
+	qboolean canDuck, wantsDuck;
 
 	// Ridah, modified this for configurable bounding boxes
 	pm->mins[0] = pm->ps->mins[0];
@@ -2055,20 +2064,36 @@ static void PM_CheckDuck (void)
 		return;
 	}
 
-	if( (pm->cmd.upmove < 0 && !(pm->ps->eFlags & EF_MOUNTEDTANK) &&
-		!(pm->ps->pm_flags & PMF_LADDER)) || pm->ps->weapon == WP_MORTAR_SET )
-	{	// duck
-		pm->ps->pm_flags |= PMF_DUCKED;
+	/* Original PM_CheckDuck (ELF 0x27c20): two signed deadlines and
+	 * transition latches. Keep latches per client instead of original globals. */
+	canDuck = !(pm->ps->eFlags & EF_MOUNTEDTANK) && !(pm->ps->pm_flags & PMF_LADDER);
+	wantsDuck = pm->cmd.upmove < 0;
+	if( !spectator ) {
+		canDuck = canDuck && (!pm->pmext->nitmodWasCrouching ||
+			pm->pmext->nitmodStandCrouchUntil < 1 ||
+			pm->pmext->nitmodStandCrouchUntil <= pm->cmd.serverTime);
+		wantsDuck = wantsDuck || (pm->nitmodCrouchStandDelay > 0 &&
+			pm->pmext->nitmodCrouchStandUntil > 0 &&
+			pm->cmd.serverTime < pm->pmext->nitmodCrouchStandUntil);
 	}
-	else
-	{	// stand up if possible
-		if (pm->ps->pm_flags & PMF_DUCKED)
-		{
-			// try to stand up
-			pm->maxs[2] = pm->ps->maxs[2];
-			PM_TraceAll( &trace, pm->ps->origin, pm->ps->origin );
-			if (!trace.allsolid) {
-				pm->ps->pm_flags &= ~PMF_DUCKED;
+	if( (canDuck && wantsDuck) || pm->ps->weapon == WP_MORTAR_SET ) {
+		pm->ps->pm_flags |= PMF_DUCKED;
+		if( !pm->pmext->nitmodCrouchStarted && !oldDucked && !spectator ) {
+			pm->pmext->nitmodCrouchStarted = qtrue;
+			pm->pmext->nitmodCrouchStandUntil = NITMOD_AddWeaponTime32(
+				pm->cmd.serverTime, pm->nitmodCrouchStandDelay);
+		}
+	} else {
+		pm->maxs[2] = pm->ps->maxs[2];
+		PM_TraceAll( &trace, pm->ps->origin, pm->ps->origin );
+		if( !trace.allsolid ) {
+			pm->ps->pm_flags &= ~PMF_DUCKED;
+			pm->pmext->nitmodCrouchStandUntil = 0;
+			pm->pmext->nitmodCrouchStarted = qfalse;
+			if( !(pm->ps->eFlags & EF_PRONE) && oldDucked ) {
+				pm->pmext->nitmodWasCrouching = qtrue;
+				pm->pmext->nitmodStandCrouchUntil = NITMOD_AddWeaponTime32(
+					pm->cmd.serverTime, pm->nitmodStandCrouchDelay);
 			}
 		}
 	}
@@ -3588,6 +3613,16 @@ static void PM_Weapon( void ) {
 		return;
 
 
+	if(pm->nitmodPackChargeEnabled) {
+		if(!PM_NITMOD_PackChargeAvailable(pm)) {
+			if((pm->ps->weapon==WP_AMMO || pm->ps->weapon==WP_MEDKIT) &&
+			   (pm->cmd.buttons & BUTTON_ATTACK))
+				BG_AnimScriptEvent(pm->ps,pm->character->animModelInfo,ANIM_ET_NOPOWER,qtrue,qfalse);
+			return;
+		}
+		if(pm->ps->weapon==WP_PANZERFAUST && (pm->ps->eFlags&EF_PRONE)) return;
+		if(pm->ps->weapon==WP_MORTAR_SET && !delayedFire) pm->ps->weaponstate=WEAPON_READY;
+	} else {
 	// JPW NERVE -- in multiplayer, don't allow panzerfaust or dynamite to fire if charge bar isn't full
 	if( pm->ps->weapon == WP_PANZERFAUST ) {
 		if( pm->ps->eFlags & EF_PRONE ) {
@@ -3647,13 +3682,6 @@ static void PM_Weapon( void ) {
 			return;
 	}
 
-	if(pm->nitmodPackChargeEnabled &&
-		(pm->ps->weapon==WP_AMMO || pm->ps->weapon==WP_MEDKIT) &&
-		!PM_NITMOD_PackChargeAvailable(pm)) {
-		if(pm->cmd.buttons & BUTTON_ATTACK)
-			BG_AnimScriptEvent(pm->ps, pm->character->animModelInfo, ANIM_ET_NOPOWER, qtrue, qfalse);
-		return;
-	}
 	if( !pm->nitmodPackChargeEnabled && pm->ps->weapon == WP_AMMO ) {
 		if (pm->skill[SK_SIGNALS] >= 1 ) {
 			if( pm->cmd.serverTime - pm->ps->classWeaponTime < (pm->ltChargeTime*0.15f) ) {
@@ -3700,6 +3728,8 @@ static void PM_Weapon( void ) {
 	if( pm->ps->weapon == WP_MEDIC_ADRENALINE ) {
 		if (pm->cmd.serverTime - pm->ps->classWeaponTime < pm->medicChargeTime)
 			return;
+	}
+
 	}
 
 	/* Original PM_Weapon, ELF 0x2c97f..0x2cb7f: reject placement before
@@ -5318,10 +5348,22 @@ static void PM_NITMOD_AlternateWeapon(void) {
  if(!pm->nitmodAuthoritativeWeapons ||
     (pm->ps->pm_flags&PMF_RESPAWNED) ||
     pm->ps->persistant[PERS_TEAM]==TEAM_SPECTATOR ||
-    pm->ps->stats[STAT_HEALTH]<=0 || BG_PlayerMounted(pm->ps->eFlags) ||
+    pm->ps->stats[STAT_HEALTH]<=0 || (pm->ps->eFlags&EF_SPARE0) || BG_PlayerMounted(pm->ps->eFlags) ||
     !(pm->cmd.wbuttons&WBUTTON_ATTACK2) || (pm->oldcmd.wbuttons&WBUTTON_ATTACK2)) return;
  weapon=pm->ps->weapon;
  if(weapon<=WP_NONE || weapon>=WP_NUM_WEAPONS) return;
+ /* Original PmoveSingle 0x305ac..0x30722 and G_SendVoiceChat 0x59210:
+  * the alternate action on these tools is a team voice message. Only the
+  * authoritative server installs this callback, so prediction cannot echo. */
+ switch(weapon) {
+ case WP_PLIERS: case WP_MEDIC_SYRINGE:
+  if(pm->nitmodVoiceChat) pm->nitmodVoiceChat(pm->ps->clientNum,"coverme");
+  return;
+ case WP_GRENADE_LAUNCHER: case WP_GRENADE_PINEAPPLE: case WP_DYNAMITE: case WP_BOMB:
+  if(pm->nitmodVoiceChat) pm->nitmodVoiceChat(pm->ps->clientNum,"fireinthehole");
+  return;
+ default:break;
+ }
 #ifdef CGAMEDLL
  /* Original Cgame PmoveSingle adds this client-only action before the
   * alternate-weapon lookup can fall back to the current weapon. Qagame
@@ -5351,6 +5393,39 @@ static void PM_NITMOD_AlternateWeapon(void) {
     !pm->ps->ammoclip[BG_FindClipForWeapon(alternate)]) return;
  BG_AddPredictableEventToPlayerstate(EV_NITMOD_ALTWEAPON,alternate,pm->ps);
  PM_BeginWeaponChange(weapon,alternate,qfalse);
+}
+
+/* Original qagame PmoveSingle 0x30b76..0x31497 and cgame 0x200da:
+ * fixed physics compensates changed velocity, then quantizes to 1/64 units.
+ * Keep the intermediate arithmetic wider until the original float stores. */
+void BG_NITMOD_SnapVelocity(pmove_t *move, int msec, const vec3_t previousVelocity) {
+ double frame, ratio, threshold, length;
+ int i, fps;
+ if(!move->nitmodFixedPhysics) {
+  trap_SnapVector(move->ps->velocity);
+  return;
+ }
+ length=(double)move->ps->velocity[0]*move->ps->velocity[0]+
+  (double)move->ps->velocity[1]*move->ps->velocity[1]+
+  (double)move->ps->velocity[2]*move->ps->velocity[2];
+ if(length<.25) {
+  VectorClear(move->ps->velocity);
+  return;
+ }
+ fps=move->nitmodFixedPhysicsFps;
+ /* Original out-of-range endpoints are single-precision constants; the
+  * normal 60..333 branch retains the division intermediate in x87. */
+ frame=fps<60?(double)16.666666f:fps>333?(double)3.0030031f:1000.0/fps;
+ ratio=msec/frame;
+ threshold=.5/ratio;
+ for(i=0;i<3;++i) {
+  double value=move->ps->velocity[i];
+  if(fabs(value-(double)previousVelocity[i])>threshold)
+   move->ps->velocity[i]=(float)(value+(value<0?-.5:.5)*ratio);
+  move->ps->velocity[i]*=64.0f;
+ }
+ trap_SnapVector(move->ps->velocity);
+ VectorScale(move->ps->velocity,1.0f/64.0f,move->ps->velocity);
 }
 
 void PmoveSingle (pmove_t *pmove) {
@@ -5680,9 +5755,7 @@ void PmoveSingle (pmove_t *pmove) {
 	// entering / leaving water splashes
 	PM_WaterEvents();
 
-	// snap some parts of playerstate to save network bandwidth
-	trap_SnapVector( pm->ps->velocity );
-//	SnapVector( pm->ps->velocity );
+	BG_NITMOD_SnapVelocity(pm,pml.msec,pml.previous_velocity);
 }
 
 
@@ -5693,6 +5766,16 @@ Pmove
 Can be called by either the server or the client
 ================
 */
+/* Original PmovePredict 0x322e0: short server extrapolation without
+ * advancing commands, weapons or the ordinary Pmove frame counters. */
+void PmovePredict(pmove_t *pmove, float frametime) {
+ pm=pmove;
+ memset(&pml,0,sizeof(pml));
+ pml.frametime=frametime;
+ PM_GroundTrace();
+ PM_StepSlideMove(!pml.groundPlane && !(pm->ps->pm_flags&PMF_LADDER));
+}
+
 int Pmove (pmove_t *pmove) {
 	int			finalTime;
 

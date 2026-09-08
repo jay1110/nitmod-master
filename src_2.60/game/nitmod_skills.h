@@ -26,7 +26,7 @@ int NITMOD_GameplayTableValue( nitmodSkillTable_t table,
 	unsigned int unlocked, float *output );
 /* Numeric jP_DoChargeCost subset. Caller supplies current class/team duration.
  * 1: paid or bypassed; 0: insufficient (full-charge normalization still applies);
- * -1: invalid/unrepresentable, timestamp unchanged. Not yet gameplay-active. */
+ * -1: invalid/unrepresentable, timestamp unchanged. Used by server gameplay charge consumers. */
 int NITMOD_ApplyChargeCost(int now, int duration, float fraction,
     int noCharge, int war, int *timestamp);
 /* Wire/player-info rank. Invalid text leaves the destination unchanged. */

@@ -1,6 +1,9 @@
 #include "nitmod_xp_snapshot.h"
 
 #include "g_local.h"
+#include "g_nitmod_nxac.h"
+#include "g_nitmod_admin.h"
+#include "g_nitmod_mdx.h"
 #include "nitmod_lua_events.h"
 #include "nitmod_weapon_recoil.h"
 #include "g_nitmod_weapon_definition.h"
@@ -9,11 +12,21 @@
 #include "g_nitmod_legacy_cvars.h"
 #include "g_nitmod_integrity.h"
 #include "g_nitmod_config.h"
+#include "g_nitmod_antiwarp.h"
+#include "g_nitmod_hitboxdebug.h"
 #include "g_nitmod_abilities.h"
+#include "g_nitmod_charge.h"
 #include "nitmod_air.h"
 #include "nitmod_weapon_reload.h"
 #include "nitmod_regeneration.h"
 #include <limits.h>
+
+/* Original G_SendVoiceChat 0x59210: Pmove alternate tool action uses the
+ * ordinary team voice path, including its squelch and recipient filters. */
+void G_SendVoiceChat(int clientNum, const char *id) {
+ if(clientNum<0 || clientNum>=level.maxclients || !g_entities[clientNum].client || !id) return;
+ G_Voice(&g_entities[clientNum],NULL,SAY_TEAM,id,qfalse);
+}
 
 /*
 ===============
@@ -206,55 +219,42 @@ qboolean ClientNeedsAmmo( int client ) {
 }
 
 // Does ent have enough "energy" to call artillery?
-qboolean ReadyToCallArtillery( gentity_t* ent ) {
-	if( ent->client->sess.skill[SK_SIGNALS] >= 2 ) {
-		if( level.time - ent->client->ps.classWeaponTime <= (level.lieutenantChargeTime[ent->client->sess.sessionTeam-1]*0.66f) )
-			return qfalse;
-	} else if( level.time - ent->client->ps.classWeaponTime <= level.lieutenantChargeTime[ent->client->sess.sessionTeam-1] ) {
-		return qfalse;
-	}
-
-	return qtrue;
+qboolean ReadyToCallArtillery(gentity_t *ent) {
+ return G_NITMOD_ChargeAction(ent,NITMOD_TABLE_ARTILLERY,SK_SIGNALS,qfalse);
 }
 
-
-// Are we ready to construct?  Optionally, will also update the time while we are constructing
-qboolean ReadyToConstruct(gentity_t *ent, gentity_t *constructible, qboolean updateState)
-{
-	int weaponTime = ent->client->ps.classWeaponTime;
-
-	// "Ammo" for this weapon is time based
-	if( weaponTime + level.engineerChargeTime[ent->client->sess.sessionTeam-1] < level.time ) {
-		weaponTime = level.time - level.engineerChargeTime[ent->client->sess.sessionTeam-1];
-	}
-
-	if( g_debugConstruct.integer ) {
-		weaponTime += 0.5f*((float)level.engineerChargeTime[ent->client->sess.sessionTeam-1]/(constructible->constructibleStats.duration/(float)FRAMETIME));
-	} else {
-		if( ent->client->sess.skill[SK_EXPLOSIVES_AND_CONSTRUCTION] >= 3 )
-			weaponTime += 0.66f*constructible->constructibleStats.chargebarreq*((float)level.engineerChargeTime[ent->client->sess.sessionTeam-1]/(constructible->constructibleStats.duration/(float)FRAMETIME));
-			//weaponTime += 0.66f*((float)level.engineerChargeTime[ent->client->sess.sessionTeam-1]/(constructible->wait/(float)FRAMETIME));
-			//weaponTime += 0.66f * 2.f * ((float)level.engineerChargeTime[ent->client->sess.sessionTeam-1]/(constructible->wait/(float)FRAMETIME));
-		else
-			weaponTime += constructible->constructibleStats.chargebarreq*((float)level.engineerChargeTime[ent->client->sess.sessionTeam-1]/(constructible->constructibleStats.duration/(float)FRAMETIME));
-			//weaponTime += 2.f * ((float)level.engineerChargeTime[ent->client->sess.sessionTeam-1]/(constructible->wait/(float)FRAMETIME));
-	}
-
-	// if the time is in the future, we have NO energy left
-	if (weaponTime > level.time)
-	{
-		// if we're supposed to update the state, reset the time to now
-//		if( updateState )
-//			ent->client->ps.classWeaponTime = level.time;
-
-		return qfalse;
-	}
-
-	// only set the actual weapon time for this entity if they want us to
-	if( updateState )
-		ent->client->ps.classWeaponTime = weaponTime;
-
-	return qtrue;
+/* Original ReadyToConstruct 0x3d1b0 has a distinct noCharge contract:
+ * affordability is checked first; only a successful updating call refills. */
+qboolean ReadyToConstruct(gentity_t *ent, gentity_t *constructible, qboolean updateState) {
+ int team,duration,weaponTime;
+ float fraction;
+ double candidate;
+ if(!ent || !ent->client || !constructible) return qfalse;
+ team=ent->client->sess.sessionTeam-TEAM_AXIS;
+ if(team<0 || team>1 || constructible->constructibleStats.duration<=0) return qfalse;
+ duration=level.engineerChargeTime[team];
+ if(duration<0) return qfalse;
+ candidate=ent->client->ps.classWeaponTime;
+ if(candidate+duration<level.time) candidate=(double)level.time-duration;
+ if(g_debugConstruct.integer) {
+  candidate+=((double)duration/((double)constructible->constructibleStats.duration/FRAMETIME))*0.5;
+ } else {
+  NITMOD_GameplayTableValue(NITMOD_TABLE_CONSTRUCT,
+   ent->client->sess.nitmodSkillMasks[SK_EXPLOSIVES_AND_CONSTRUCTION],&fraction);
+  candidate+=((double)duration/((double)constructible->constructibleStats.duration/FRAMETIME))*fraction*constructible->constructibleStats.chargebarreq;
+ }
+ if(!(candidate>=INT_MIN && candidate<(double)INT_MAX+1.0)) return qfalse;
+ weaponTime=(int)candidate;
+ if(weaponTime>level.time) return qfalse;
+ if(updateState) {
+  if(G_NITMOD_LegacyCvarInteger("g_noCharge",0)) {
+   candidate=(double)level.time-duration;
+   if(candidate<INT_MIN) return qfalse;
+   weaponTime=(int)candidate;
+  }
+  ent->client->ps.classWeaponTime=weaponTime;
+ }
+ return qtrue;
 }
 
 void BotSetBlockEnt( int client, int blocker );
@@ -470,10 +470,16 @@ void SpectatorThink( gentity_t *ent, usercmd_t *ucmd ) {
 		pm.nitmodLeanEnabled = qtrue;
 		pm.nitmodReloadEnabled = qtrue;
 		pm.nitmodAuthoritativeWeapons = qtrue;
+	pm.nitmodVoiceChat = G_SendVoiceChat;
 		pm.nitmodWarMode = G_NITMOD_ConfiguredWarMode();
+		pm.nitmodProneDelay = G_NITMOD_LegacyCvarInteger("n_proneDelay", 0);
+		pm.nitmodCrouchStandDelay = G_NITMOD_LegacyCvarInteger("n_crouchStandDelay", 0);
+		pm.nitmodStandCrouchDelay = G_NITMOD_LegacyCvarInteger("n_standCrouchDelay", 0);
 		pm.nitmodNoReload = (unsigned int)G_NITMOD_ConfiguredNoReload();
 		pm.nitmodWeaponFlags = G_NITMOD_ConfiguredWeaponFlags();
 		pm.nitmodNoMidclipReload = G_NITMOD_WeaponNoMidclipReload(client->ps.weapon);
+		pm.nitmodFixedPhysics = G_NITMOD_LegacyCvarInteger("g_fixedphysics", 0) != 0;
+		pm.nitmodFixedPhysicsFps = G_NITMOD_LegacyCvarInteger("g_fixedphysicsfps", 125);
 		{
 			nitmodWeaponOptions_t options;
 			memset(&options, 0, sizeof(options));
@@ -572,10 +578,20 @@ Returns qfalse if the client is dropped
 */
 qboolean ClientInactivityTimer( gclient_t *client ) {
 	int duration = client->sess.sessionTeam == TEAM_SPECTATOR ? g_spectatorInactivity.integer : g_inactivity.integer;
+	int clientNum = (int)(client - level.clients);
 	qboolean spectatorExempt = qfalse;
-	if(client->sess.sessionTeam == TEAM_SPECTATOR && duration > 0) {
+	/* Original ClientInactivityTimer 0x3dd30: disabled timers have a fixed
+	 * one-minute grace period, including after a live Cvar change. */
+	if((client->sess.sessionTeam == TEAM_SPECTATOR && duration <= 0) ||
+	   ((client->sess.sessionTeam == TEAM_AXIS || client->sess.sessionTeam == TEAM_ALLIES) && duration <= 0)) {
+		client->inactivityTime = level.time + 60000;
+		client->inactivityWarning = qfalse;
+		return qtrue;
+	}
+	if(client->sess.sessionTeam == TEAM_SPECTATOR) {
 		int i, occupiedPrivate = 0;
 		int privateSlots = trap_Cvar_VariableIntegerValue("sv_privateClients");
+		/* Preserve the private-slot rule while bounding its original array scan. */
 		if(privateSlots < 0) privateSlots = 0;
 		if(privateSlots > level.maxclients) privateSlots = level.maxclients;
 		if(privateSlots > MAX_CLIENTS) privateSlots = MAX_CLIENTS;
@@ -583,57 +599,49 @@ qboolean ClientInactivityTimer( gclient_t *client ) {
 			if(level.clients[i].pers.connected != CON_DISCONNECTED) ++occupiedPrivate;
 		spectatorExempt = ((g_inactivityOptions.integer & 1) && client->sess.spectatorState == SPECTATOR_FOLLOW) ||
 			(!(g_inactivityOptions.integer & 2) &&
-			 ((client - level.clients < privateSlots && occupiedPrivate < privateSlots) ||
+			 ((clientNum < privateSlots && occupiedPrivate < privateSlots) ||
 			  level.numConnectedClients < level.maxclients + occupiedPrivate - privateSlots));
 	}
-	// OSP - modified
-	if( duration <= 0 ) {
-
-		// give everyone some time, so if the operator sets g_inactivity during
-		// gameplay, everyone isn't kicked
-		client->inactivityTime = level.time + 60 * 1000;
+	if(client->pers.cmd.forwardmove || client->pers.cmd.rightmove || client->pers.cmd.upmove ||
+	   (client->pers.cmd.wbuttons & (WBUTTON_ATTACK2 | WBUTTON_LEANLEFT | WBUTTON_LEANRIGHT)) ||
+	   (client->pers.cmd.buttons & BUTTON_ATTACK) || client->ps.pm_type == PM_DEAD ||
+	   (client->ps.pm_flags & PMF_LIMBO) ||
+	   ((client->ps.eFlags & EF_PRONE) && client->ps.weapon == WP_MOBILE_MG42_SET) ||
+	   spectatorExempt || client->sess.nitmodEttvSlave ||
+	   (G_NITMOD_AdminPrivilege(clientNum,"inactivity") &&
+	    (client->sess.sessionTeam == TEAM_SPECTATOR || !(g_inactivityOptions.integer & 4)))) {
+		/* Permission9 (inactivity) always protects spectators; option4 only
+		 * removes the playing-team exemption. ETTV is independently exempt. */
 		client->inactivityWarning = qfalse;
-	} else if ( client->pers.cmd.forwardmove || 
-		client->pers.cmd.rightmove || 
-		client->pers.cmd.upmove ||
-		(client->pers.cmd.wbuttons & WBUTTON_ATTACK2) ||
-		(client->pers.cmd.buttons & BUTTON_ATTACK) ||
-		(client->pers.cmd.wbuttons & WBUTTON_LEANLEFT) ||
-		(client->pers.cmd.wbuttons & WBUTTON_LEANRIGHT)
-		|| client->ps.pm_type == PM_DEAD || (client->ps.pm_flags & PMF_LIMBO) ||
-		((client->ps.eFlags & EF_PRONE) && client->ps.weapon == WP_MOBILE_MG42_SET) || spectatorExempt ) {
-
-		client->inactivityWarning = qfalse;
-		client->inactivityTime = level.time + 1000 *
-								 ((client->sess.sessionTeam != TEAM_SPECTATOR) ?
-												g_inactivity.integer :
-												g_spectatorInactivity.integer);
-
-	} else if ( !client->pers.localClient ) {
-		if ( level.time > client->inactivityTime && client->inactivityWarning) {
-			client->inactivityWarning = qfalse;
-			if(client->sess.sessionTeam != TEAM_SPECTATOR) {
-				client->inactivityTime = level.time + (g_spectatorInactivity.integer > 0 ? g_spectatorInactivity.integer * 1000 : 60000);
-				SetTeam(&g_entities[client - level.clients], "spectator", qtrue, 0, 0, qfalse);
-				/* Fixed text avoids embedding player-controlled names in commands. */
-				trap_SendServerCommand(client - level.clients, "cp \"Moved to spectators due to inactivity\"");
-				return qtrue;
-			}
-			client->inactivityTime = level.time + 60000;
-			trap_DropClient(client - level.clients, "Dropped due to inactivity", 0);
-			return qfalse;
-		}
-
-		if ( !client->inactivityWarning && (double)level.time > (double)client->inactivityTime - (double)duration * 500.0 ) {
-			trap_SendServerCommand(client - level.clients, va("cp \"%i seconds until %s for inactivity\"", duration / 2,
-				client->sess.sessionTeam == TEAM_SPECTATOR ? "disconnect" : "moving to spectators"));
-
-			client->inactivityWarning = qtrue;
-			/* Original warning does not extend the expiration time. */
-		}
+		client->inactivityTime = level.time + 1000 * duration;
+		return qtrue;
 	}
-	return qtrue;
+	if(client->pers.localClient) return qtrue;
+	if(!client->inactivityWarning) {
+		if((double)level.time <= (double)client->inactivityTime - (double)duration * 500.0) return qtrue;
+		if(client->sess.sessionTeam == TEAM_SPECTATOR) {
+			trap_SendServerCommand(clientNum, va("pop \"^8INACTIVITY WARNING: ^7%i seconds until inactivity drop!\"", duration / 2));
+			G_Printf("%is spectator inactivity warning issued to: %s\n", duration / 2, client->pers.netname);
+		} else {
+			trap_SendServerCommand(clientNum, va("pop \"^8INACTIVITY WARNING: ^7%i seconds until moving to spectators for inactivity!\"", duration / 2));
+			G_Printf("%is inactivity warning issued to: %s\n", duration / 2, client->pers.netname);
+		}
+		client->inactivityWarning = qtrue;
+		return qtrue;
+	}
+	if(level.time <= client->inactivityTime) return qtrue;
+	if(client->sess.sessionTeam != TEAM_SPECTATOR) {
+		client->inactivityTime = level.time + (g_spectatorInactivity.integer ? g_spectatorInactivity.integer * 1000 : 60000);
+		client->inactivityWarning = qfalse;
+		SetTeam(&g_entities[clientNum], "spectator", qtrue, 0, 0, qfalse);
+		trap_SendServerCommand(-1, va("pop \"^8INACTIVITY: ^7%s^7 moved to spectators\"", client->pers.netname));
+		return qtrue;
+	}
+	/* Original preserves the expired warning/deadline until disconnect. */
+	trap_DropClient(clientNum, "Dropped due to inactivity", 0);
+	return qfalse;
 }
+
 
 /*
 ==================
@@ -661,9 +669,9 @@ void G_NITMOD_HealthTimer(gentity_t *ent, int msec, unsigned int medicOptions, i
 		client->timeResidual -= 1000;
 
 		// regenerate
-		/* Original ClientTimerActions (ELF 0x4e2f0): DM option bit 1 admits
+		/* Original ClientTimerActions (ELF 0x3e270): DM option bit 2 admits
 		 * every class. Otherwise a living medic regenerates normally, and
-		 * g_medics bit 4 admits a client with the sixth First Aid reward. */
+		 * g_medics bit 16 admits a client with the sixth First Aid reward. */
 		regenerate = NITMOD_RegenerationEligible(g_gametype.integer == GT_WOLF_DM,
 			g_DMOptions.integer, medicOptions,
 			client->sess.playerType == PC_MEDIC &&
@@ -672,15 +680,12 @@ void G_NITMOD_HealthTimer(gentity_t *ent, int msec, unsigned int medicOptions, i
 		if( regenerate ) {
 			int maximum = BG_EffectiveMaxHealth(&client->ps);
 			if( ent->health < client->ps.stats[STAT_MAX_HEALTH]) {
-				ent->health += baseRate;
-				if ( ent->health > client->ps.stats[STAT_MAX_HEALTH]){
-					ent->health = client->ps.stats[STAT_MAX_HEALTH];
-				}
+				long long next = (long long)ent->health + baseRate;
+				ent->health = (int)(next > client->ps.stats[STAT_MAX_HEALTH] ?
+					client->ps.stats[STAT_MAX_HEALTH] : next);
 			} else if( ent->health < maximum) {
-				ent->health += extraRate;
-				if( ent->health > maximum ) {
-					ent->health = maximum;
-				}
+				long long next = (long long)ent->health + extraRate;
+				ent->health = (int)(next > maximum ? maximum : next);
 			}
 		} else {
 			// count down health when over max
@@ -782,7 +787,7 @@ void G_NITMOD_FallDamage(gentity_t *ent, int event) {
 		/* Preserve normal configured values, reject overflow before int conversion. */
 		if(ent->health > 0 && amount >= -2147483647.0 && amount <= 2147483647.0)
 			G_Damage(target, ent, ent, NULL, NULL, (int)amount,
-				(flags & 16) ? DAMAGE_NO_PROTECTION : 0, MOD_GOOMBA);
+				(flags & 16) ? DAMAGE_NITMOD_INSTANT_KILL : 0, MOD_GOOMBA);
 		/* Original short falls play sound slot 5 at the stomped client after
 		 * applying damage. This uses the existing typed general-sound path. */
 		if(damage <= 5) {
@@ -1009,7 +1014,6 @@ void ClientThink_real( gentity_t *ent ) {
 	pmove_t		pm;
 	usercmd_t	*ucmd;
 	gclient_t	*client = ent->client;
-	G_NITMOD_RunPoison(ent);
 
 
 	// don't think if the client is not yet connected (and thus not yet spawned in)
@@ -1033,15 +1037,19 @@ void ClientThink_real( gentity_t *ent ) {
 
 	ent->client->ps.identifyClient = ucmd->identClient;		// NERVE - SMF
 
+	G_NITMOD_PrepareUsercmd(ent);
+
 	// sanity check the command time to prevent speedup cheating
-	if ( ucmd->serverTime > level.time + 200 ) {
+	if ( ucmd->serverTime > level.time + 200 && !G_NITMOD_DoAntiwarp(ent) ) {
 		ucmd->serverTime = level.time + 200;
 //		G_Printf("serverTime <<<<<\n" );
 	}
-	if ( ucmd->serverTime < level.time - 1000 ) {
+	if ( ucmd->serverTime < level.time - 1000 && !G_NITMOD_DoAntiwarp(ent) ) {
 		ucmd->serverTime = level.time - 1000;
 //		G_Printf("serverTime >>>>>\n" );
 	} 
+
+	G_NITMOD_UpdateCensorMute(ent);
 
 	msec = ucmd->serverTime - client->ps.commandTime;
 	// following others may result in bad times, but we still want
@@ -1053,7 +1061,7 @@ void ClientThink_real( gentity_t *ent ) {
 		msec = 200;
 	}
 
-	if ( pmove_fixed.integer || client->pers.pmoveFixed ) {
+	if ( !G_NITMOD_DoAntiwarp(ent) && (pmove_fixed.integer || client->pers.pmoveFixed) ) {
 		ucmd->serverTime = ((ucmd->serverTime + pmove_msec.integer-1) / pmove_msec.integer) * pmove_msec.integer;
 	}
 
@@ -1158,10 +1166,16 @@ void ClientThink_real( gentity_t *ent ) {
 	pm.nitmodLeanEnabled = qtrue;
 	pm.nitmodReloadEnabled = qtrue;
 	pm.nitmodAuthoritativeWeapons = qtrue;
+	pm.nitmodVoiceChat = G_SendVoiceChat;
 	pm.nitmodWarMode = G_NITMOD_ConfiguredWarMode();
+	pm.nitmodProneDelay = G_NITMOD_LegacyCvarInteger("n_proneDelay", 0);
+	pm.nitmodCrouchStandDelay = G_NITMOD_LegacyCvarInteger("n_crouchStandDelay", 0);
+	pm.nitmodStandCrouchDelay = G_NITMOD_LegacyCvarInteger("n_standCrouchDelay", 0);
 	pm.nitmodNoReload = (unsigned int)G_NITMOD_ConfiguredNoReload();
 	pm.nitmodWeaponFlags = G_NITMOD_ConfiguredWeaponFlags();
 	pm.nitmodNoMidclipReload = G_NITMOD_WeaponNoMidclipReload(client->ps.weapon);
+	pm.nitmodFixedPhysics = G_NITMOD_LegacyCvarInteger("g_fixedphysics", 0) != 0;
+	pm.nitmodFixedPhysicsFps = G_NITMOD_LegacyCvarInteger("g_fixedphysicsfps", 125);
 	{
 		nitmodWeaponOptions_t options;
 		memset(&options, 0, sizeof(options));
@@ -1201,6 +1215,11 @@ void ClientThink_real( gentity_t *ent ) {
 	} else {
 		pm.tracemask = MASK_PLAYERSOLID;
 	}
+	/* Original ClientThink_doPmove 0x3fb90..0x3fc80: run poison after
+	 * connection/command/intermission/spectator/limbo gates and PM_DEAD
+	 * setup. A paused or dead active body still receives due poison ticks. */
+	G_NITMOD_RunPoison(ent);
+
 	//DHM - Nerve :: We've gone back to using normal bbox traces
 	//pm.trace = trap_Trace;
 	pm.pointcontents = trap_PointContents;
@@ -1446,6 +1465,8 @@ void ClientThink_real( gentity_t *ent ) {
 		}
 	}
 
+	G_NITMOD_DrawClientThinkHitboxes(ent);
+
 	// perform once-a-second actions
 	if(level.match_pause == PAUSE_NONE) {
 		ClientTimerActions( ent, msec );
@@ -1460,21 +1481,23 @@ A new command has arrived from the client
 ==================
 */
 void ClientThink( int clientNum ) {
-	gentity_t *ent;
-
-	ent = g_entities + clientNum;
-	ent->client->pers.oldcmd = ent->client->pers.cmd;
-	trap_GetUsercmd( clientNum, &ent->client->pers.cmd );
-
-	// mark the time we got info, so we can display the
-	// phone jack if they don't get any for a while
+	gentity_t *ent = g_entities + clientNum;
+	usercmd_t cmd;
+	trap_GetUsercmd(clientNum, &cmd);
+	G_NITMOD_NxACUsercmd(clientNum, &cmd);
 	ent->client->lastCmdTime = level.time;
-
+	if (G_NITMOD_DoAntiwarp(ent)) {
+		G_NITMOD_QueueUsercmd(ent, &cmd);
+		G_NITMOD_RunUsercmds(ent);
+	} else {
+		ent->client->nitmodWarpHead = ent->client->nitmodWarpCount = 0;
+		ent->client->nitmodWarpBudget = 0;
+		ent->client->pers.oldcmd = ent->client->pers.cmd;
+		ent->client->pers.cmd = cmd;
 #ifdef ALLOW_GSYNC
-	if ( !g_synchronousClients.integer ) 
-#endif // ALLOW_GSYNC
-	{
-		ClientThink_real( ent );
+		if (!g_synchronousClients.integer)
+#endif
+			ClientThink_real(ent);
 	}
 
 	// if this is the locally playing client, do bot thinks
@@ -1497,6 +1520,11 @@ void G_RunClient( gentity_t *ent ) {
 		if( ent->r.linked ) {
 			trap_UnlinkEntity( ent );
 		}
+	}
+
+	if (G_NITMOD_DoAntiwarp(ent)) {
+		G_NITMOD_RunUsercmds(ent);
+		return;
 	}
 
 #ifdef ALLOW_GSYNC
@@ -1792,8 +1820,17 @@ void ClientEndFrame( gentity_t *ent ) {
 
 	/* Original Nitmod applies the configured rate once per elapsed minute. */
 	if((G_NITMOD_LegacyCvarInteger("g_XPDecay", 0) & 1) &&
-		level.time > 0 && level.time % 60000 == 0) {
+		level.time % 60000 == 0) {
 		G_NITMOD_XPDecay(ent, 60, qfalse);
+	}
+
+	/* Original ClientEndFrame drains one pending command per frame after the
+	 * last flood wait plus 999 ms; the 30-second window does not clear count. */
+	if((long long)ent->client->pers.nitmodFloodNextTime + 999 < level.time &&
+		ent->client->pers.nitmodFloodCount != 0) {
+		ent->client->pers.nitmodFloodCount--;
+		if(!ent->client->pers.nitmodFloodCount)
+			ent->client->pers.nitmodFloodWindowTime = 0;
 	}
 
 	/* Original Nitmod 0x502a0: maintain a 64-frame latency history for every
@@ -1825,6 +1862,11 @@ void ClientEndFrame( gentity_t *ent ) {
 		if(ent->client->nitmodBlinded) ent->client->ps.powerups[PW_BLACKOUT] |= NITMOD_BLACKOUT_ADMIN;
 		return;
 	}
+
+	/* Original contacts live in persistant[1/2]. Native ET owns those indices,
+	 * so use the two spare snapshot slots without changing playerState ABI. */
+	ent->client->ps.persistant[PERS_NITMOD_HEAD_HITS] = ent->client->nitmodLuaPersistant[1];
+	ent->client->ps.persistant[PERS_NITMOD_BODY_HITS] = ent->client->nitmodLuaPersistant[2];
 
 		// turn off any expired powerups
 		// OSP -- range changed for MV
@@ -1957,7 +1999,7 @@ void ClientEndFrame( gentity_t *ent ) {
 		ent->r.contents = CONTENTS_CORPSE;
 	}
 
-	if ( ent->health > 0 && ent->r.contents == CONTENTS_CORPSE && !(ent->s.eFlags & EF_MOUNTEDTANK)) {
+	if ( ent->health > 0 && ent->r.contents == CONTENTS_CORPSE && !(ent->s.eFlags & (EF_MOUNTEDTANK | EF_SPARE0))) {
 		WolfReviveBbox( ent );
 	}
 
@@ -1974,6 +2016,10 @@ void ClientEndFrame( gentity_t *ent ) {
 	// run entity scripting
 	G_Script_ScriptRun( ent );
 
+	G_NITMOD_SkipCorrection(ent);
+
 	// store the client's current position for antilag traces
+	G_NITMOD_MDXUpdate(ent);
+	G_NITMOD_DrawClientEndHitboxes(ent);
 	G_StoreClientPosition( ent );
 }

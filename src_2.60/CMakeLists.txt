@@ -64,6 +64,9 @@ function(nitmod_module target base_name define)
     add_library(${target} MODULE ${ARGN})
     if(WIN32 AND NOT EMSCRIPTEN)
         target_sources(${target} PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/../tools/cmake/nitmod_windows.def")
+        if(target STREQUAL "cgame" OR target STREQUAL "qagame")
+            target_link_libraries(${target} PRIVATE ws2_32)
+        endif()
     endif()
     target_compile_definitions(${target} PRIVATE ${define}=1)
     target_include_directories(${target} PRIVATE
@@ -108,7 +111,7 @@ if(NITMOD_BUILD_CGAME)
         cgame/cg_fireteamoverlay.c cgame/cg_fireteams.c cgame/cg_flamethrower.c
         cgame/cg_info.c cgame/cg_limbopanel.c cgame/cg_loadpanel.c
         cgame/cg_localents.c cgame/cg_main.c cgame/cg_nitmod.c
-        cgame/cg_nitmod_config.c cgame/cg_nitmod_key.c cgame/cg_nitmod_debug.c cgame/cg_nitmod_autoexec.c cgame/cg_nitmod_animation.c cgame/cg_nitmod_lean.c cgame/cg_nitmod_ammo.c cgame/cg_nitmod_hud.c cgame/cg_nitmod_log.c cgame/cg_nitmod_locations.c cgame/cg_nitmod_hints.c cgame/cg_nitmod_names.c cgame/cg_nitmod_events.c cgame/cg_nitmod_obituary.c cgame/cg_nitmod_stats.c cgame/cg_nitmod_mapvote.c cgame/cg_marks.c cgame/cg_missionbriefing.c
+        cgame/cg_nitmod_config.c cgame/cg_nitmod_nxac.c cgame/cg_nitmod_nxac_transfer.c game/nitmod_nxac_tcp.c game/nitmod_md5.c cgame/cg_nitmod_key.c cgame/cg_nitmod_debug.c cgame/cg_nitmod_autoexec.c cgame/cg_nitmod_animation.c cgame/cg_nitmod_lean.c cgame/cg_nitmod_ammo.c cgame/cg_nitmod_hud.c cgame/cg_nitmod_hudstats.c cgame/cg_nitmod_log.c cgame/cg_nitmod_locations.c cgame/cg_nitmod_hints.c cgame/cg_nitmod_names.c cgame/cg_nitmod_events.c cgame/cg_nitmod_obituary.c cgame/cg_nitmod_stats.c cgame/cg_nitmod_mapvote.c cgame/cg_marks.c cgame/cg_missionbriefing.c
         cgame/cg_multiview.c cgame/cg_newDraw.c cgame/cg_particles.c
         cgame/cg_nitmod_skill_rewards.c
         cgame/cg_nitmod_weapon_pose.c
@@ -133,7 +136,7 @@ if(NITMOD_BUILD_QAGAME)
         game/g_nitmod_geoip.c
         lua51/lapi.c lua51/lauxlib.c lua51/lbaselib.c lua51/lcode.c lua51/ldblib.c lua51/ldebug.c lua51/ldo.c lua51/ldump.c lua51/lfunc.c lua51/lgc.c lua51/linit.c lua51/liolib.c lua51/llex.c lua51/lmathlib.c lua51/lmem.c lua51/loadlib.c lua51/lobject.c lua51/lopcodes.c lua51/loslib.c lua51/lparser.c lua51/lstate.c lua51/lstring.c lua51/lstrlib.c lua51/ltable.c lua51/ltablib.c lua51/ltm.c lua51/lundump.c lua51/lvm.c lua51/lzio.c
         game/g_nitmod_accounts.c game/nitmod_sha1.c game/nitmod_xp.c game/g_nitmod_records.c game/g_nitmod_admin.c
-        sqlite/sqlite3.c game/nitmod_database.c game/g_nitmod_database.c
+        sqlite/sqlite3.c game/nitmod_database.c game/g_nitmod_database.c game/g_nitmod_database_async.c
         game/nitmod_weapon_reload_feedback.c
         game/bg_animation.c game/bg_animgroup.c game/bg_campaign.c game/bg_character.c
         game/bg_classes.c game/bg_misc.c game/bg_pmove.c game/bg_slidemove.c
@@ -142,7 +145,7 @@ if(NITMOD_BUILD_QAGAME)
         game/g_character.c game/g_client.c game/g_cmds.c game/g_cmds_ext.c
         game/g_combat.c game/g_config.c game/g_fireteams.c game/g_items.c
         game/g_main.c game/g_match.c game/g_mem.c game/g_misc.c game/g_missile.c
-        game/g_mover.c game/g_multiview.c game/g_nitmod_config.c game/g_props.c
+        game/g_mover.c game/g_multiview.c game/g_nitmod_config.c game/g_nitmod_antiwarp.c game/g_nitmod_hitboxdebug.c game/g_props.c
         game/g_referee.c game/g_save.c game/g_script.c game/g_script_actions.c
         game/g_session.c game/g_spawn.c game/g_stats.c game/g_sv_entities.c
         game/g_svcmds.c game/g_syscalls.c game/g_systemmsg.c game/g_target.c
@@ -165,11 +168,15 @@ if(NITMOD_BUILD_QAGAME)
         game/g_nitmod_etbot_interface.cpp omnibot/common/BotLoadLibrary.cpp
         game/g_nitmod_loadout.c game/g_nitmod_pickup.c game/nitmod_weapon_definition.c game/g_nitmod_canister.c game/g_nitmod_poison.c
         game/g_nitmod_integrity.c game/g_nitmod_cvarscan.c game/g_nitmod_weapon_definition.c game/g_nitmod_weapon_registry.c
+        game/g_nitmod_matchconfig.c game/g_nitmod_server_cvars.c game/g_nitmod_nxac.c game/g_nitmod_nxac_transfer.c game/nitmod_nxac_tcp.c game/nitmod_md5.c game/g_nitmod_hudstats.c game/g_nitmod_mdx.c
         game/nitmod_weapon_paths.c game/nitmod_weapon_recoil.c game/nitmod_weapon_defaults.c
         game/nitmod_weapon_consumption.c game/nitmod_weapon_akimbo.c game/nitmod_weapon_clip.c game/nitmod_weapon_inventory.c game/nitmod_weapon_reload.c)
     nitmod_module(qagame qagame GAMEDLL ${NITMOD_QAGAME_SRC} ${NITMOD_BOTAI_SRC})
-    set_source_files_properties(sqlite/sqlite3.c PROPERTIES COMPILE_DEFINITIONS
-        "SQLITE_THREADSAFE=0;SQLITE_OMIT_LOAD_EXTENSION=1;SQLITE_OS_OTHER=1;SQLITE_OMIT_WAL=1")
+    set(NITMOD_SQLITE_DEFINITIONS SQLITE_THREADSAFE=0 SQLITE_OMIT_LOAD_EXTENSION=1 SQLITE_OMIT_WAL=1)
+    if(EMSCRIPTEN)
+        list(APPEND NITMOD_SQLITE_DEFINITIONS SQLITE_OS_OTHER=1)
+    endif()
+    set_source_files_properties(sqlite/sqlite3.c PROPERTIES COMPILE_DEFINITIONS "${NITMOD_SQLITE_DEFINITIONS}")
 endif()
 
 if(NITMOD_BUILD_UI)
@@ -186,11 +193,28 @@ if(NITMOD_BUILD_UI)
 endif()
 
 if(BUILD_TESTING)
+    if(TARGET qagame)
+        add_executable(nitmod_nxac_test ../tests/test_nitmod_nxac.c game/g_nitmod_nxac.c game/nitmod_database.c game/q_shared.c game/q_math.c sqlite/sqlite3.c)
+        target_include_directories(nitmod_nxac_test PRIVATE game)
+        target_compile_definitions(nitmod_nxac_test PRIVATE GAMEDLL=1)
+        add_executable(nitmod_database_sync_test ../tests/test_nitmod_database_sync.c game/nitmod_database.c sqlite/sqlite3.c)
+        target_include_directories(nitmod_database_sync_test PRIVATE game)
+        if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+            target_link_libraries(nitmod_nxac_test PRIVATE m dl)
+            target_link_libraries(nitmod_database_sync_test PRIVATE m dl)
+        endif()
+        add_executable(nitmod_hitboxdebug_test ../tests/test_nitmod_hitboxdebug.c game/g_nitmod_hitboxdebug.c)
+        target_include_directories(nitmod_hitboxdebug_test PRIVATE game)
+        add_test(NAME nitmod_hitboxdebug COMMAND nitmod_hitboxdebug_test)
+    endif()
     if(TARGET cgame AND NOT CMAKE_CROSSCOMPILING)
         get_target_property(nitmod_charge_client_sources cgame SOURCES)
         add_executable(nitmod_original_charge_dispatch_test ../tests/test_original_charge_dispatch.c ${nitmod_charge_client_sources})
         target_include_directories(nitmod_original_charge_dispatch_test PRIVATE game cgame ui)
         target_compile_definitions(nitmod_original_charge_dispatch_test PRIVATE CGAMEDLL=1)
+        if(WIN32 AND NOT EMSCRIPTEN)
+            target_link_libraries(nitmod_original_charge_dispatch_test PRIVATE ws2_32)
+        endif()
         if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
             target_link_libraries(nitmod_original_charge_dispatch_test PRIVATE m)
         endif()
@@ -204,6 +228,8 @@ if(BUILD_TESTING)
         add_test(NAME nitmod_missile_camera_runtime COMMAND nitmod_original_charge_dispatch_test --missile-camera-runtime)
         add_test(NAME nitmod_crosshair_catalog_runtime COMMAND nitmod_original_charge_dispatch_test --crosshair-catalog-runtime)
         add_test(NAME nitmod_maprestart_session COMMAND nitmod_original_charge_dispatch_test --maprestart-session)
+        add_test(NAME nitmod_prediction_cache_runtime COMMAND nitmod_original_charge_dispatch_test --prediction-cache-runtime)
+        add_test(NAME nitmod_cgame_cvar_consumers COMMAND nitmod_original_charge_dispatch_test --cgame-cvar-consumers)
     endif()
     if(TARGET ui AND NOT CMAKE_CROSSCOMPILING)
         get_target_property(nitmod_ui_test_sources ui SOURCES)
@@ -334,7 +360,7 @@ if(BUILD_TESTING)
         endif()
         add_test(NAME nitmod_cvarscan COMMAND nitmod_cvarscan_test)
         add_executable(nitmod_database_test ../tests/test_nitmod_database.c
-            game/nitmod_database.c game/g_nitmod_database.c sqlite/sqlite3.c game/q_shared.c game/q_math.c)
+            game/nitmod_database.c game/g_nitmod_database.c game/g_nitmod_database_async.c sqlite/sqlite3.c game/q_shared.c game/q_math.c)
         target_include_directories(nitmod_database_test PRIVATE game)
         if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
             target_link_libraries(nitmod_database_test PRIVATE m)

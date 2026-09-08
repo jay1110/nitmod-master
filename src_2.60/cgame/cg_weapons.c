@@ -2176,7 +2176,7 @@ static void CG_CalculateWeaponPosition( vec3_t origin, vec3_t angles ) {
 	float	scale;
 	int		delta;
 	float	fracsin;
-	if(NITMOD_UsesOriginalProtocol()) {
+	if(NITMOD_UsesNitmodHud()) {
 		CG_NitmodCalculateWeaponPosition(&cg, NITMOD_GameState()->weapons, origin, angles);
 		return;
 	}
@@ -2945,6 +2945,10 @@ void CG_AddViewWeapon( playerState_t *ps ) {
 	vec3_t		angles;
 	vec3_t		gunoff;
 	weaponInfo_t	*weapon;
+
+	/* Original 0xccfcd..0xccfdf: both Nitmod layouts hide the view
+	 * weapon while dead or playing dead; EF_SPARE0 is already normalized. */
+	if(NITMOD_UsesNitmodHud() && (ps->stats[STAT_HEALTH] <= 0 || (ps->eFlags & EF_SPARE0))) return;
 
 	if ( ps->persistant[PERS_TEAM] == TEAM_SPECTATOR ) {
 		return;

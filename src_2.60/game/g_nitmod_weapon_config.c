@@ -40,14 +40,8 @@ unsigned int G_NITMOD_ConfiguredMedicOptions(void) {
 }
 
 int G_NITMOD_ReadMedicOptions( unsigned int *options ) {
-    char text[MAX_CVAR_VALUE_STRING];
-    int value;
-    if( !options ) return 0;
-    memset(text, 0, sizeof(text));
-    trap_Cvar_VariableStringBuffer("g_medics", text, sizeof(text));
-    text[sizeof(text) - 1] = 0;
-    if( strlen(text) == sizeof(text) - 1 || !NITMOD_ParseProtocolSigned(text, &value) ) return 0;
-    *options = (unsigned int)value;
+    if( !options || !weaponCvarsRegistered ) return 0;
+    *options = (unsigned int)trackedWeaponCvars[8].integer;
     return 1;
 }
 
@@ -96,36 +90,23 @@ void G_NITMOD_RegisterWeaponConfiguration( void ) {
 }
 
 int G_NITMOD_ReadWeaponConfiguration( nitmodWeaponPolicyInput_t *input ) {
-    static const char *names[] = {
-        "g_war", "g_pickAnyWeapon", "g_weapons", "g_heavyWeaponRestriction",
-        "sv_maxclients", "team_panzerRestriction", "team_maxPanzers",
-        "team_maxFlamers", "team_maxMG42s", "team_maxMortars", "team_maxriflegrenades"
-    };
-    char text[MAX_CVAR_VALUE_STRING];
-    int values[11], i;
     nitmodWeaponPolicyInput_t next;
-    if( !input ) return 0;
-    for( i = 0; i < 11; i++ ) {
-        memset(text, 0, sizeof(text));
-        trap_Cvar_VariableStringBuffer(names[i], text, sizeof(text));
-        /* Zero/missing and malformed are different: never invent defaults.
-         * Decimal validation is deliberately stricter than vmCvar atoi. */
-        text[sizeof(text) - 1] = '\0';
-        if( strlen(text) == sizeof(text) - 1 ) return 0;
-        if( !NITMOD_ParseProtocolSigned(text, &values[i]) ) return 0;
-    }
+    if( !input || !weaponCvarsRegistered ) return 0;
+    /* Original G_IsWeaponDisabled/G_CanPickupWeapon/nitmod_SendNCS read
+     * vmCvar.integer (+12). Use the same registered, frame-updated values
+     * as movement and snapshots; Cvar text is not a network integer token. */
     next = *input;
-    next.warMode = values[0];
-    next.pickAnyWeapon = values[1];
-    next.weaponsOptions = (unsigned int)values[2];
-    next.heavyPercent = values[3];
-    next.maxClients = values[4];
-    next.panzerPercent = values[5];
-    next.maxPanzers = values[6];
-    next.maxFlamers = values[7];
-    next.maxMG42s = values[8];
-    next.maxMortars = values[9];
-    next.maxRifleGrenades = values[10];
+    next.warMode = trackedWeaponCvars[0].integer;
+    next.pickAnyWeapon = trackedWeaponCvars[1].integer;
+    next.weaponsOptions = (unsigned int)trackedWeaponCvars[2].integer;
+    next.heavyPercent = g_heavyWeaponRestriction.integer;
+    next.maxClients = g_maxclients.integer;
+    next.panzerPercent = trackedWeaponCvars[3].integer;
+    next.maxPanzers = team_maxPanzers.integer;
+    next.maxFlamers = trackedWeaponCvars[4].integer;
+    next.maxMG42s = trackedWeaponCvars[5].integer;
+    next.maxMortars = trackedWeaponCvars[6].integer;
+    next.maxRifleGrenades = trackedWeaponCvars[7].integer;
     *input = next;
     return 1;
 }

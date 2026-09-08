@@ -4,6 +4,7 @@
 
 
 #include "cg_local.h"
+#include "cg_nitmod_hudstats.h"
 #include "cg_nitmod_config.h"
 #include "cg_nitmod_hud.h"
 #if __MACOS__
@@ -110,7 +111,7 @@ static void CG_TransitionEntity( centity_t *cent ) {
 }
 
 qboolean CG_NitmodEarlyTransitionEnabled(void) {
-	return cg_earlyTransition.integer && NITMOD_UsesOriginalProtocol() &&
+	return cg_earlyTransition.integer && NITMOD_UsesNitmodHud() &&
 		cg.snap && cg.nextSnap && !cg.nextFrameTeleport && cg.mvTotalClients < 2 &&
 		cg.nextSnap->serverTime > cg.snap->serverTime &&
 		cg.nextSnap->numEntities >= 0 &&
@@ -164,6 +165,7 @@ void CG_SetInitialSnapshot( snapshot_t *snap ) {
 	CG_BuildSolidList();
 
 	CG_ExecuteNewServerCommands( snap->serverCommandSequence );
+	CG_NitmodCaptureNativeHudStats(snap);
 
 	// set our local weapon selection pointer to
 	// what the server has indicated the current weapon is
@@ -287,6 +289,7 @@ static void CG_TransitionSnapshot( void ) {
 
 	// move nextSnap to snap and do the transitions
 	oldFrame = cg.snap;
+	CG_NitmodCaptureNativeHudStats(cg.nextSnap);
 	CG_NitmodLiveStatsTransition(&oldFrame->ps, &cg.nextSnap->ps);
 	NITMOD_SnapshotHitSounds(&oldFrame->ps, &cg.nextSnap->ps);
 	cg.snap = cg.nextSnap;

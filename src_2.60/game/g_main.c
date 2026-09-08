@@ -3,6 +3,16 @@
 #include "g_nitmod_admin.h"
 #include "g_nitmod_integrity.h"
 #include "g_local.h"
+#include "nitmod_build.h"
+#include "nitmod_support_time.h"
+#include "g_nitmod_db_lifecycle.h"
+#include "g_nitmod_hitboxdebug.h"
+#include "g_nitmod_matchconfig.h"
+#include "g_nitmod_server_cvars.h"
+#include "g_nitmod_nxac.h"
+#include "g_nitmod_nxac_transfer.h"
+#include "g_nitmod_mdx.h"
+#include "g_nitmod_hudstats.h"
 #include "g_nitmod_omnibot.h"
 #include "g_nitmod_etbot_lifecycle.h"
 #include "g_nitmod_legacy_cvars.h"
@@ -255,7 +265,7 @@ vmCvar_t		g_disableComplaints;
 
 cvarTable_t		gameCvarTable[] = {
 	// don't override the cheat state set by the system
-	{ &g_cheats, "sv_cheats", "", 0, qfalse },
+	{ &g_cheats, "sv_cheats", "0", 0, qfalse },
 
 	// noset vars
 	{ NULL, "gamename", GAMEVERSION , CVAR_SERVERINFO | CVAR_ROM, 0, qfalse  },
@@ -270,13 +280,13 @@ cvarTable_t		gameCvarTable[] = {
 // JPW NERVE multiplayer stuffs
 	{ &g_redlimbotime, "g_redlimbotime", "30000", CVAR_SERVERINFO | CVAR_LATCH, 0, qfalse },
 	{ &g_bluelimbotime, "g_bluelimbotime", "30000", CVAR_SERVERINFO | CVAR_LATCH, 0, qfalse },
-	{ &g_medicChargeTime, "g_medicChargeTime", "45000", CVAR_SERVERINFO | CVAR_LATCH, 0, qfalse, qtrue },
-	{ &g_engineerChargeTime, "g_engineerChargeTime", "30000", CVAR_SERVERINFO | CVAR_LATCH, 0, qfalse, qtrue },
-	{ &g_LTChargeTime, "g_LTChargeTime", "40000", CVAR_SERVERINFO | CVAR_LATCH, 0, qfalse, qtrue },
-	{ &g_soldierChargeTime, "g_soldierChargeTime", "20000", CVAR_SERVERINFO | CVAR_LATCH, 0, qfalse, qtrue },
+	{ &g_medicChargeTime, "g_medicChargeTime", "45000", CVAR_LATCH, 0, qfalse, qtrue },
+	{ &g_engineerChargeTime, "g_engineerChargeTime", "30000", CVAR_LATCH, 0, qfalse, qtrue },
+	{ &g_LTChargeTime, "g_LTChargeTime", "40000", CVAR_LATCH, 0, qfalse, qtrue },
+	{ &g_soldierChargeTime, "g_soldierChargeTime", "20000", CVAR_LATCH, 0, qfalse, qtrue },
 // jpw
 
-	{ &g_covertopsChargeTime, "g_covertopsChargeTime", "30000", CVAR_SERVERINFO | CVAR_LATCH, 0, qfalse, qtrue },
+	{ &g_covertopsChargeTime, "g_covertopsChargeTime", "30000", CVAR_LATCH, 0, qfalse, qtrue },
 	{ &g_landminetimeout, "g_landminetimeout", "1", CVAR_ARCHIVE, 0, qfalse, qtrue },
 
 	{ &g_maxclients, "sv_maxclients", "20", CVAR_SERVERINFO | CVAR_LATCH | CVAR_ARCHIVE, 0, qfalse  },			// NERVE - SMF - made 20 from 8
@@ -320,7 +330,7 @@ cvarTable_t		gameCvarTable[] = {
 	{ &g_log, "g_log", "", CVAR_ARCHIVE, 0, qfalse },
 	{ &g_logSync, "g_logSync", "0", CVAR_ARCHIVE, 0, qfalse },
 
-	{ &g_password, "g_password", "none", CVAR_USERINFO, 0, qfalse },
+	{ &g_password, "g_password", "", CVAR_USERINFO, 0, qfalse },
 	{ &sv_privatepassword, "sv_privatepassword", "", CVAR_TEMP, 0, qfalse },
 	{ &g_banIPs, "g_banIPs", "", CVAR_ARCHIVE, 0, qfalse },
 	// https://zerowing.idsoftware.com/bugzilla/show_bug.cgi?id=500
@@ -365,7 +375,7 @@ cvarTable_t		gameCvarTable[] = {
 	{ &g_debugMove, "g_debugMove", "0", 0, 0, qfalse },
 	{ &g_debugDamage, "g_debugDamage", "0", CVAR_CHEAT, 0, qfalse },
 	{ &g_debugAlloc, "g_debugAlloc", "0", 0, 0, qfalse },
-	{ &g_debugBullets, "g_debugBullets", "0", CVAR_CHEAT, 0, qfalse},	//----(SA)	added
+	{ &g_debugBullets, "g_debugBullets", "0", 0, 0, qfalse},	//----(SA)	added
 	{ &g_motd, "g_motd", "", CVAR_ARCHIVE, 0, qfalse },
 
 	{ &g_podiumDist, "g_podiumDist", "80", 0, 0, qfalse },
@@ -422,14 +432,14 @@ cvarTable_t		gameCvarTable[] = {
 	{ &g_mapVoteFlags, "g_mapVoteFlags", "0", 0, 0, qfalse, qfalse },
 	{ &g_excludedMaps, "g_excludedMaps", "", 0, 0, qfalse, qfalse },
 
-	{ &g_antilag, "g_antilag", "1", CVAR_SERVERINFO | CVAR_ARCHIVE, 0, qfalse },
+	{ &g_antilag, "g_antilag", "1", CVAR_SERVERINFO, 0, qfalse },
 
 	//bani - #184
-	{ NULL, "P", "", CVAR_SERVERINFO_NOUPDATE, 0, qfalse, qfalse },
+	{ NULL, "P", "", CVAR_ROM, 0, qfalse, qfalse },
 	{ NULL, "Players_Axis", "", CVAR_ROM, 0, qfalse, qfalse },
 	{ NULL, "Players_Allies", "", CVAR_ROM, 0, qfalse, qfalse },
 
-	{ &refereePassword, "refereePassword", "none", 0, 0, qfalse},
+	{ &refereePassword, "refereePassword", "", 0, 0, qfalse},
 	{ &g_spectatorInactivity, "g_spectatorInactivity", "0", 0, 0, qfalse, qfalse },
 	{ &match_latejoin,		"match_latejoin", "1", 0, 0, qfalse, qfalse },
 	{ &match_minplayers,	"match_minplayers", MATCH_MINPLAYERS, 0, 0, qfalse, qfalse },
@@ -439,7 +449,7 @@ cvarTable_t		gameCvarTable[] = {
 	{ &match_timeoutlength,	"match_timeoutlength", "180", 0, 0, qfalse, qtrue },
 	{ &match_warmupDamage,	"match_warmupDamage", "1", 0, 0, qfalse },
 	{ &server_autoconfig, "server_autoconfig", "0", 0, 0, qfalse, qfalse },
-	{ &server_motd0,	"server_motd0", " ^NEnemy Territory ^7MOTD ", 0, 0, qfalse, qfalse },
+	{ &server_motd0,	"server_motd0", "^7N^1!^7tmod", 0, 0, qfalse, qfalse },
 	{ &server_motd1,	"server_motd1", "", 0, 0, qfalse, qfalse },
 	{ &server_motd2,	"server_motd2", "", 0, 0, qfalse, qfalse },
 	{ &server_motd3,	"server_motd3", "", 0, 0, qfalse, qfalse },
@@ -466,7 +476,7 @@ cvarTable_t		gameCvarTable[] = {
 	{ &vote_allow_antilag,		"vote_allow_antilag", "1", 0, 0, qfalse, qfalse },
 	{ &vote_allow_balancedteams,"vote_allow_balancedteams", "1", 0, 0, qfalse, qfalse },
 	{ &vote_allow_muting,		"vote_allow_muting", "1", 0, 0, qfalse, qfalse },
-	{ &vote_limit,		"vote_limit", "5", 0, 0, qfalse, qfalse },
+	{ &vote_limit,		"vote_limit", "3", 0, 0, qfalse, qfalse },
 	{ &vote_percent,	"vote_percent", "50", 0, 0, qfalse, qfalse },
 
 	// state vars
@@ -505,7 +515,7 @@ cvarTable_t		gameCvarTable[] = {
 #endif // SAVEGAME_SUPPORT
 
 	// points to the URL for mod information, should not be modified by server admin
-	{ &mod_url, "mod_url", "", CVAR_SERVERINFO | CVAR_ROM, 0, qfalse },
+	{ &mod_url, "mod_url", "etmods.net", CVAR_SERVERINFO | CVAR_ROM, 0, qfalse },
 	// configured by the server admin, points to the web pages for the server
 	{ &url, "URL", "", CVAR_SERVERINFO | CVAR_ARCHIVE, 0, qfalse },
 
@@ -515,7 +525,7 @@ cvarTable_t		gameCvarTable[] = {
 	 * Currently grenade (0x1), satchel (0x2), airstrike marker (0x4)
 	 * and smoke-bomb (0x8) masks are implemented. */
 	{ &g_damageweapons, "g_damageweapons", "0", 0, 0, qfalse, qfalse },
-	{ &g_poison, "g_poison", "0", CVAR_ARCHIVE, 0, qfalse, qfalse },
+	{ &g_poison, "g_poison", "0", 0, 0, qfalse, qfalse },
 	{ &n_preciseLandmineTrigger, "n_preciseLandmineTrigger", "0", CVAR_ARCHIVE, 0, qfalse, qfalse },
 	{ &g_OmniBotFlags, "omnibot_flags", "0", CVAR_ARCHIVE | CVAR_NORESTART, 0, qfalse, qfalse },
 
@@ -528,6 +538,14 @@ cvarTable_t		gameCvarTable[] = {
 	{ &g_nextcampaign, "nextcampaign", "", CVAR_TEMP },
 
 	{ &g_disableComplaints, "g_disableComplaints", "0", CVAR_ARCHIVE },
+
+    /* Original module-owned registrations, including engine-backed values.
+     * The engine merges flags; it retains its existing values/ownership. */
+    { NULL, "C", "", CVAR_ROM, 0, qfalse, qfalse },
+    { NULL, "sv_fps", "20", CVAR_SYSTEMINFO, 0, qfalse, qfalse },
+    { NULL, "sv_privateClients", "0", CVAR_SYSTEMINFO, 0, qfalse, qfalse },
+    /* Original also registers developer a second time with CHEAT. */
+    { NULL, "developer", "0", CVAR_CHEAT, 0, qfalse, qfalse },
 };
 
 // bk001129 - made static to avoid aliasing
@@ -564,6 +582,7 @@ This must be the very first function compiled into the .q3vm file
 #pragma export on
 #endif
 #endif
+static int nitmodDatabaseShutdownPrepared;
 NITMOD_MODULE_EXPORT int vmMain( int command, int arg0, int arg1, int arg2, int arg3, int arg4, int arg5, int arg6
 #ifdef __EMSCRIPTEN__
     , int arg7, int arg8, int arg9, int arg10, int arg11
@@ -578,7 +597,18 @@ NITMOD_MODULE_EXPORT int vmMain( int command, int arg0, int arg1, int arg2, int 
 #pragma export off
 #endif
 #endif
+    if(nitmodDatabaseShutdownPrepared) {
+        switch(command) {
+        case GAME_CLIENT_CONNECT: return (int)"Server is saving the database before shutdown.";
+        case GAME_CLIENT_BEGIN: case GAME_CLIENT_USERINFO_CHANGED:
+        case GAME_CLIENT_COMMAND: case GAME_CLIENT_THINK: case BOTAI_START_FRAME: return 0;
+        case GAME_CONSOLE_COMMAND: return 1;
+        default: break;
+        }
+    }
 	switch ( command ) {
+    case GAME_NITMOD_DB_PRE_SHUTDOWN:
+        return G_NITMOD_DatabasePrepareShutdown();
 	case GAME_INIT:
 		G_NITMOD_ResetBotHandles();
 		Bot_Interface_InitHandles();
@@ -611,7 +641,7 @@ NITMOD_MODULE_EXPORT int vmMain( int command, int arg0, int arg1, int arg2, int 
 		return 0;
 	case GAME_RUN_FRAME:
 		G_RunFrame( arg0 );
-		Bot_Interface_Update();
+		if(!nitmodDatabaseShutdownPrepared) Bot_Interface_Update();
 		return 0;
 	case GAME_CONSOLE_COMMAND:
  		return ConsoleCommand();
@@ -651,6 +681,23 @@ NITMOD_MODULE_EXPORT int vmMain( int command, int arg0, int arg1, int arg2, int 
 	}
 
 	return -1;
+}
+
+int G_NITMOD_DatabaseIsShuttingDown(void) { return nitmodDatabaseShutdownPrepared!=0; }
+int G_NITMOD_DatabasePrepareShutdown(void) {
+    /* Phase 1 freezes inputs while existing work and its completions finish.
+     * Do not stop queue admission yet: the final XP batch needs an empty
+     * operation/byte budget, and pending callbacks may enqueue compensation. */
+    if(!nitmodDatabaseShutdownPrepared) nitmodDatabaseShutdownPrepared=1;
+    G_NITMOD_DatabaseThink();
+    if(nitmodDatabaseShutdownPrepared==1) {
+        if(G_NITMOD_DatabasePending()) return 2;
+        /* Publish phase 2 before SaveAllXP: native completion may be inline.
+         * Exactly one batch is admitted before Drain stops new producers. */
+        nitmodDatabaseShutdownPrepared=2;
+        G_NITMOD_AccountsSaveAllXP();
+    }
+    return G_NITMOD_DatabaseDrain();
 }
 
 void QDECL G_Printf( const char *fmt, ... ) {
@@ -880,7 +927,9 @@ void G_CheckForCursorHints( gentity_t *ent ) {
 		}
 	}
 
-	if( ps->stats[ STAT_PLAYER_CLASS ] == PC_COVERTOPS ) {
+	if( ps->stats[ STAT_PLAYER_CLASS ] == PC_COVERTOPS ||
+		((G_NITMOD_LegacyCvarInteger("g_skills", 0) & 8) &&
+		 (ent->client->sess.nitmodSkillMasks[SK_BATTLE_SENSE] & 16u)) ) {
 		if(ent->client->landmineSpottedTime && level.time - ent->client->landmineSpottedTime < 500) {
 			ps->serverCursorHint = HINT_LANDMINE;
 			ps->serverCursorHintVal	= ent->client->landmineSpotted ? ent->client->landmineSpotted->count2 : 0;
@@ -980,16 +1029,23 @@ void G_CheckForCursorHints( gentity_t *ent ) {
 
 			switch (checkEnt->s.eType) {
 				case ET_CORPSE:
-					if( !ent->client->ps.powerups[PW_BLUEFLAG] && !ent->client->ps.powerups[PW_REDFLAG] && !ent->client->ps.powerups[PW_OPS_DISGUISED]) {
-						if( BODY_TEAM(traceEnt) < 4 && BODY_TEAM(traceEnt) != ent->client->sess.sessionTeam && traceEnt->nextthink == traceEnt->timestamp + BODY_TIME(BODY_TEAM(traceEnt))) {
-							if( ent->client->ps.stats[STAT_PLAYER_CLASS] == PC_COVERTOPS ) {
-								hintDist	= 48;
-								hintType	= HINT_UNIFORM;
-								hintVal		= BODY_VALUE(traceEnt);
-								if( hintVal > 255 ) {
-									hintVal = 255;
-								}
-							}
+					/* Original0x76e..: friendly class steal remains available
+					 * while carrying an objective/disguise; used bodies do not. */
+					if(!(traceEnt->s.time2 & ~NITMOD_ES_GLOW)) {
+						if(BODY_TEAM(traceEnt) == ent->client->sess.sessionTeam &&
+						   G_NITMOD_LegacyCvarInteger("g_classChange", 0) &&
+						   BODY_CLASS(traceEnt) != ent->client->sess.playerType) {
+							hintDist = 48;
+							hintType = (unsigned int)G_NITMOD_ConfiguredWarMode()-1u < 4u ? HINT_PLYR_FRIEND : HINT_UNIFORM;
+							hintVal = BODY_VALUE(traceEnt) > 255 ? 255 : BODY_VALUE(traceEnt);
+						} else if(!ent->client->ps.powerups[PW_BLUEFLAG] &&
+							!ent->client->ps.powerups[PW_REDFLAG] && !ent->client->ps.powerups[PW_OPS_DISGUISED] &&
+							BODY_TEAM(traceEnt) != ent->client->sess.sessionTeam &&
+							traceEnt->nextthink == traceEnt->timestamp + 20000 &&
+							ent->client->ps.stats[STAT_PLAYER_CLASS] == PC_COVERTOPS) {
+							hintDist = 48;
+							hintType = HINT_UNIFORM;
+							hintVal = BODY_VALUE(traceEnt) > 255 ? 255 : BODY_VALUE(traceEnt);
 						}
 					}
 					break;
@@ -1364,15 +1420,23 @@ G_RegisterCvars
 */
 void G_RegisterCvars( void )
 {
+	vmCvar_t serverInfo;
 	int i;
 	cvarTable_t	*cv;
 	qboolean remapped = qfalse;
 
 	level.server_settings = 0;
+	/* Original registers this selector before, and outside, its Cvar table. */
+	trap_Cvar_Register(&serverInfo, "g_serverInfo", "1", CVAR_ROM);
 	G_NITMOD_RegisterWeaponConfiguration();
 	G_NITMOD_RegisterLegacyGameplayCvars();
 
 	for (i=0, cv=gameCvarTable; i<gameCvarTableSize; i++, cv++) {
+		if ((serverInfo.integer & 16) &&
+			(cv->vmCvar == &g_medicChargeTime || cv->vmCvar == &g_engineerChargeTime ||
+			 cv->vmCvar == &g_LTChargeTime || cv->vmCvar == &g_soldierChargeTime ||
+			 cv->vmCvar == &g_covertopsChargeTime))
+			cv->cvarFlags |= CVAR_SERVERINFO;
 		trap_Cvar_Register(cv->vmCvar, cv->cvarName, cv->defaultString, cv->cvarFlags);
 		if(cv->vmCvar) {
 			cv->modificationCount = cv->vmCvar->modificationCount;
@@ -1383,6 +1447,23 @@ void G_RegisterCvars( void )
 		}
 
 		remapped = (remapped || cv->teamShader);
+	}
+
+	if (serverInfo.integer & 2) {
+		char initialPlayers[177];
+		memset(initialPlayers, '.', sizeof(initialPlayers) - 1);
+		initialPlayers[sizeof(initialPlayers) - 1] = 0;
+		trap_Cvar_Register(NULL, "Players_Axis", "", CVAR_SERVERINFO_NOUPDATE);
+		trap_Cvar_Set("Players_Axis", initialPlayers);
+		trap_Cvar_Register(NULL, "Players_Allies", "", CVAR_SERVERINFO_NOUPDATE);
+		trap_Cvar_Set("Players_Allies", "(none)");
+	}
+	if (serverInfo.integer & 1) {
+		char initialPlayers[63];
+		memset(initialPlayers, '.', sizeof(initialPlayers) - 1);
+		initialPlayers[sizeof(initialPlayers) - 1] = 0;
+		trap_Cvar_Register(NULL, "P", "", CVAR_SERVERINFO_NOUPDATE);
+		trap_Cvar_Set("P", initialPlayers);
 	}
 
 	if(remapped) {
@@ -1407,6 +1488,13 @@ void G_RegisterCvars( void )
 		trap_Cvar_Set("pmove_msec", "8");
 	} else if(pmove_msec.integer > 33) {
 		trap_Cvar_Set("pmove_msec", "33");
+	}
+
+	/* Original registration clamps the fixed-physics reference rate. */
+	{
+		int fps = G_NITMOD_LegacyCvarInteger("g_fixedphysicsfps", 125);
+		if (fps < 60) trap_Cvar_Set("g_fixedphysicsfps", "60");
+		else if (fps > 333) trap_Cvar_Set("g_fixedphysicsfps", "333");
 	}
 
 }
@@ -1610,6 +1698,8 @@ void G_UpdateCvars( void )
 	if( nitmodSettingsChanged ) {
 		nitmod_RefreshBaseSettings();
 	}
+	G_NITMOD_EnforceMatchConfig();
+
 }
 
 // Reset particular server variables back to defaults if a config is voted in.
@@ -1797,8 +1887,10 @@ void G_InitGame( int levelTime, int randomSeed, int restart ) {
 	int					i;
 	char				cs[MAX_INFO_STRING];
 
+	nitmodDatabaseShutdownPrepared=0;
 	G_Printf ("------- Game Initialization -------\n");
 	G_Printf ("gamename: %s\n", GAMEVERSION);
+	G_Printf ("gamebuild: %s\n", NITMOD_BUILD_STRING);
 	G_Printf ("gamedate: %s\n", __DATE__);
 
 	srand( randomSeed );
@@ -1866,6 +1958,10 @@ void G_InitGame( int levelTime, int randomSeed, int restart ) {
 	for( i =0; i < level.numConnectedClients; i++ ) {
 		level.clients[ level.sortedClients[ i ] ].sess.spawnObjectiveIndex = 0;
 	}
+
+	G_NITMOD_ResetServerCvars();
+	G_NITMOD_NxACReset();
+	G_NITMOD_NxACTransferInit();
 
 	// RF, init the anim scripting
 	level.animScriptData.soundIndex = G_SoundIndex;
@@ -1939,7 +2035,8 @@ void G_InitGame( int levelTime, int randomSeed, int restart ) {
 	Q_strncpyz( level.rawmapname, Info_ValueForKey( cs, "mapname" ), sizeof(level.rawmapname) );
 
 	G_ParseCampaigns();
-	if( g_gametype.integer == GT_WOLF_CAMPAIGN ) {
+	if( g_gametype.integer == GT_WOLF_CAMPAIGN &&
+		level.currentCampaign >= 0 && level.currentCampaign < level.campaignCount ) {
 		if( g_campaigns[level.currentCampaign].current == 0 || level.newCampaign ) {
 			trap_Cvar_Set( "g_axiswins", "0" );
 			trap_Cvar_Set( "g_alliedwins", "0" );
@@ -1952,6 +2049,20 @@ void G_InitGame( int levelTime, int randomSeed, int restart ) {
 		} else {
 			//bani - #113
 			bani_getmapxp();
+		}
+		{
+			/* Original G_InitGame: ten map slots, comma-separated names,
+			 * and C = one-based current map,total maps. */
+			char campaignMaps[650] = "";
+			g_campaignInfo_t *campaign = &g_campaigns[level.currentCampaign];
+			int mapIndex;
+			for (mapIndex = 0; mapIndex < 10 && mapIndex < MAX_MAPS_PER_CAMPAIGN; ++mapIndex) {
+				if (!campaign->mapnames[mapIndex][0]) continue;
+				if (campaignMaps[0]) Q_strcat(campaignMaps, sizeof(campaignMaps), ",");
+				Q_strcat(campaignMaps, sizeof(campaignMaps), campaign->mapnames[mapIndex]);
+			}
+			trap_Cvar_Set("campaign_maps", campaignMaps);
+			trap_Cvar_Set("C", va("%d,%d", campaign->current + 1, campaign->mapCount));
 		}
 	}
 
@@ -1979,6 +2090,8 @@ void G_InitGame( int levelTime, int randomSeed, int restart ) {
 	G_InitWorldSession();
 	G_NITMOD_AccountsMapStart();
 	G_NITMOD_LoadMapCycleConfig();
+
+	nitrox_ResetNumObjectives();
 
 	// DHM - Nerve :: Clear out spawn target config strings
 	trap_GetConfigstring( CS_MULTI_INFO, cs, sizeof(cs) );
@@ -2029,6 +2142,7 @@ void G_InitGame( int levelTime, int randomSeed, int restart ) {
 	}
 
 	// load level script
+	G_NITMOD_InitMatchConfig();
 	G_Script_ScriptLoad();
 
 	// reserve some spots for dead player bodies
@@ -2116,6 +2230,7 @@ void G_InitGame( int levelTime, int randomSeed, int restart ) {
 
 	BG_InitWeaponStrings();
 
+	G_NITMOD_MDXShutdown();
 	G_RegisterPlayerClasses();
 
 	// Match init work
@@ -2138,12 +2253,14 @@ G_ShutdownGame
 =================
 */
 void G_ShutdownGame( int restart ) {
+	G_NITMOD_NxACTransferShutdown();
+	G_NITMOD_MDXShutdown();
 	G_NITMOD_LuaShutdown(restart);
 	G_NITMOD_GlobalStatsShutdown();
 	G_NITMOD_GeoIPClose();
 	G_NITMOD_ClearChecksums();
 	G_NITMOD_ClearCvarList();
-	G_NITMOD_AccountsSaveAllXP();
+	if(!nitmodDatabaseShutdownPrepared) G_NITMOD_AccountsSaveAllXP();
 	G_NITMOD_DatabaseShutdown();
 
 	// Arnout: gametype latching
@@ -2528,9 +2645,15 @@ void MoveClientToIntermission( gentity_t *ent ) {
 	VectorCopy (level.intermission_angle, ent->client->ps.viewangles);
 	ent->client->ps.pm_type = PM_INTERMISSION;
 
+	/* Original MoveClientToIntermission: detach without a remount delay. */
+	if( ent->tankLink ) G_LeaveTank( ent, qfalse, qfalse );
+
 	// clean up powerup info
 	// memset( ent->client->ps.powerups, 0, sizeof(ent->client->ps.powerups) );
 
+	/* Original MoveClientToIntermission ELF 0x78f2a..0x78f57 resets all
+	 * three choices before EF_VOTED. Native choices store original ID + 1. */
+	memset(ent->client->pers.nitmodMapVotes, 0, sizeof(ent->client->pers.nitmodMapVotes));
 	ent->client->ps.eFlags = 0;
 	ent->s.eFlags = 0;
 	ent->s.eType = ET_GENERAL;
@@ -2622,6 +2745,8 @@ void BeginIntermission( void ) {
 	if( g_gamestate.integer == GS_INTERMISSION ) {
 		return;		// already active
 	}
+
+	G_NITMOD_MapVoteBeginIntermission();
 
 	level.intermissiontime = level.time;
 	G_NITMOD_SaveMapRecords();
@@ -2746,12 +2871,13 @@ void QDECL G_LogPrintf( const char *fmt, ... ) {
 	int			min, tens, sec, l;
 	qtime_t		realTime;
 
-	/* Original G_LogPrintf 0x89b70: n_LogCurrentTime switches the prefix
-	 * from elapsed match minutes to a zero-padded wall-clock timestamp. */
+	/* Original G_LogPrintf 0x79be0 / string 0x239b64: the hour uses a
+	 * space-padded width of two, minutes/seconds have a conditional zero. */
 	if(G_NITMOD_LegacyCvarInteger("n_LogCurrentTime", 0)) {
 		trap_RealTime(&realTime);
-		Com_sprintf(string, sizeof(string), "%02i:%02i:%02i ",
-			realTime.tm_hour, realTime.tm_min, realTime.tm_sec);
+		Com_sprintf(string, sizeof(string), "%2i:%s%i:%s%i ",
+			realTime.tm_hour, realTime.tm_min < 10 ? "0" : "", realTime.tm_min,
+			realTime.tm_sec < 10 ? "0" : "", realTime.tm_sec);
 	} else {
 		sec = level.time / 1000;
 		min = sec / 60;
@@ -2984,6 +3110,8 @@ void LogExit( const char *string ) {
 			nitmod_SendMapEndStats( clientNum );
 		}
 	}
+	trap_Cvar_Set("g_reset", "0");
+
 }
 
 
@@ -3016,7 +3144,8 @@ qboolean NITMOD_IntermissionCanExit(void) {
 		++humans;
 		if(client->pers.ready) ++ready;
 	}
-	if(humans && (float)ready / (float)humans * 100.0f >= g_intermissionReadyPercent.value) return qtrue;
+	/* Original x87 0x7bdcb..0x7bddd keeps the ratio above Float32 precision. */
+	if(humans && (double)ready / (double)humans * 100.0 >= (double)g_intermissionReadyPercent.value) return qtrue;
 	return (double)level.time >= (double)level.intermissiontime + (double)g_intermissionTime.integer * 1000.0;
 }
 
@@ -3105,22 +3234,8 @@ void CheckExitRules( void ) {
 			return;
 		}
 	}
-	if(g_gamestate.integer == GS_PLAYING && g_gametype.integer == GT_WOLF_DM) {
-		int limit = G_NITMOD_LegacyCvarInteger("g_DMFragLimit", 25);
-		if(limit > 0) for(i = 0; i < level.maxclients && i < MAX_CLIENTS; ++i) {
-			gclient_t *client = &level.clients[i];
-			if(client->pers.connected != CON_CONNECTED || client->sess.sessionTeam == TEAM_SPECTATOR ||
-			   client->sess.game_points < limit) continue;
-			trap_GetConfigstring(CS_MULTI_MAPWINNER, cs, sizeof(cs));
-			Info_SetValueForKey(cs, "winner", "-1");
-			trap_SetConfigstring(CS_MULTI_MAPWINNER, cs);
-			trap_SendServerCommand(-1, va("DM %i", i));
-			trap_SendServerCommand(-1, va("print \"^1Death Match^7: %s ^gwins this round.\\n\"",
-				client->pers.netname));
-			LogExit(va("Death Match: %s wins this round", client->pers.netname));
-			return;
-		}
-	}
+	/* DM frag limits are checked at player_die completion, after limbo and
+	 * kill healing. CalculateRanks also calls this poll during a death. */
 
 	/* Original Nitmod g_TDMOptions bit 16: TDM ignores the ordinary
 	 * timelimit unless the server explicitly enables it. Its score limit is
@@ -3870,6 +3985,8 @@ void G_RunEntity( gentity_t* ent, int msec ) {
 		return;
 	}
 
+	G_NITMOD_DrawEntityHitbox(ent);
+
 	if( ent->tagParent ) {
 
 		G_RunEntity( ent->tagParent, msec );
@@ -4075,6 +4192,10 @@ void G_RunFrame( int levelTime ) {
 	int			i, msec;
 //	int			pass = 0;
 
+	/* Commits must progress even while gameplay is frozen/restarting. */
+	G_NITMOD_DatabaseThink();
+	if(nitmodDatabaseShutdownPrepared) return;
+
 	// if we are waiting for the level to restart, do nothing
 	if ( level.restarted ) {
 		return;
@@ -4107,12 +4228,10 @@ void G_RunFrame( int levelTime ) {
 	{
 		int teamIndex;
 		for( teamIndex = 0; teamIndex < 2; ++teamIndex ) {
-			level.nitmodAirstrikeCounter[teamIndex] -= msec;
-			level.nitmodArtilleryCounter[teamIndex] -= msec;
-			if( level.nitmodAirstrikeCounter[teamIndex] < 0 )
-				level.nitmodAirstrikeCounter[teamIndex] = 0;
-			if( level.nitmodArtilleryCounter[teamIndex] < 0 )
-				level.nitmodArtilleryCounter[teamIndex] = 0;
+			level.nitmodAirstrikeCounter[teamIndex] =
+				NITMOD_SupportDecayTime(level.nitmodAirstrikeCounter[teamIndex], msec);
+			level.nitmodArtilleryCounter[teamIndex] =
+				NITMOD_SupportDecayTime(level.nitmodArtilleryCounter[teamIndex], msec);
 		}
 	}
 
@@ -4146,7 +4265,8 @@ uebrgpiebrpgibqeripgubeqrpigubqifejbgipegbrtibgurepqgbn%i", level.time )
 
 	// get any cvar changes
 	G_UpdateCvars();
-	G_NITMOD_BannersRunFrame();
+	G_NITMOD_NxACTransferRunFrame();
+	G_NITMOD_NxACRunFrame();
 
 	for( i = 0; i < level.num_entities; i++ ) {
 		g_entities[i].runthisframe = qfalse;
@@ -4157,10 +4277,23 @@ uebrgpiebrpgibqeripgubeqrpigubqifejbgipegbrtibgurepqgbn%i", level.time )
 		G_RunEntity( &g_entities[ i ], msec );
 	}
 
+	G_NITMOD_BannersRunFrame();
+
 
 	for( i = 0; i < level.numConnectedClients; i++ ) {
 		ClientEndFrame(&g_entities[level.sortedClients[i]]);
 		G_NITMOD_CheckWarEntry(&g_entities[level.sortedClients[i]], G_NITMOD_ConfiguredWarMode());
+	}
+
+	G_NITMOD_SendHudStats();
+
+	/* Original publishes connected humans, including spectators, excluding bots. */
+	{
+		int humans = 0;
+		for (i = 0; i < level.numConnectedClients; ++i)
+			if (!(g_entities[level.sortedClients[i]].r.svFlags & SVF_BOT)) ++humans;
+		if (trap_Cvar_VariableIntegerValue("humans") != humans)
+			trap_Cvar_Set("humans", va("%d", humans));
 	}
 
 	// NERVE - SMF

@@ -996,7 +996,8 @@ void G_BurnTarget( gentity_t *self, gentity_t *body, qboolean directhit )
 //		if( !self->count2 && body == self->parent )
 //			return;
 
-		if( !(g_friendlyFire.integer) && OnSameTeam( body, self->parent ) )
+		if( !(g_friendlyFire.integer & 1) && g_gametype.integer != GT_WOLF_DM &&
+		    OnSameTeam( body, self->parent ) )
 			return;
 	}
 // jpw
@@ -1418,11 +1419,13 @@ LandMineTrigger
 void LandminePostThink( gentity_t *self );
 
 void LandMineTrigger(gentity_t* self) {
-	/* Original ELF 0x8de73/0x8de93 retains body collision on triggering. */
-	self->r.contents = CONTENTS_BODY;
+	/* Original ELF 0x8de73/0x8de93 writes 0x04000000: corpse contents.
+	 * This remains shootable but is excluded from MASK_PLAYERSOLID. */
+	self->r.contents = CONTENTS_CORPSE;
 	trap_LinkEntity( self );
 	if(self->s.weapon == WP_POISON_MINE) {
 		self->nextthink = level.time + 1000;
+		NITMOD_PlaySoundEvent(self, 11);
 		self->think = weapon_smokeBombExplode;
 	} else {
 		self->nextthink = level.time + FRAMETIME;
@@ -1732,6 +1735,9 @@ gentity_t *fire_grenade (gentity_t *self, vec3_t start, vec3_t dir, int grenadeW
 	switch(grenadeWPID) {
 		case WP_POISON_BOMB:
 			bolt->classname = "poison_bomb";
+			/* Original fire_grenade: corpse contents precede the damage64
+			 * option and remain present even when canister kicking is off. */
+			bolt->r.contents = CONTENTS_CORPSE;
 			bolt->methodOfDeath = MOD_POISON_GAS;
 			bolt->splashMethodOfDeath = MOD_POISON_GAS;
 			bolt->s.eFlags = EF_BOUNCE_HALF | EF_BOUNCE;
@@ -1841,8 +1847,8 @@ gentity_t *fire_grenade (gentity_t *self, vec3_t start, vec3_t dir, int grenadeW
 			bolt->s.eFlags				= (EF_BOUNCE | EF_BOUNCE_HALF);
 			bolt->health				= 5;
 			bolt->takedamage			= qtrue;
-			/* Original landmine spawn: ELF 0x8f12d/0x8f132. */
-			bolt->r.contents			= CONTENTS_BODY;
+			/* Original landmine spawn: ELF 0x8f12d/0x8f132, 0x04000000. */
+			bolt->r.contents			= CONTENTS_CORPSE;
 
 			bolt->r.snapshotCallback	= qtrue;
 
@@ -1864,8 +1870,8 @@ gentity_t *fire_grenade (gentity_t *self, vec3_t start, vec3_t dir, int grenadeW
 			bolt->takedamage			= qfalse;
 			G_NITMOD_ConfigureSatchelDamage( bolt, g_damageweapons.integer );
 			/* Original satchel spawn: ELF 0x8ee09/0x8ee0e, regardless
-			 * of the damage option. Death changes this to corpse contents. */
-			bolt->r.contents			= CONTENTS_BODY;
+			 * of the damage option: 0x04000000 excludes player movement. */
+			bolt->r.contents			= CONTENTS_CORPSE;
 
 			VectorSet(bolt->r.mins, -12, -12, 0);
 			VectorCopy(bolt->r.mins, bolt->r.absmin);
@@ -1891,9 +1897,9 @@ gentity_t *fire_grenade (gentity_t *self, vec3_t start, vec3_t dir, int grenadeW
 			bolt->health				= 5;
 			bolt->takedamage			= qfalse;
 			
-			/* Original fire_grenade ELF 0x8f246..0x8f256: body collision,
+			/* Original fire_grenade ELF 0x8f246..0x8f256: corpse contents,
 			 * independent of g_damageweapons; this does not enable damage. */
-			bolt->r.contents			= CONTENTS_BODY;
+			bolt->r.contents			= CONTENTS_CORPSE;
 
 			// nope - this causes the dynamite to impact on the players bb when he throws it.  
 			// will try setting it when it settles
@@ -2022,7 +2028,7 @@ qboolean G_NITMOD_RunMissileCamera(gentity_t *camera) {
 
 static void G_NITMOD_HomingMissileThink(gentity_t *missile) {
 	gentity_t *target = NULL;
-	vec3_t forward, desired, center;
+	vec3_t forward, desired, selectedDirection, center;
 	float bestDistance = 768.0f;
 	float speed;
 	int i;
@@ -2033,34 +2039,35 @@ static void G_NITMOD_HomingMissileThink(gentity_t *missile) {
 		gentity_t *candidate = &g_entities[i];
 		trace_t trace;
 		float distance;
-		if(!candidate->inuse || candidate == missile->parent ||
-			!candidate->takedamage || candidate->health <= 0) continue;
-		if(missile->parent && OnSameTeam(candidate, missile->parent)) continue;
+		/* Original admits every in-use entity, including the owner and
+		 * non-damageable/dead targets; only other teammates are excluded. */
+		if(!candidate->inuse) continue;
+		if(OnSameTeam(candidate, missile->parent) && candidate != missile->parent) continue;
 		VectorAdd(candidate->r.mins, candidate->r.maxs, center);
 		VectorMA(candidate->r.currentOrigin, 0.5f, center, center);
 		VectorSubtract(center, missile->r.currentOrigin, desired);
-		distance = VectorNormalize(desired);
-		if(distance > bestDistance || DotProduct(desired, forward) < 0.9f) continue;
+		distance = VectorLength(desired);
+		if(distance > bestDistance || distance <= 0.0f) continue;
+		VectorScale(desired, 1.0f / distance, desired);
+		if(DotProduct(desired, forward) < 0.9f) continue;
 		trap_Trace(&trace, missile->r.currentOrigin, NULL, NULL,
-			center, ENTITYNUM_NONE, MASK_SHOT);
+			candidate->r.currentOrigin, ENTITYNUM_NONE, MASK_SHOT);
 		if(trace.entityNum != candidate->s.number) continue;
 		target = candidate;
+		VectorCopy(desired, selectedDirection);
 		bestDistance = distance;
 	}
 
 	missile->nextthink = level.time + G_NITMOD_MissileThinkDelay();
 	if(target) {
-		VectorAdd(target->r.mins, target->r.maxs, center);
-		VectorMA(target->r.currentOrigin, 0.5f, center, center);
-		VectorSubtract(center, missile->r.currentOrigin, desired);
-		VectorNormalize(desired);
-		VectorMA(forward, 0.05f, desired, desired);
-		VectorNormalize(desired);
+		VectorMA(forward, 0.05f, selectedDirection, selectedDirection);
+		VectorNormalize(selectedDirection);
+		/* Original 0x89d0b..0x89d31 copies the last candidate vector to
+		 * s.angles; it does not convert it to Euler angles or snap velocity. */
+		VectorCopy(desired, missile->s.angles);
 		speed = (float)G_NITMOD_LegacyCvarInteger("g_missileSpeed", 0);
 		if(speed < 1.0f || speed >= 750.0f) speed = 750.0f;
-		VectorScale(desired, speed, missile->s.pos.trDelta);
-		SnapVector(missile->s.pos.trDelta);
-		vectoangles(desired, missile->s.angles);
+		VectorScale(selectedDirection, speed, missile->s.pos.trDelta);
 	}
 }
 
@@ -2071,7 +2078,6 @@ static void G_NITMOD_GuidedMissileThink(gentity_t *missile) {
 
 	if(!owner || !owner->client) {
 		G_Printf("Guided_Missile_Think : missile has no owner!\n");
-		missile->nextthink = level.time + G_NITMOD_MissileThinkDelay();
 		return;
 	}
 	AngleVectors(owner->client->ps.viewangles, forward, right, up);
@@ -2146,20 +2152,29 @@ gentity_t *fire_rocket (gentity_t *self, vec3_t start, vec3_t dir) {
 	VectorCopy( start, bolt->s.pos.trBase );
 // JPW NERVE
 	missileSpeed = G_NITMOD_LegacyCvarInteger("g_missileSpeed", 0);
-	VectorScale(dir, missileSpeed > 0 ? missileSpeed : 2500, bolt->s.pos.trDelta);
+	/* Original fire_rocket 0x8f3b3 / 0x8f6bf caps guided and homing
+	 * launch speed separately. Guided out-of-range starts at750; its first
+	 * steering update uses300. Preserve that original transition. */
+	if(self->client && (rocketOptions & 1))
+		missileSpeed = missileSpeed > 0 && missileSpeed < 300 ? missileSpeed : 750;
+	else if(self->client && (rocketOptions & 2))
+		missileSpeed = missileSpeed > 0 && missileSpeed < 750 ? missileSpeed : 750;
+	else
+		missileSpeed = missileSpeed > 0 ? missileSpeed : 2500;
+	VectorScale(dir, missileSpeed, bolt->s.pos.trDelta);
 // jpw
 	SnapVector( bolt->s.pos.trDelta );			// save net bandwidth
 	VectorCopy (start, bolt->r.currentOrigin);
 
 	/* Original fire_rocket makes missiles damageable only for positive values.
-	 * These bounds and CONTENTS_CORPSE are direct typed mappings of the
+	 * These bounds and CONTENTS_BODY are direct typed mappings of the
 	 * original entity fields, allowing bullets to detonate the rocket. */
 	missileHealth = G_NITMOD_LegacyCvarInteger("g_missileHealth", 5);
 	if(missileHealth > 0) {
 		bolt->health = missileHealth;
 		bolt->takedamage = qtrue;
 		bolt->die = G_MissileDie;
-		bolt->r.contents = CONTENTS_CORPSE;
+		bolt->r.contents = CONTENTS_BODY;
 		VectorSet(bolt->r.mins, -10, -3, 0);
 		VectorSet(bolt->r.maxs, 10, 3, 6);
 	}

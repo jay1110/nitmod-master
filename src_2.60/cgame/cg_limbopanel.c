@@ -1904,11 +1904,15 @@ void CG_LimboPanel_WeaponPanel_DrawWeapon( rectDef_t* rect, weapon_t weap, qbool
 		}
 	}
 	/* Original rifle cards distinguish unavailable grenades from the rifle. */
-	if(NITMOD_UsesOriginalProtocol() && cgs.media.limboWeaponCardNadesOOS > 0 &&
+	if(NITMOD_UsesNitmodHud() && cgs.media.limboWeaponCardNadesOOS > 0 &&
 		((weap == WP_KAR98 && CG_LimboPanel_RealWeaponIsDisabled(WP_GPG40)) ||
 		 (weap == WP_CARBINE && CG_LimboPanel_RealWeaponIsDisabled(WP_M7)))) {
-		Vector4Copy(weaponPanelNameFont.colour, clr);
-		if(highlight && BG_CursorInRect(rect)) clr[3] *= 1.5f;
+		/* Original 0x77f87/0x78250: white .6 unless the name is highlighted. */
+		Vector4Set(clr, 1, 1, 1, .6f);
+		if(highlight && BG_CursorInRect(rect)) {
+			Vector4Copy(weaponPanelNameFont.colour, clr);
+			clr[3] *= 1.5f;
+		}
 		trap_R_SetColor(clr);
 		CG_DrawPic(rect->x, rect->y, rect->w, rect->h, cgs.media.limboWeaponCardNadesOOS);
 		trap_R_SetColor(NULL);
@@ -2919,8 +2923,26 @@ extWeaponStats_t CG_LimboPanel_GetSelectedWeaponStat( void ) {
 	return BG_WeapStatForWeapon( CG_LimboPanel_GetSelectedWeapon() );
 }
 
+/* Original Cgame weapTeamConversion, ELF 0x12e580 (52 original weapon identities). */
+static int CG_NitmodQuotaTeamEquivalent(weapon_t weapon) {
+	static const int equivalent[52] = {
+		0, 1, 7, 8, 9, 5, 6, 2, 3, 4, 10, 11, 12, 13, 38, 15,
+		16, 17, 18, 19, 20, 21, 23, 22, 30, 25, 26, 27, 28, 29,
+		24, 31, 32, 33, 35, 34, 37, 36, 14, 40, 39, 41, 42, 43,
+		45, 44, 46, 47, 48, 49, 50, 51
+	};
+	int wire = NITMOD_WeaponToWire(weapon);
+	return wire >= 0 && wire < 52 ? NITMOD_WeaponFromWire(equivalent[wire]) : weapon;
+}
+
 int CG_LimboPanel_TeamCount( weapon_t weap ) {
 	int i, cnt;
+	qboolean nitmod = NITMOD_UsesNitmodHud();
+	qboolean rifleGrenade = nitmod && (weap == WP_GPG40 || weap == WP_M7);
+	int equivalent = nitmod && weap >= WP_NONE && weap < WP_NUM_WEAPONS ?
+		CG_NitmodQuotaTeamEquivalent(weap) : weap;
+	int limit = nitmod ? cgs.maxclients : MAX_CLIENTS;
+	if(limit > MAX_CLIENTS) limit = MAX_CLIENTS;
 
 	if( weap == -1 ) { // we aint checking for a weapon, so always include ourselves
 		cnt = 1;
@@ -2928,7 +2950,7 @@ int CG_LimboPanel_TeamCount( weapon_t weap ) {
 		cnt = 0;
 	}
 
-	for( i = 0; i < MAX_CLIENTS; i++ ) {
+	for( i = 0; i < limit; i++ ) {
 		if( i == cg.clientNum ) {
 			continue;
 		}
@@ -2941,8 +2963,16 @@ int CG_LimboPanel_TeamCount( weapon_t weap ) {
 			continue;
 		}
 
-		if( weap != -1 ) {
-			if( cgs.clientinfo[i].weapon != weap && cgs.clientinfo[i].latchedweapon != weap ) {
+		if( rifleGrenade ) {
+			/* Original 0x7759b..0x775c2: count the base rifle only when
+			 * that client's published rn status grants rifle grenades. */
+			int rifle = weapAlts[weap];
+			if( !cgs.clientinfo[i].rifleGrenadeStatus ||
+				(cgs.clientinfo[i].weapon != rifle && cgs.clientinfo[i].latchedweapon != rifle) ) continue;
+		} else if( weap != -1 ) {
+			/* Original 0x774b3..0x774ed: either loadout may match either team identity. */
+			if( cgs.clientinfo[i].weapon != weap && cgs.clientinfo[i].latchedweapon != weap &&
+				cgs.clientinfo[i].weapon != equivalent && cgs.clientinfo[i].latchedweapon != equivalent ) {
 				continue;
 			}
 		}
@@ -2980,6 +3010,7 @@ qboolean CG_LimboPanel_WeaponIsDisabled( int index ) {
 
 qboolean CG_LimboPanel_RealWeaponIsDisabled( weapon_t weap ) {
 	int count, wcount;
+	double heavySlots;
 
 	if( CG_LimboPanel_GetTeam() == TEAM_SPECTATOR ) {
 		return qtrue;
@@ -2990,7 +3021,11 @@ qboolean CG_LimboPanel_RealWeaponIsDisabled( weapon_t weap ) {
 	count =		CG_LimboPanel_TeamCount( -1 );
 	wcount =	CG_LimboPanel_TeamCount( weap );
 
-	if( CG_IsHeavyWeapon(weap) && wcount >= ceil( count * cgs.weaponRestrictions ) ) {
+	/* Original x87 0x77e50..0x77e92 rounds up the exact product of the
+	 * stored Float32 restriction and integer count, with no Float32 spill. */
+	heavySlots = NITMOD_UsesNitmodHud() ? ceil((double)count * cgs.weaponRestrictions) :
+		ceil(count * cgs.weaponRestrictions);
+	if( CG_IsHeavyWeapon(weap) && wcount >= heavySlots ) {
 		return qtrue;
 	}
 

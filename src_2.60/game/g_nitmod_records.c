@@ -1,5 +1,6 @@
 #include "g_local.h"
 #include "g_nitmod_records.h"
+#include "g_nitmod_accounts.h"
 #include "g_nitmod_database.h"
 #include "g_nitmod_legacy_cvars.h"
 #include "nitmod_database.h"
@@ -16,12 +17,29 @@ void G_NITMOD_PrintMapRecords(const nitmodDatabaseRecords_t *record,int flags) {
         trap_SendServerCommand(-1,va("chat \"^g%s %s record: ^x%d ^gby ^7%s ^g(^x%s^g)\" -2",flags&8?"Previous":"Map",labels[j],record->value[j],name,date));
     }
 }
+typedef struct {
+    nitmodDatabaseRecords_t record,old;
+    int exists,changed;
+    unsigned int mapGeneration;
+} recordCommitContext_t;
+static void RecordsComplete(int success,const void *opaque) {
+    static const char *labels[]={"Spree","Frag","Revive Spree"};
+    const recordCommitContext_t *context=opaque; int j;
+    if(!success) { G_LogPrintf("[SQLite] Map records could not be saved\n"); return; }
+    if(context->mapGeneration!=G_NITMOD_AccountsMapGeneration() || strcmp(context->record.map,level.rawmapname)) return;
+    for(j=0;j<3;++j) {
+        if((context->changed&(1<<j)) && context->record.value[j]>0 && (context->exists || j || context->record.value[j]>=5)) {
+            char name[64]; SafeRecordText(context->record.holder[j],name,sizeof(name));
+            trap_SendServerCommand(-1,va("chat \"^2New Map %s record: ^x%d ^gby ^7%s\" -2",labels[j],context->record.value[j],name));
+        }
+        if(context->exists) G_NITMOD_PrintMapRecords(&context->old,(1<<j)|((context->changed&(1<<j))?8:0));
+    }
+}
 void G_NITMOD_SaveMapRecords(void) {
     static const char *months[]={"January","February","March","April","May","June","July","August","September","October","November","December"};
-    static const char *labels[]={"Spree","Frag","Revive Spree"};
-    nitmodDatabaseRecords_t record,old; qtime_t time;
+    nitmodDatabaseRecords_t record,old; qtime_t time; recordCommitContext_t context;
     int i,j,exists,changed,length; void *before;
-    if(NITMOD_DBUserCount()<0 || !G_NITMOD_LegacyCvarInteger("n_mapRecords",1) || !*level.rawmapname) return;
+    if(!G_NITMOD_DatabaseReady() || NITMOD_DBUserCount()<0 || !G_NITMOD_LegacyCvarInteger("n_mapRecords",1) || !*level.rawmapname) return;
     if(!trap_RealTime(&time) || time.tm_mon<0 || time.tm_mon>11) return;
     memset(&record,0,sizeof(record)); Q_strncpyz(record.map,level.rawmapname,sizeof(record.map));
     for(i=0;i<level.numPlayingClients && i<MAX_CLIENTS;++i) {
@@ -38,16 +56,13 @@ void G_NITMOD_SaveMapRecords(void) {
     exists=NITMOD_DBRecords(record.map,&old); if(exists<0) return;
     before=NITMOD_DBExport(&length); if(!before) return;
     changed=NITMOD_DBUpdateRecords(&record);
-    if(changed<0 || !G_NITMOD_DatabaseFlush()) {
-        NITMOD_DBOpenWorking(before,length); NITMOD_DBFreeExport(before);
+    if(changed<0) {
+        NITMOD_DBInstallWorking(before,length); NITMOD_DBFreeExport(before);
         G_LogPrintf("[SQLite] Map records could not be saved\n"); return;
     }
-    NITMOD_DBFreeExport(before);
-    for(j=0;j<3;++j) {
-        if((changed&(1<<j)) && record.value[j]>0 && (exists || j || record.value[j]>=5)) {
-            char name[64]; SafeRecordText(record.holder[j],name,sizeof(name));
-            trap_SendServerCommand(-1,va("chat \"^2New Map %s record: ^x%d ^gby ^7%s\" -2",labels[j],record.value[j],name));
-        }
-        if(exists) G_NITMOD_PrintMapRecords(&old,(1<<j)|((changed&(1<<j))?8:0));
-    }
+    memset(&context,0,sizeof(context)); context.record=record;
+    if(exists) context.old=old;
+    context.exists=exists; context.changed=changed;
+    context.mapGeneration=G_NITMOD_AccountsMapGeneration();
+    G_NITMOD_DatabaseCommit(before,length,RecordsComplete,&context,sizeof(context));
 }

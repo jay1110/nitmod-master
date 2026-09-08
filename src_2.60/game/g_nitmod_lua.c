@@ -319,6 +319,14 @@ static int Damage(lua_State *L) {
     int amount=luaL_checkinteger(L,4),flags=luaL_checkinteger(L,5),mod=luaL_checkinteger(L,6);
     mod=NITMOD_NativeMeansOfDeath(mod);
     luaL_argcheck(L,mod>=0,6,"unsupported original means of death");
+    /* Lua exposes original Nitmod dflags, whose packed bits differ from ET.
+     * In particular original 0x20 is instant kill, not no-protection. */
+    flags = (flags & 1 ? DAMAGE_RADIUS : 0) |
+        (flags & 2 ? DAMAGE_HALF_KNOCKBACK : 0) |
+        (flags & 4 ? DAMAGE_NO_KNOCKBACK : 0) |
+        (flags & 8 ? DAMAGE_NO_PROTECTION : 0) |
+        (flags & 16 ? DAMAGE_DISTANCEFALLOFF : 0) |
+        (flags & 32 ? DAMAGE_NITMOD_INSTANT_KILL : 0);
     G_Damage(target,inflictor,attacker,NULL,NULL,amount,flags,mod); return 0;
 }
 static int TempEntity(lua_State *L) { vec3_t origin; int event; gentity_t *ent; ReadVector(L,1,origin); event=NITMOD_LuaEventEncode(luaL_checkinteger(L,2)); luaL_argcheck(L,event>=0,2,"unsupported original event"); ent=G_TempEntity(origin,EV_NITMOD_LUA_FIRST); ent->s.event=event; lua_pushinteger(L,ent-g_entities); return 1; }
@@ -331,10 +339,10 @@ static int PlayerCount(lua_State *L) {
     }
     lua_pushinteger(L,total); return 1;
 }
-extern qboolean G_NITMOD_ClientIsFlooding(gentity_t *ent);
+extern qboolean G_NITMOD_ClientFloodStatus(gentity_t *ent);
 extern void G_Say(gentity_t *ent,gentity_t *target,int mode,const char *text);
 extern qboolean G_EntitiesFree(void);
-static int Flooding(lua_State *L) { lua_pushinteger(L,G_NITMOD_ClientIsFlooding(&g_entities[ClientIndex(L,1,0)]));return 1; }
+static int Flooding(lua_State *L) { lua_pushinteger(L,G_NITMOD_ClientFloodStatus(&g_entities[ClientIndex(L,1,0)]));return 1; }
 static int Say(lua_State *L) { int n=ClientIndex(L,1,0),mode=luaL_checkinteger(L,2); const char *text=luaL_checkstring(L,3); if(!g_entities[n].client) return luaL_error(L,"entity is not a client"); G_Say(&g_entities[n],NULL,mode,text);return 0; }
 static int EntitiesFree(lua_State *L) { G_EntitiesFree(); return 0; }
 static int AdminLevelName(lua_State *L) { int n=luaL_optinteger(L,1,-1); luaL_argcheck(L,n<MAX_CLIENTS,1,"invalid client index"); lua_pushstring(L,G_NITMOD_AdminLevelName(n)); return 1; }

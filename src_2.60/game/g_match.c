@@ -195,12 +195,14 @@ void G_spawnPrintf(int print_type, int print_time, gentity_t *owner)
  * bots and deathmatch. A hit at the configured threshold is allowed. */
 static void G_NITMOD_CheckTeamDamage(gentity_t *attacker) {
 	float total=attacker->client->sess.nitmodTotalHits;
-	float percent=total>0 ? attacker->client->sess.nitmodTeamHits/total*100.0f : 0.0f;
+	/* Original keeps the ratio in x87 registers through the comparison.
+	 * Do not round it to float (e.g. 6.3f/7*100 exceeds 90). */
+	double percent=total>0 ? (double)attacker->client->sess.nitmodTeamHits/total*100.0 : 0.0;
 	int restriction=G_NITMOD_LegacyCvarInteger("g_teamDamageRestriction",0);
 	int timeout,n=(int)(attacker-g_entities);
 	if((attacker->r.svFlags&SVF_BOT) || restriction<=0 ||
 	   G_NITMOD_AdminPrivilege(n,"immunity") || g_gametype.integer==GT_WOLF_DM ||
-	   total<G_NITMOD_LegacyCvarInteger("g_minHits",6) || percent<=restriction) return;
+	   (double)total<G_NITMOD_LegacyCvarInteger("g_minHits",6) || percent<=restriction) return;
 	timeout=G_NITMOD_LegacyCvarInteger("g_autoTempBan",0) ?
 		G_NITMOD_LegacyCvarInteger("g_autoTempBanTime",1800) : 0;
 	trap_DropClient(n,va("Kicked for %d seconds for excessive team damage",timeout),timeout);
@@ -212,23 +214,30 @@ void G_addStats(gentity_t *targ, gentity_t *attacker, int dmg_ref, int mod)
 	qboolean sameTeam;
 
 
-	// Keep track of only active player-to-player interactions in a real game
-	if(!targ || !targ->client ||
-#ifndef DEBUG_STATS
-	  g_gamestate.integer != GS_PLAYING ||
-#endif
-	  mod == MOD_SWITCHTEAM ||
-	  (g_gametype.integer >= GT_WOLF && (targ->client->ps.pm_flags & PMF_LIMBO)) || 
-	  (g_gametype.integer < GT_WOLF && (targ->s.eFlags == EF_DEAD || targ->client->ps.pm_type == PM_DEAD))) {
+	if(!targ || !targ->client) return;
+
+	/* Original 0x82326/0x825a8: gibbing adjusts attempts even during
+	 * warmup/limbo and for MODs beyond the stock MOD_CROSS boundary. */
+	if(targ->health <= 0 && targ->client->ps.pm_type == PM_DEAD) {
+		if(attacker && attacker->client) {
+			ref=G_weapStatIndex_MOD(mod);
+			if(attacker->client->sess.aWeaponStats[ref].atts-- <= 0)
+				attacker->client->sess.aWeaponStats[ref].atts=1;
+		}
 		return;
 	}
+	if(mod == MOD_SWITCHTEAM ||
+#ifndef DEBUG_STATS
+	   g_gamestate.integer != GS_PLAYING ||
+#endif
+	   (targ->client->ps.pm_flags & PMF_LIMBO)) return;
 
-	// Special hack for intentional gibbage
-	if(targ->health <= 0 && targ->client->ps.pm_type == PM_DEAD) {
-		if(mod < MOD_CROSS && attacker && attacker->client) {
-			int x = attacker->client->sess.aWeaponStats[G_weapStatIndex_MOD(mod)].atts--;
-			if(x < 1) attacker->client->sess.aWeaponStats[G_weapStatIndex_MOD(mod)].atts = 1;
-		}
+	/* Original 0x82352/0x82640: a dead-flagged target adds only a weapon
+	 * hit, never a weighted team hit. Playdead (EF_SPARE0) still counts. */
+	if((targ->client->ps.eFlags & (EF_DEAD|EF_SPARE0)) == EF_DEAD) {
+		if(attacker && attacker->client)
+			attacker->client->sess.aWeaponStats[G_weapStatIndex_MOD(mod)].hits++;
+		else if(targ->health <= 0) targ->client->sess.suicides++;
 		return;
 	}
 
@@ -246,6 +255,8 @@ void G_addStats(gentity_t *targ, gentity_t *attacker, int dmg_ref, int mod)
 	// Telefrags only add 100 points.. not 100k!!
 	if(mod == MOD_TELEFRAG) dmg = 100;
 	else dmg = dmg_ref;
+
+	if(g_gametype.integer < GT_WOLF) return;
 
 	/* Original weighted hit totals (ELF 0x823ad..0x8242d/0x82698).
 	 * Flame ticks count 0.1, friendly mines 0.5. Ongoing poison damage

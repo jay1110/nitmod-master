@@ -11,6 +11,11 @@ typedef struct {
 } nitmodDatabaseAccount_t;
 int NITMOD_DBOpenSnapshot(const void *bytes, int length);
 int NITMOD_DBOpenWorking(const void *bytes, int length);
+/* Roll back this cache without attaching a newly imported database to its old storage. */
+int NITMOD_DBRestoreWorking(const void *bytes,int length);
+/* Validates the replacement first; keeps account/session identity on success and failure. */
+int NITMOD_DBInstallWorking(const void *bytes,int length);
+unsigned int NITMOD_DBWorkingGeneration(void);
 int NITMOD_DBInitSchema(int mailEnabled, int recordsEnabled);
 /* Caller owns exported bytes and releases them with NITMOD_DBFreeExport. */
 void *NITMOD_DBExport(int *length);
@@ -38,6 +43,9 @@ int NITMOD_DBPenaltySave(int mute,const nitmodDatabasePenalty_t *penalty,int add
 int NITMOD_DBPenaltyAt(int mute,int index,nitmodDatabasePenalty_t *penalty);
 int NITMOD_DBPenaltyCheck(int mute,const char *ip,const char *guid,const char *mac,
     int now,nitmodDatabasePenalty_t *result,int *expired);
+/* Same match/expiry rules as Check, without mutating expired rows. */
+int NITMOD_DBPenaltyPeek(int mute,const char *ip,const char *guid,const char *mac,
+    int now,nitmodDatabasePenalty_t *result,int *expired);
 typedef struct {
     char map[65],holder[3][64],date[3][32];
     int value[3]; /* spree, frags, revive spree */
@@ -49,5 +57,19 @@ int NITMOD_DBClearRecords(const char *map); /* NULL clears all maps */
 int NITMOD_DBUserCount(void);
 int NITMOD_DBVersion(void);
 unsigned int NITMOD_DBEpoch(void);
+void *NITMOD_DBMergeImages(const void *before,int beforeLength,const void *changed,int changedLength,
+                         const void *current,int currentLength,int *length);
+int NITMOD_DBSyncUser(const void *current,int length,const char *guid);
+int NITMOD_DBStorageOpen(const char *path);
+void NITMOD_DBStorageClose(void);
+void *NITMOD_DBStorageRead(int *length);
+int NITMOD_DBStorageCommit(const void *before,int length);
+void *NITMOD_DBImageSyncUser(const void *cache,int cacheLength,const void *current,int currentLength,const char *guid,int *length);
+void *NITMOD_DBImageOrigin(const void *image,int imageLength,int *length);
+void *NITMOD_DBImageSetOrigin(const void *image,int imageLength,const void *origin,int originLength,int *length);
+int NITMOD_DBStorageInitSchema(int mail,int records);
+void *NITMOD_DBImageInitialize(const void *image,int imageLength,int mail,int records,int *length);
+void *NITMOD_DBMergeUserImages(const void *before,int beforeLength,const void *changed,int changedLength,
+                         const void *current,int currentLength,const char *guid,int *length);
 const char *NITMOD_DBError(void);
 #endif

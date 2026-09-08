@@ -34,6 +34,14 @@
 
 //======================================================================
 
+/* MaxHP retains the original positive signed32 range. Keep the usual
+ * add-and-clamp result defined even at INT_MAX (no signed overflow). */
+static int G_NITMOD_AddPickupHealth(int health, int amount, int maximum) {
+	long long next = (long long)health + amount;
+	if(next > maximum) return maximum;
+	return next < INT_MIN ? INT_MIN : (int)next;
+}
+
 int Pickup_Powerup( gentity_t *ent, gentity_t *other ) {
 	int			quantity;
 	int			i;
@@ -64,10 +72,8 @@ int Pickup_Powerup( gentity_t *ent, gentity_t *other ) {
 	// brandy also gives a little health (10)
 	if(ent->item->giTag == PW_NOFATIGUE) {
 		if(Q_stricmp(ent->item->classname, "item_stamina_brandy") == 0) {
-			other->health += 10;
-			if (other->health > other->client->ps.stats[STAT_MAX_HEALTH] ) {
-				other->health = other->client->ps.stats[STAT_MAX_HEALTH];
-			}
+			other->health = G_NITMOD_AddPickupHealth(other->health, 10,
+				other->client->ps.stats[STAT_MAX_HEALTH]);
 			other->client->ps.stats[STAT_HEALTH] = other->health;
 		}
 	}
@@ -200,9 +206,8 @@ void UseHoldableItem( gentity_t *ent, int item ) {
 			break;
 
 		case HI_WINE:		// 1921 Chateu Lafite - gives 25 pts health up to max health
-			ent->health += 25;
-			if(ent->health > ent->client->ps.stats[STAT_MAX_HEALTH])
-				ent->health = ent->client->ps.stats[STAT_MAX_HEALTH];
+			ent->health = G_NITMOD_AddPickupHealth(ent->health, 25,
+				ent->client->ps.stats[STAT_MAX_HEALTH]);
 			break;
 
 		case HI_SKULL:		// skull of invulnerable - 30 sec invincible
@@ -751,10 +756,7 @@ int Pickup_Health (gentity_t *ent, gentity_t *other) {
 	max = BG_EffectiveMaxHealth(&other->client->ps);
 	G_NITMOD_CurePoisonFromHealth(other, ent->parent, qfalse);
 
-	other->health += ent->item->quantity;
-	if (other->health > max ) {
-		other->health = max;
-	}
+	other->health = G_NITMOD_AddPickupHealth(other->health, ent->item->quantity, max);
 	other->client->ps.stats[STAT_HEALTH] = other->health;
 	if (ent->parent) {
 		Bot_Event_Healed(other - g_entities, ent->parent);
@@ -856,6 +858,16 @@ void Touch_Item( gentity_t *ent, gentity_t *other, trace_t *trace ) {
 	if( other->health <= 0 ) {
 		return;		// dead people can't pickup
 	}
+
+	/* Original Touch_Item 0x73f2c/0x73fe8: playing dead forbids pickups;
+	 * medics bit 1 or poison forbids a provider's own health pack. The owner
+	 * comparison is s.clientNum, not a pointer or a class restriction. */
+	if( other->client->ps.eFlags & EF_SPARE0 ) return;
+	if( ent->item->giType == IT_HEALTH &&
+		((G_NITMOD_ConfiguredMedicOptions() & 1u) ||
+		 (other->client->ps.eFlags & NITMOD_EF_POISONED)) &&
+		ent->parent && ent->parent->client &&
+		ent->parent->s.clientNum == other->s.clientNum ) return;
 
 	// the same pickup rules are used for client side and server side
 	if ( !BG_CanItemBeGrabbedWar( &ent->s, &other->client->ps, other->client->sess.skill, other->client->sess.sessionTeam, other->client->sess.nitmodSkillMasks, (unsigned int)G_NITMOD_LegacyCvarInteger("g_adrenaline", 0), G_NITMOD_ConfiguredWarMode() ) ) {

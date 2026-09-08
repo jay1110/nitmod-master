@@ -1266,7 +1266,7 @@ qboolean G_MapIsValidCampaignStartMap( void ) {
 void G_ParseCampaigns( void ) {
 	int			numdirs;
 	char		filename[128];
-	char		dirlist[1024];
+	static char dirlist[100000];
 	char*		dirptr;
 	int			i;
 	int			dirlen;
@@ -1276,16 +1276,17 @@ void G_ParseCampaigns( void ) {
 	level.currentCampaign = -1;
 	memset( &g_campaigns, 0, sizeof(g_campaignInfo_t)*MAX_CAMPAIGNS );
 
-	// get all campaigns from .campaign files
-	numdirs = trap_FS_GetFileList( "scripts", ".campaign", dirlist, 1024 );
-	dirptr  = dirlist;
-	for (i = 0; i < numdirs && level.campaignCount < MAX_CAMPAIGNS; i++, dirptr += dirlen+1) {
-		dirlen = strlen(dirptr);
-		strcpy(filename, "scripts/");
-		strcat(filename, dirptr);
-		
-		if( G_LoadCampaignsFromFile(filename) ) {
-			mapFound = qtrue;
+	/* Original G_ParseCampaigns gives g_campaignFile first refusal. Its
+	 * return value means the active map was found, not merely file-open success. */
+	trap_Cvar_VariableStringBuffer("g_campaignFile", filename, sizeof(filename));
+	if (filename[0]) mapFound = G_LoadCampaignsFromFile(filename);
+	if (!mapFound) {
+		numdirs = trap_FS_GetFileList("scripts", ".campaign", dirlist, sizeof(dirlist));
+		dirptr = dirlist;
+		for (i = 0; i < numdirs && level.campaignCount < MAX_CAMPAIGNS; i++, dirptr += dirlen + 1) {
+			dirlen = strlen(dirptr);
+			Com_sprintf(filename, sizeof(filename), "scripts/%s", dirptr);
+			if (G_LoadCampaignsFromFile(filename)) mapFound = qtrue;
 		}
 	}
 

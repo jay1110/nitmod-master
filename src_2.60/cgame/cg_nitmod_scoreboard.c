@@ -27,6 +27,8 @@ qboolean CG_NitmodScoreRow(int x, int y, const score_t *score,
     const clientInfo_t *client;
     int cursor = x, limit = 18, icons, base, labelY, skill, viewerTeam;
     qboolean sameTeam, spectator;
+    int objectiveMask = NITMOD_UsesOriginalProtocol() ? 0x60 : (1 << PW_REDFLAG) | (1 << PW_BLUEFLAG);
+    int disguiseMask = NITMOD_UsesOriginalProtocol() ? 0x80 : (1 << PW_OPS_DISGUISED);
     qhandle_t status = 0;
     if(!row) return qfalse;
     memset(row, 0, sizeof(*row));
@@ -47,7 +49,7 @@ qboolean CG_NitmodScoreRow(int x, int y, const score_t *score,
     if(score->nitmodFlags & 4)
         NITMOD_ScoreIcon(row, &cursor, y, compact, cgs.media.friendShader);
     if(!spectator) {
-        if(client->powerups & 0x60) status = cgs.media.objectiveShader;
+        if(client->powerups & objectiveMask) status = cgs.media.objectiveShader;
         if(compact && status) {
             NITMOD_ScoreIcon(row, &cursor, y, compact, status); status = 0;
         }
@@ -56,7 +58,7 @@ qboolean CG_NitmodScoreRow(int x, int y, const score_t *score,
             else if(!status) status = cgs.media.hudSprintIcon;
         }
         if(compact || !status) {
-            if(sameTeam && (client->powerups & 0x80)) {
+            if(sameTeam && (client->powerups & disguiseMask)) {
                 if(compact) NITMOD_ScoreIcon(row, &cursor, y, compact, cgs.media.axisUniformShader);
                 else status = cgs.media.axisUniformShader;
             }

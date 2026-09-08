@@ -677,7 +677,7 @@ void CG_Explode(centity_t *cent, vec3_t origin, vec3_t dir, qhandle_t shader) {
 		if( cent->currentState.dl_intensity == -1 ) {
 			sound = 0;
 		} else {
-			sound = cgs.gameSounds[cent->currentState.dl_intensity];
+			sound = CG_GetGameSound( cent->currentState.dl_intensity );
 		}
 
 		CG_Explodef(	origin, 
@@ -738,7 +738,7 @@ void CG_Rubble(centity_t *cent, vec3_t origin, vec3_t dir, qhandle_t shader) {
 		if( cent->currentState.dl_intensity == -1 ) {
 			sound = 0;
 		} else {
-			sound = cgs.gameSounds[cent->currentState.dl_intensity];
+			sound = CG_GetGameSound( cent->currentState.dl_intensity );
 		}
 
 		CG_RubbleFx(	origin, 
@@ -2375,7 +2375,9 @@ static void CG_EntityEventForProtocol( centity_t *cent, vec3_t position, qboolea
 		break;*/
 
 	case EV_RAILTRAIL:
-		if(original) { CG_NitmodRailEvent(es); break; }
+		if(original || (NITMOD_UsesNitmodHud() && es->dmgFlags == 1 && es->effect1Time > 0)) {
+			CG_NitmodRailEvent(es); break;
+		}
 		CG_RailTrail( &cgs.clientinfo[ es->otherEntityNum2 ], es->origin2, es->pos.trBase, es->dmgFlags);	//----(SA)	added 'type' field
 		break;
 
@@ -2476,9 +2478,9 @@ static void CG_EntityEventForProtocol( centity_t *cent, vec3_t position, qboolea
 		}
 
 		// done.
-		if ( cgs.gameSounds[ es->eventParm ] ) {
+		if ( CG_GetGameSound( es->eventParm ) ) {
 			// xkan, 10/31/2002 - crank up the volume 
-			trap_S_StartSoundVControl( NULL, es->number, CHAN_VOICE, cgs.gameSounds[ es->eventParm ], 255 );
+			trap_S_StartSoundVControl( NULL, es->number, CHAN_VOICE, CG_GetGameSound( es->eventParm ), 255 );
 		} else {
 			s = NITMOD_AssetConfigString( CS_SOUNDS + es->eventParm );
 			// xkan, 10/31/2002 - crank up the volume 
@@ -2514,8 +2516,8 @@ static void CG_EntityEventForProtocol( centity_t *cent, vec3_t position, qboolea
 				s = tempStr;
 			}
 			// done.
-			if ( cgs.gameSounds[ sound ] ) {
-				trap_S_StartSoundVControl( NULL, es->number, CHAN_VOICE, cgs.gameSounds[ sound ], volume );
+			if ( CG_GetGameSound( sound ) ) {
+				trap_S_StartSoundVControl( NULL, es->number, CHAN_VOICE, CG_GetGameSound( sound ), volume );
 			} else {
 				s = NITMOD_AssetConfigString( CS_SOUNDS + sound );
 				trap_S_StartSoundVControl( NULL, es->number, CHAN_VOICE, CG_CustomSound( es->number, s ), volume );
@@ -2544,8 +2546,8 @@ static void CG_EntityEventForProtocol( centity_t *cent, vec3_t position, qboolea
 			s = tempStr;
 		}
 
-		if ( cgs.gameSounds[ es->eventParm ] ) {
-			trap_S_StartSound( NULL, cg.snap->ps.clientNum, CHAN_AUTO, cgs.gameSounds[ es->eventParm ] );
+		if ( CG_GetGameSound( es->eventParm ) ) {
+			trap_S_StartSound( NULL, cg.snap->ps.clientNum, CHAN_AUTO, CG_GetGameSound( es->eventParm ) );
 		} else {
 			s = NITMOD_AssetConfigString( CS_SOUNDS + es->eventParm );
 			trap_S_StartSound( NULL, cg.snap->ps.clientNum, CHAN_AUTO, CG_CustomSound( es->number, s ) );
@@ -2568,8 +2570,8 @@ static void CG_EntityEventForProtocol( centity_t *cent, vec3_t position, qboolea
 				s = tempStr;
 			}
 			// done.
-			if ( cgs.gameSounds[ es->eventParm ] ) {
-				trap_S_StartSound (NULL, cg.snap->ps.clientNum, CHAN_AUTO, cgs.gameSounds[ es->eventParm ] );
+			if ( CG_GetGameSound( es->eventParm ) ) {
+				trap_S_StartSound (NULL, cg.snap->ps.clientNum, CHAN_AUTO, CG_GetGameSound( es->eventParm ) );
 			} else {
 				s = NITMOD_AssetConfigString( CS_SOUNDS + es->eventParm );
 				trap_S_StartSound (NULL, cg.snap->ps.clientNum, CHAN_AUTO, CG_CustomSound( es->number, s ) );

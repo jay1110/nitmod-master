@@ -12,6 +12,7 @@
 #include "cg_nitmod_animation.h"
 #include "cg_nitmod_lean.h"
 #include "cg_nitmod_config.h"
+#include "cg_nitmod_nxac.h"
 #include "cg_nitmod_skill_rewards.h"
 #include "../game/bg_classes.h"
 #include "../game/nitmod_skills.h"
@@ -25,6 +26,7 @@
 
 static int			dp_realtime;
 static float		jumpHeight;
+qhandle_t nitmodPlayerGlowShader;
 
 animation_t		*lastTorsoAnim;
 animation_t		*lastLegsAnim;
@@ -1001,7 +1003,8 @@ static void CG_AddPainTwitch( centity_t *cent, vec3_t torsoAngles ) {
 		cent->pe.animSpeed = 1.0;
 	}
 
-	if( cent->currentState.eFlags & EF_DEAD ) {
+	if( (cent->currentState.eFlags & EF_DEAD) ||
+		(NITMOD_UsesNitmodHud() && (cent->currentState.eFlags & EF_SPARE0)) ) {
 		cent->pe.painAnimLegs = -1;
 		cent->pe.painAnimTorso = -1;
 		cent->pe.animSpeed = 1.0;
@@ -1070,6 +1073,9 @@ static void CG_PlayerAngles( centity_t *cent, vec3_t legs[3], vec3_t torso[3], v
 
 	VectorCopy( cent->lerpAngles, headAngles );
 	headAngles[YAW] = AngleMod( headAngles[YAW] );
+	/* Original 0x91a8a/0x92060: corpse pitch/roll is cleared before torso derivation. */
+	if( NITMOD_UsesNitmodHud() && cent->currentState.eType == ET_CORPSE )
+		headAngles[PITCH] = headAngles[ROLL] = 0;
 	VectorClear( legsAngles );
 	VectorClear( torsoAngles );
 
@@ -1092,7 +1098,8 @@ static void CG_PlayerAngles( centity_t *cent, vec3_t legs[3], vec3_t torso[3], v
 	}
 
 	// adjust legs for movement dir
-	if( cent->currentState.eFlags & EF_DEAD || cent->currentState.eFlags & EF_MOUNTEDTANK ) {
+	if( (cent->currentState.eFlags & (EF_DEAD | EF_MOUNTEDTANK)) ||
+		(NITMOD_UsesNitmodHud() && (cent->currentState.eFlags & EF_SPARE0)) ) {
 		// don't let dead bodies twitch
 		legsAngles[YAW] = headAngles[YAW];
 		torsoAngles[YAW] = headAngles[YAW];
@@ -1174,6 +1181,11 @@ static void CG_PlayerAngles( centity_t *cent, vec3_t legs[3], vec3_t torso[3], v
 		side = speed * DotProduct( velocity, axis[0] );
 		legsAngles[PITCH] += side;
 	}
+
+	/* Original 0x91bd7: playing dead clears only the head here, after
+	 * torso pitch/velocity rotation and before lean/hierarchical subtraction. */
+	if( NITMOD_UsesNitmodHud() && (cent->currentState.eFlags & EF_SPARE0) )
+		headAngles[PITCH] = headAngles[ROLL] = 0;
 
 	// pain twitch
 	CG_NitmodPlayerLean(cent, torsoAngles, headAngles);
@@ -1633,6 +1645,12 @@ Adds a piece with modifications or duplications for powerups
 Also called by CG_Missile for quad rockets, but nobody can tell...
 ===============
 */
+static qboolean CG_NitmodPlayerGlowing(const entityState_t *es) {
+	if(!NITMOD_UsesNitmodHud()) return qfalse;
+	return NITMOD_UsesOriginalProtocol() ? (es->eFlags & 0x40) != 0 :
+		(es->time2 & NITMOD_ES_GLOW) != 0;
+}
+
 void CG_AddRefEntityWithPowerups( refEntity_t *ent, int powerups, int team, entityState_t *es, const vec3_t fireRiseDir ) {
 	centity_t *cent;
 	refEntity_t backupRefEnt;//, parentEnt;
@@ -1655,6 +1673,21 @@ void CG_AddRefEntityWithPowerups( refEntity_t *ent, int powerups, int team, enti
 	}
 
 	trap_R_AddRefEntityToScene( ent );
+
+	/* Original CG_AddRefEntityWithPowerups ELF0x92ce0 adds an entity-coloured
+	 * specGlow pass to every rendered body/head/accessory. Snapshot powerup
+	 * bits have already been translated to the native enum for both layouts. */
+	if(CG_NitmodPlayerGlowing(es) && nitmodPlayerGlowShader) {
+		qboolean red = team == TEAM_AXIS;
+		if((cent->currentState.powerups & (1 << PW_OPS_DISGUISED)) &&
+		   cgs.clientinfo[cg.clientNum].team != TEAM_SPECTATOR) red = !red;
+		ent->shaderRGBA[0] = red ? 255 : 0;
+		ent->shaderRGBA[1] = 0;
+		ent->shaderRGBA[2] = red ? 0 : 255;
+		ent->shaderRGBA[3] = 255;
+		ent->customShader = nitmodPlayerGlowShader;
+		trap_R_AddRefEntityToScene(ent);
+	}
 
 	if (!onFire && CG_EntOnFire(&cg_entities[es->number])) {
 		onFire = qtrue;
@@ -1954,11 +1987,10 @@ void CG_Player( centity_t *cent )
 	}
 
 	VectorCopy( playerOrigin, body.origin );
-    if((NITMOD_UsesOriginalProtocol() && (cent->currentState.eFlags & 0x40)) ||
-       (!NITMOD_UsesOriginalProtocol() && (cent->currentState.time2 & NITMOD_ES_GLOW))) {
+    if(CG_NitmodPlayerGlowing(&cent->currentState)) {
         int glowTeam=cgs.clientinfo[cent->currentState.clientNum].team,j,copies;
         char dynamicLight[8];
-        if(cent->currentState.powerups & (NITMOD_UsesOriginalProtocol()?0x80:(1<<PW_OPS_DISGUISED))) glowTeam=glowTeam==TEAM_AXIS?TEAM_ALLIES:TEAM_AXIS;
+        if(cent->currentState.powerups & (1 << PW_OPS_DISGUISED)) glowTeam=glowTeam==TEAM_AXIS?TEAM_ALLIES:TEAM_AXIS;
         trap_Cvar_VariableStringBuffer("r_dynamicLight",dynamicLight,sizeof(dynamicLight));copies=atoi(dynamicLight)==2?4:1;
         for(j=0;j<copies;++j) trap_R_AddLightToScene(body.origin,100,1.0f,glowTeam==TEAM_AXIS?1.0f:0.0f,0,glowTeam==TEAM_AXIS?0.0f:1.0f,0,0);
     }
@@ -2140,7 +2172,11 @@ void CG_Player( centity_t *cent )
 	}
 
 	// set blinking flag
-	CG_AddRefEntityWithPowerups( &head, cent->currentState.powerups, ci->team, &cent->currentState, cent->fireRiseDir );
+	{
+		int before = head.renderfx;
+		CG_AddRefEntityWithPowerups( &head, cent->currentState.powerups, ci->team, &cent->currentState, cent->fireRiseDir );
+		CG_NITMOD_NxACAfterPlayerRender(&head,before);
+	}
 
 	cent->pe.headRefEnt = head;
 

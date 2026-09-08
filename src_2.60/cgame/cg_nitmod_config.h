@@ -14,6 +14,7 @@
 
 void NITMOD_ClearConfigStrings( void );
 const char *NITMOD_WeaponScriptsDir(void);
+const char *NITMOD_MatchConfigName(void);
 void NITMOD_UpdateWeaponScripts(qboolean reload);
 extern vmCvar_t cg_markDistance, cg_projectileNudge, nitmod_sv_fps;
 extern vmCvar_t cg_countryflags, cg_optimizePrediction, cg_locations;
@@ -94,6 +95,9 @@ typedef enum {
 const int *NITMOD_WirePersistant(const playerState_t *state);
 void NITMOD_ResetSnapshotPersistant(void);
 void NITMOD_SnapshotHitSounds(const playerState_t *oldState, const playerState_t *newState);
+enum { NITMOD_FIXED_SOUND_COUNT = 84 };
+void NITMOD_RegisterFixedSounds(void);
+sfxHandle_t NITMOD_FixedSound(int index);
 int NITMOD_PredictedEventId(int event);
 const char *NITMOD_PlayerConfigString(int clientNum);
 extern vmCvar_t cg_pmSounds;
@@ -121,6 +125,8 @@ qboolean NITMOD_DecodeClientSkills(const char *text, int *nativeLevels, int *dis
 const char *CG_NitmodSpectatorLabel(const clientInfo_t *client, int ping);
 qboolean NITMOD_ClassIsDisabled(int team, int playerClass);
 qboolean NITMOD_WeaponQuotaDisabled(int weapon, int playerClass, int teamCount, int weaponCount);
+void NITMOD_UpdateSvCvars(void);
+void NITMOD_ApplySvCvars(void);
 void NITMOD_ApplyForcedCvars(void);
 void NITMOD_RestoreForcedCvars(void);
 void CG_AddToTeamChat(const char *str, int clientnum);

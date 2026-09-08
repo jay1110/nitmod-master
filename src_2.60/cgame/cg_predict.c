@@ -618,129 +618,42 @@ static void CG_TouchTriggerPrediction( void ) {
 #define MAX_PREDICT_VELOCITY_DELTA		0.1f
 #define MAX_PREDICT_VIEWANGLES_DELTA	1.0f
 
-qboolean CG_PredictionOk( playerState_t *ps1, playerState_t *ps2 ) {
-	vec3_t vec;
-	int i;
-
-	if(ps2->pm_type != ps1->pm_type || ps2->pm_flags != ps1->pm_flags || ps2->pm_time != ps1->pm_time ) {
-		return qfalse;
-	}
-
-	VectorSubtract( ps2->origin, ps1->origin, vec );
-	if( DotProduct( vec, vec ) > Square(MAX_PREDICT_ORIGIN_DELTA)) {
-		return qfalse;
-	}
-
-	VectorSubtract( ps2->velocity, ps1->velocity, vec );
-	if( DotProduct( vec, vec ) > Square(MAX_PREDICT_VELOCITY_DELTA) ) {
-		return qfalse;
-	}
-
-	if( ps2->eFlags != ps1->eFlags ) {
-		return qfalse;
-	}
-
-	if( ps2->weaponTime != ps1->weaponTime ) {
-		return qfalse;
-	}	
-
-	if( ps2->groundEntityNum != ps1->groundEntityNum ) {
-		return qfalse;
-	}
-
-	if( ps1->groundEntityNum != ENTITYNUM_WORLD || ps1->groundEntityNum != ENTITYNUM_NONE || ps2->groundEntityNum != ENTITYNUM_WORLD || ps2->groundEntityNum != ENTITYNUM_NONE ) {
-		return qfalse;
-	}
-
-	if(	ps2->speed != ps1->speed || ps2->delta_angles[0] != ps1->delta_angles[0] || ps2->delta_angles[1] != ps1->delta_angles[1] || ps2->delta_angles[2] != ps1->delta_angles[2] ) {
-		return qfalse;
-	}
-
-	if(	ps2->legsTimer != ps1->legsTimer || ps2->legsAnim != ps1->legsAnim ||
-		ps2->torsoTimer != ps1->torsoTimer || ps2->torsoAnim != ps1->torsoAnim ) {
-		return qfalse;
-	}
-
-/*	if( ps2->movementDir != ps1->movementDir ) {
-		return qfalse;
-	}*/
-
-	if ( ps2->eventSequence != ps1->eventSequence ) {
-		return qfalse;
-	}
-
-	for( i = 0; i < MAX_EVENTS; i++ ) {
-		if( ps2->events[i] != ps1->events[i] || ps2->eventParms[i] != ps1->eventParms[i] ) {
-			return qfalse;
-		}
-	}
-
-	if( ps2->externalEvent != ps1->externalEvent || ps2->externalEventParm != ps1->externalEventParm || ps2->externalEventTime != ps1->externalEventTime ) {
-		return qfalse;
-	}
-
-	if( ps2->clientNum != ps1->clientNum ) {
-		return qfalse;
-	} 
-
-	if( ps2->weapon != ps1->weapon || ps2->weaponstate != ps1->weaponstate ) {
-		return qfalse;
-	}
-
-	for( i = 0; i < 3; i++ ) {
-		if(fabsf(AngleDelta(ps2->viewangles[i], ps1->viewangles[i])) > MAX_PREDICT_VIEWANGLES_DELTA) {
-			return qfalse;
-		}
-	}
-
-	if ( ps2->viewheight != ps1->viewheight ) {
-		return qfalse;
-	}
-
-	if ( ps2->damageEvent != ps1->damageEvent || ps2->damageYaw != ps1->damageYaw || ps2->damagePitch != ps1->damagePitch || ps2->damageCount != ps1->damageCount ) {
-		return qfalse;
-	}
-
-	for ( i = 0; i < MAX_STATS; i++ ) {
-		if ( ps2->stats[i] != ps1->stats[i] ) {
-			return qfalse;
-		}
-	}
-
-	for ( i = 0; i < MAX_PERSISTANT; i++ ) {
-		if ( ps2->persistant[i] != ps1->persistant[i] ) {
-			return qfalse;
-		}
-	}
-
-	for ( i = 0; i < MAX_POWERUPS; i++ ) {
-		if ( ps2->powerups[i] != ps1->powerups[i] ) {
-			return qfalse;
-		}
-	}
-
-	for ( i = 0; i < MAX_WEAPONS; i++ ) {
-		if ( ps2->ammo[i] != ps1->ammo[i] || ps2->ammoclip[i] != ps1->ammoclip[i] ) {
-			return qfalse;
-		}
-	}
-
-	if( ps1->viewlocked != ps2->viewlocked || ps1->viewlocked_entNum !=  ps2->viewlocked_entNum ) {
-		return qfalse;
-	}
-
-	if( ps1->onFireStart != ps2->onFireStart ) {
-		return qfalse;
-	}
-
-	return qtrue;
+/* Original CG_PredictionOk returns zero for an acceptable state and
+ * diagnostic codes 1..34 otherwise. No world-only ground restriction and
+ * no externalEvent comparison: the old unused ET predicate rejected every
+ * ground entity through an always-true OR. Knife inventory is server owned. */
+int CG_PredictionOk(playerState_t *server, playerState_t *saved) {
+    vec3_t delta;
+    int i;
+#define PRED_FIELD(field, code) do { if(saved->field != server->field) { \
+    if(cg_showmiss.integer) CG_Printf(#field "\n"); return code; } } while(0)
+    PRED_FIELD(pm_type, 1); PRED_FIELD(pm_flags, 2); PRED_FIELD(pm_time, 3);
+    VectorSubtract(saved->origin, server->origin, delta);
+    if(!(DotProduct(delta, delta) <= SQR(.1f))) return 4;
+    VectorSubtract(saved->velocity, server->velocity, delta);
+    if(!(DotProduct(delta, delta) <= SQR(.1f))) return 5;
+    PRED_FIELD(eFlags, 6); PRED_FIELD(weaponTime, 7); PRED_FIELD(groundEntityNum, 8);
+    PRED_FIELD(speed, 9);
+    for(i = 0; i < 3; ++i) if(saved->delta_angles[i] != server->delta_angles[i]) return 10 + i;
+    PRED_FIELD(legsTimer, 13); PRED_FIELD(legsAnim, 14);
+    PRED_FIELD(torsoTimer, 15); PRED_FIELD(torsoAnim, 16);
+    PRED_FIELD(eventSequence, 17);
+    for(i = 0; i < MAX_EVENTS; ++i)
+        if(saved->events[i] != server->events[i] || saved->eventParms[i] != server->eventParms[i]) return 18;
+    PRED_FIELD(clientNum, 19); PRED_FIELD(weapon, 20); PRED_FIELD(weaponstate, 21);
+    for(i = 0; i < 3; ++i) if(fabsf(saved->viewangles[i] - server->viewangles[i]) > 1.f) return 22;
+    PRED_FIELD(viewheight, 23); PRED_FIELD(damageEvent, 24);
+    PRED_FIELD(damageYaw, 25); PRED_FIELD(damagePitch, 26); PRED_FIELD(damageCount, 27);
+    for(i = 0; i < MAX_STATS; ++i) if(saved->stats[i] != server->stats[i]) return 28;
+    for(i = 0; i < MAX_PERSISTANT; ++i) if(saved->persistant[i] != server->persistant[i]) return 29;
+    for(i = 0; i < MAX_POWERUPS; ++i) if(saved->powerups[i] != server->powerups[i]) return 30;
+    for(i = 0; i < MAX_WEAPONS; ++i) if(i != WP_KNIFE &&
+        (saved->ammo[i] != server->ammo[i] || saved->ammoclip[i] != server->ammoclip[i])) return 31;
+    PRED_FIELD(viewlocked, 32); PRED_FIELD(viewlocked_entNum, 32);
+    PRED_FIELD(onFireStart, 33); PRED_FIELD(grenadeTimeLeft, 34);
+#undef PRED_FIELD
+    return 0;
 }
-
-#define RESET_PREDICTION						\
-	cg.lastPredictedCommand = 0;				\
-	cg.backupStateTail = cg.backupStateTop;		\
-	useCommand = current - CMD_BACKUP + 1;
-
 
 /*
 =================
@@ -779,6 +692,40 @@ to ease the jerk.
 
 pmoveExt_t oldpmext[CMD_BACKUP];
 
+/* These four original posture fields are not in playerState. Record their
+ * exact pre-command state and advance it within a prediction batch. Other
+ * pmext fields retain the existing ET command-history behavior. */
+typedef struct {
+	int crouchStandUntil, standCrouchUntil;
+	qboolean crouchStarted, wasCrouching;
+} nitmodDelayState_t;
+typedef struct {
+	qboolean valid;
+	int commandNumber, commandTime;
+	nitmodDelayState_t before;
+} nitmodDelayCommand_t;
+static nitmodDelayCommand_t nitmodDelayCommands[CMD_BACKUP];
+static unsigned int nitmodDelayEpoch;
+static void CG_NitmodReadDelayState(nitmodDelayState_t *state, const pmoveExt_t *ext) {
+	state->crouchStandUntil = ext->nitmodCrouchStandUntil;
+	state->standCrouchUntil = ext->nitmodStandCrouchUntil;
+	state->crouchStarted = ext->nitmodCrouchStarted;
+	state->wasCrouching = ext->nitmodWasCrouching;
+}
+static void CG_NitmodWriteDelayState(pmoveExt_t *ext, const nitmodDelayState_t *state) {
+	ext->nitmodCrouchStandUntil = state->crouchStandUntil;
+	ext->nitmodStandCrouchUntil = state->standCrouchUntil;
+	ext->nitmodCrouchStarted = state->crouchStarted;
+	ext->nitmodWasCrouching = state->wasCrouching;
+}
+void CG_NitmodResetMovementDelayPrediction(void) {
+	nitmodDelayState_t empty = {0};
+	memset(nitmodDelayCommands, 0, sizeof(nitmodDelayCommands));
+	CG_NitmodWriteDelayState(&cg.pmext, &empty);
+	++nitmodDelayEpoch;
+}
+
+
 void CG_PredictPlayerState( void ) {
 	int			cmdNum, current;
 	playerState_t	oldPlayerState;
@@ -787,7 +734,20 @@ void CG_PredictPlayerState( void ) {
 	usercmd_t	latestCmd;
 	vec3_t		deltaAngles;
 	pmoveExt_t	pmext;
-//	int useCommand = 0;
+	int predictCmd, stateIndex = 0, numPredicted = 0, numPlayedBack = 0;
+	qboolean optimize;
+	/* Native pmext contains local knife/alternate-mode latches. Preserve
+	 * their post-command state when replaying the original state cache. */
+	static pmoveExt_t backupPmext[MAX_BACKUP_STATES];
+	static int previousOptimize, previousFixed, previousMsec, previousClient = -1;
+	static int previousNitmodFixed, previousNitmodFps;
+	static int previousProneDelay, previousCrouchStandDelay, previousStandCrouchDelay;
+	static unsigned int previousDelayEpoch;
+	nitmodDelayState_t delayState;
+	qboolean delayStateReady = qfalse;
+	qboolean resetCache = !cg.validPPS;
+	if(resetCache || (previousClient >= 0 && previousClient != cg.snap->ps.clientNum))
+		CG_NitmodResetMovementDelayPrediction();
 
 	cg.hyperspace = qfalse;	// will be set if touching a trigger_teleport
 
@@ -815,7 +775,12 @@ void CG_PredictPlayerState( void ) {
 		cg_pmove.ps = &cg.predictedPlayerState;
 		cg_pmove.pmext = &cg.pmext;
 		cg_pmove.nitmodReloadPreferenceFlags = CG_NITMOD_ReloadPreferenceFlags();
-		cg_pmove.nitmodDoubleJump = NITMOD_SimpleConfig()->doubleJump;
+	cg_pmove.nitmodFixedPhysics = NITMOD_UsesNitmodHud() && cgs.nitmodFixedPhysics != 0;
+	cg_pmove.nitmodFixedPhysicsFps = cgs.nitmodFixedPhysicsFps;
+	cg_pmove.nitmodProneDelay = NITMOD_UsesNitmodHud() ? NITMOD_SimpleConfig()->proneDelay : 0;
+	cg_pmove.nitmodCrouchStandDelay = NITMOD_UsesNitmodHud() ? NITMOD_SimpleConfig()->crouchStandDelay : 0;
+	cg_pmove.nitmodStandCrouchDelay = NITMOD_UsesNitmodHud() ? NITMOD_SimpleConfig()->standCrouchDelay : 0;
+	cg_pmove.nitmodDoubleJump = NITMOD_SimpleConfig()->doubleJump;
 		cg_pmove.nitmodLeanEnabled = NITMOD_UsesOriginalProtocol();
 		cg_pmove.nitmodReloadEnabled = !Q_stricmp(Info_ValueForKey(CG_ConfigString(CS_SERVERINFO), "gamename"), "nitmod");
 		cg_pmove.nitmodAuthoritativeWeapons = NITMOD_UsesNitmodHud();
@@ -867,6 +832,11 @@ void CG_PredictPlayerState( void ) {
 	cg_pmove.ps = &cg.predictedPlayerState;
 	cg_pmove.pmext = &pmext; //&cg.pmext;
 	cg_pmove.nitmodReloadPreferenceFlags = CG_NITMOD_ReloadPreferenceFlags();
+	cg_pmove.nitmodFixedPhysics = NITMOD_UsesNitmodHud() && cgs.nitmodFixedPhysics != 0;
+	cg_pmove.nitmodFixedPhysicsFps = cgs.nitmodFixedPhysicsFps;
+	cg_pmove.nitmodProneDelay = NITMOD_UsesNitmodHud() ? NITMOD_SimpleConfig()->proneDelay : 0;
+	cg_pmove.nitmodCrouchStandDelay = NITMOD_UsesNitmodHud() ? NITMOD_SimpleConfig()->crouchStandDelay : 0;
+	cg_pmove.nitmodStandCrouchDelay = NITMOD_UsesNitmodHud() ? NITMOD_SimpleConfig()->standCrouchDelay : 0;
 	cg_pmove.nitmodDoubleJump = NITMOD_SimpleConfig()->doubleJump;
 	cg_pmove.nitmodLeanEnabled = NITMOD_UsesOriginalProtocol();
 	cg_pmove.nitmodReloadEnabled = !Q_stricmp(Info_ValueForKey(CG_ConfigString(CS_SERVERINFO), "gamename"), "nitmod");
@@ -936,6 +906,8 @@ void CG_PredictPlayerState( void ) {
 	oldPlayerState = cg.predictedPlayerState;
 
 	current = trap_GetCurrentCmdNumber();
+	if(current < cg.lastPredictedCommand || cg.snap->serverTime < cg.lastPhysicsTime)
+		CG_NitmodResetMovementDelayPrediction();
 
 	// rain - fill in the current cmd with the latest prediction from
 	// cg.pmext (#166)
@@ -983,6 +955,54 @@ void CG_PredictPlayerState( void ) {
 
 	cg_pmove.pmove_fixed = pmove_fixed.integer;// | cg_pmove_fixed.integer;
 	cg_pmove.pmove_msec = pmove_msec.integer;
+
+	/* Original CG_PredictPlayerState 0x9ca41/0x9cc70: 66 saved states.
+	 * Turning optimization off retains the existing full Pmove path.
+	 * Input-mode changes and backwards command clocks invalidate native
+	 * cache entries as well as the original teleport/snapshot checks. */
+	optimize = cg_optimizePrediction.integer != 0;
+	predictCmd = current - CMD_BACKUP + 1;
+	if(!optimize || resetCache || !previousOptimize || previousDelayEpoch != nitmodDelayEpoch ||
+	   previousFixed != cg_pmove.pmove_fixed || previousMsec != cg_pmove.pmove_msec ||
+	   previousNitmodFixed != cg_pmove.nitmodFixedPhysics || previousNitmodFps != cg_pmove.nitmodFixedPhysicsFps ||
+	   previousProneDelay != cg_pmove.nitmodProneDelay ||
+	   previousCrouchStandDelay != cg_pmove.nitmodCrouchStandDelay ||
+	   previousStandCrouchDelay != cg_pmove.nitmodStandCrouchDelay ||
+	   previousClient != cg.predictedPlayerState.clientNum || current < cg.lastPredictedCommand ||
+	   cg.physicsTime < cg.lastPhysicsTime || cg.nextFrameTeleport || cg.thisFrameTeleport) {
+		cg.lastPredictedCommand = 0;
+		cg.backupStateTail = cg.backupStateTop;
+	} else if(cg.physicsTime == cg.lastPhysicsTime) {
+		predictCmd = cg.lastPredictedCommand + 1;
+	} else {
+		int i, error = -1;
+		for(i = cg.backupStateTop; i != cg.backupStateTail; i = (i + 1) % MAX_BACKUP_STATES) {
+			if(cg.backupStates[i].commandTime != cg.predictedPlayerState.commandTime) continue;
+			error = CG_PredictionOk(&cg.predictedPlayerState, &cg.backupStates[i]);
+			if(!error) {
+				*cg_pmove.ps = cg.backupStates[i];
+				cg.backupStateTop = (i + 1) % MAX_BACKUP_STATES;
+				predictCmd = cg.lastPredictedCommand + 1;
+			} else if(cg_showmiss.integer) CG_Printf("errorcode %d at %d\n", error, cg.time);
+			break;
+		}
+		if(error) {
+			cg.lastPredictedCommand = 0;
+			cg.backupStateTail = cg.backupStateTop;
+		}
+	}
+	cg.lastPhysicsTime = cg.physicsTime;
+	stateIndex = cg.backupStateTop;
+	previousOptimize = optimize;
+	previousDelayEpoch = nitmodDelayEpoch;
+	previousFixed = cg_pmove.pmove_fixed;
+	previousNitmodFixed = cg_pmove.nitmodFixedPhysics;
+	previousNitmodFps = cg_pmove.nitmodFixedPhysicsFps;
+	previousProneDelay = cg_pmove.nitmodProneDelay;
+	previousCrouchStandDelay = cg_pmove.nitmodCrouchStandDelay;
+	previousStandCrouchDelay = cg_pmove.nitmodStandCrouchDelay;
+	previousMsec = cg_pmove.pmove_msec;
+	previousClient = cg.predictedPlayerState.clientNum;
 
 	// run cmds
 	moved = qfalse;
@@ -1100,10 +1120,53 @@ void CG_PredictPlayerState( void ) {
 		// previously ran this cmd (or, this will be the
 		// current predicted data if this is the current cmd)  (#166)
 		memcpy(&pmext, &oldpmext[cmdNum & CMD_MASK], sizeof(pmoveExt_t));
+		{
+			nitmodDelayCommand_t *saved = &nitmodDelayCommands[cmdNum & CMD_MASK];
+			if(!delayStateReady) {
+				if(saved->valid && saved->commandNumber == cmdNum &&
+				   saved->commandTime == cg_pmove.cmd.serverTime) delayState = saved->before;
+				else CG_NitmodReadDelayState(&delayState, &cg.pmext);
+				delayStateReady = qtrue;
+			}
+			CG_NitmodWriteDelayState(&pmext, &delayState);
+			saved->valid = qtrue;
+			saved->commandNumber = cmdNum;
+			saved->commandTime = cg_pmove.cmd.serverTime;
+			saved->before = delayState;
+		}
 
 		fflush(stdout);
 
-		Pmove( &cg_pmove );
+		if(optimize && cmdNum < predictCmd &&
+		   stateIndex != cg.backupStateTail &&
+		   (stateIndex + 1) % MAX_BACKUP_STATES != cg.backupStateTop &&
+		   cg.backupStates[stateIndex].commandTime == cg_pmove.cmd.serverTime) {
+			*cg_pmove.ps = cg.backupStates[stateIndex];
+			pmext = backupPmext[stateIndex];
+			stateIndex = (stateIndex + 1) % MAX_BACKUP_STATES;
+			++numPlayedBack;
+		} else {
+			/* A missing/stale entry cannot be replayed. Recompute this and
+			 * all later commands from the last known state. */
+			if(optimize && cmdNum < predictCmd) {
+				predictCmd = cmdNum;
+				cg.backupStateTail = stateIndex;
+			}
+			Pmove(&cg_pmove);
+			++numPredicted;
+			if(optimize) {
+				int next = (stateIndex + 1) % MAX_BACKUP_STATES;
+				cg.lastPredictedCommand = cmdNum;
+				if(next != cg.backupStateTop) {
+					cg.backupStates[stateIndex] = *cg_pmove.ps;
+					backupPmext[stateIndex] = pmext;
+					stateIndex = next;
+					cg.backupStateTail = next;
+				}
+			}
+		}
+
+		CG_NitmodReadDelayState(&delayState, &pmext);
 
 		moved = qtrue;
 
@@ -1111,7 +1174,9 @@ void CG_PredictPlayerState( void ) {
 		CG_TouchTriggerPrediction();
 	}
 
-	if ( cg_showmiss.integer > 1 ) {
+	if(cg_showmiss.integer & 2)
+		CG_Printf("cg.time: %d, numPredicted: %d, numPlayedBack: %d\n", cg.time, numPredicted, numPlayedBack);
+	if ( cg_showmiss.integer & 4 ) {
 		CG_Printf( "[%i : %i] ", cg_pmove.cmd.serverTime, cg.time );
 	}
 

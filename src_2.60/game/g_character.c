@@ -3,6 +3,7 @@
 */
 
 #include "g_local.h"
+#include "g_nitmod_mdx.h"
 
 static char text[100000];			// <- was causing callstacks >64k
 
@@ -106,7 +107,7 @@ qboolean G_RegisterCharacter( const char *characterFile, bg_character_t *charact
 		}
 	}
 
-	return qtrue;
+	return G_NITMOD_MDXRegisterCharacter(character,characterDef.mesh);
 }
 
 /*

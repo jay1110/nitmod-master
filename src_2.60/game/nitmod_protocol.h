@@ -10,6 +10,10 @@ int NITMOD_ParseProtocolUnsigned( const char *text, unsigned int *value );
 int NITMOD_ParseProtocolInteger( const char *text, int *value );
 /* Signed decimal snapshots may contain negative team scores and settings. */
 int NITMOD_ParseProtocolSigned( const char *text, int *value );
+/* Original 32-bit strtol(base10): whitespace/sign and numeric prefixes,
+ * invalid input ->0, range overflow saturates to signed32. For recovered
+ * Cvar/configstring consumers only; reliable wire parsers remain strict. */
+int NITMOD_ParseOriginalDecimal32( const char *text );
 /* Finite decimal float; no whitespace, hexadecimal, NaN or infinity. */
 int NITMOD_ParseProtocolFloat( const char *text, float *value );
 /* Original uppercase =XX text codec. Encoding requires distinct buffers;
@@ -51,6 +55,10 @@ int NITMOD_BuildChatCommand( const char *command, const char *text,
 /* Server spawn supports the recovered six-slot class primary lists. */
 #define NITMOD_FEATURE_CLASS_PRIMARIES   ( 1u << 15 )
 #define NITMOD_FEATURE_PACK_CHARGE       ( 1u << 16 )
+/* sf0/sf1 carry original ready/bot/mute bits without changing ET score rows. */
+#define NITMOD_FEATURE_SCORE_FLAGS       ( 1u << 17 )
+/* Native full-width companion for the original five live HUD counters. */
+#define NITMOD_FEATURE_HUD_STATS         ( 1u << 18 )
 
 /* Complete original ncp/SrvMsgs table; out-of-range reasons return NULL. */
 const char *NITMOD_ServerMessageText(int reason);
@@ -64,7 +72,7 @@ const char *NITMOD_WeaponLimitText( int reason );
 	NITMOD_FEATURE_SIMPLE_CS | NITMOD_FEATURE_OBJECTIVES | NITMOD_FEATURE_FIRETEAMS | \
 	NITMOD_FEATURE_TEAM_SCORES | NITMOD_FEATURE_MAP_END_STATS | NITMOD_FEATURE_SPREE_EVENTS | \
 	NITMOD_FEATURE_HIT_SOUNDS | NITMOD_FEATURE_WEAPON_MESSAGES | NITMOD_FEATURE_RELOAD_PREFS | NITMOD_FEATURE_SHOVE_SOUND | \
-	NITMOD_FEATURE_CLASS_HEALTH | NITMOD_FEATURE_SCORE_KD | NITMOD_FEATURE_CLASS_PRIMARIES | NITMOD_FEATURE_PACK_CHARGE )
+	NITMOD_FEATURE_CLASS_HEALTH | NITMOD_FEATURE_SCORE_KD | NITMOD_FEATURE_CLASS_PRIMARIES | NITMOD_FEATURE_PACK_CHARGE | NITMOD_FEATURE_SCORE_FLAGS | NITMOD_FEATURE_HUD_STATS )
 #define NITMOD_FEATURES_SERVER NITMOD_FEATURES_CLIENT
 
 /* Recovered extended-configstring layout; this differs from native ET CS. */

@@ -363,6 +363,8 @@ extern const unsigned int aReinfSeeds[MAX_REINFSEEDS];
 #define CS_FILTERCAMS					39
 /* Native ET layout equivalent of original Nitmod CS36 (InfoKey W). */
 #define CS_NITMOD_INFO                   40
+/* Original Nitmod CS38 client Cvar restrictions in the native layout. */
+#define CS_NITMOD_SVCVARS                41
 
 #define	CS_MODELS						64
 #define	CS_SOUNDS						( CS_MODELS +				MAX_MODELS					)
@@ -511,6 +513,11 @@ typedef struct {
 	int			lastRecoilDeltaTime;
 	
 	qboolean	releasedFire;
+	/* Nitmod posture state; module-local, copied with prediction history. */
+	int nitmodCrouchStandUntil;
+	int nitmodStandCrouchUntil;
+	qboolean nitmodCrouchStarted; /* inverse of original firstTime latch */
+	qboolean nitmodWasCrouching;
 } pmoveExt_t;	// data used both in client and server - store it here
 				// instead of playerstate to prevent different engine versions of playerstate between XP and MP
 
@@ -591,6 +598,14 @@ typedef struct {
 	int nitmodVelocityToSpread;
 	int nitmodViewChangeToSpread;
 	float nitmodDoubleJumpHeight;
+	qboolean nitmodFixedPhysics;
+	int nitmodFixedPhysicsFps;
+	/* Server-only voice dispatch, never serialized or replayed by prediction. */
+	void (*nitmodVoiceChat)(int clientNum, const char *id);
+	/* n_proneDelay is a mode; the two crouch delays are milliseconds. */
+	int nitmodProneDelay;
+	int nitmodCrouchStandDelay;
+	int nitmodStandCrouchDelay;
 } pmove_t;
 
 /* Original playerState slot 0x398: holdable[2], signed lean-button state. */
@@ -601,6 +616,8 @@ void BG_NITMOD_CopyLeanState(const playerState_t *ps, entityState_t *state);
 void PM_UpdateViewAngles( playerState_t *ps, pmoveExt_t *pmext, usercmd_t *cmd, void (trace)( trace_t *results, const vec3_t start, const vec3_t mins, const vec3_t maxs, const vec3_t end, int passEntityNum, int contentMask ), int tracemask );
 qboolean BG_NITMOD_CheckAirJump(pmove_t *move);
 int Pmove (pmove_t *pmove);
+void PmovePredict(pmove_t *pmove, float frametime);
+void BG_NITMOD_SnapVelocity(pmove_t *move, int msec, const vec3_t previousVelocity);
 
 //===================================================================================
 
@@ -653,7 +670,11 @@ typedef enum {
 	// Rafael - mg42		// (SA) I don't understand these here.  can someone explain?
 	PERS_HWEAPON_USE,
 	// Rafael wolfkick
-	PERS_WOLFKICK
+	PERS_WOLFKICK,
+	/* Native Nitmod snapshot contact counters; the engine already transmits
+	 * these two spare slots as signed shorts. Original wire slots stay 1/2. */
+	PERS_NITMOD_HEAD_HITS,
+	PERS_NITMOD_BODY_HITS
 } persEnum_t;
 
 

@@ -35,7 +35,9 @@ qboolean G_NITMOD_PoisonAttack(gentity_t *attacker) {
 	trace_t trace;
 	vec3_t start, end, direction, localRight, localUp;
 	gentity_t *victim;
-	if(!attacker || !attacker->client || !g_poison.integer) return qfalse;
+	/* Original Weapon_Poison does not recheck g_poison: it gates the grant,
+	 * so changing it to0 cannot disable a syringe the player already owns. */
+	if(!attacker || !attacker->client) return qfalse;
 	AngleVectors(attacker->client->ps.viewangles, direction, localRight, localUp);
 	/* Weapon_Poison keeps fractional coordinates and lowers the leaned
 	 * muzzle, unlike the ET activation helper (which also SnapVectors it). */
@@ -54,7 +56,7 @@ qboolean G_NITMOD_PoisonAttack(gentity_t *attacker) {
 	victim = &g_entities[trace.entityNum];
 	/* Original client+0x154 is the invulnerability powerup expiry, also
 	 * written by the typed NITMOD_SetSpawnProtection path. */
-	if(!victim->client || victim->health <= 0 ||
+	if(!victim->client ||
 		victim->client->ps.powerups[PW_INVULNERABLE] >= level.time) return qfalse;
 	/* Original Weapon_Poison ELF 0xf36b4 / 0xf3736: friendly-fire bit 0,
 	 * with the team restriction bypassed only in Deathmatch (8). */
@@ -80,10 +82,9 @@ void G_NITMOD_RunPoison(gentity_t *victim) {
 	gentity_t *attacker = NULL;
 	int damage, interval;
 	if(!victim || !(client = victim->client) || !(client->ps.eFlags & NITMOD_EF_POISONED)) return;
-	if(victim->health <= 0 || client->sess.sessionTeam == TEAM_SPECTATOR || !client->nitmodPoisonStacks) {
-		G_NITMOD_ClearPoison(victim);
-		return;
-	}
+	/* The original outer ClientThink skips spectators and limbo without
+	 * clearing their state; PM_DEAD alone does not stop poison damage. */
+	if(client->sess.sessionTeam == TEAM_SPECTATOR || (client->ps.pm_flags & PMF_LIMBO)) return;
 	if(client->nitmodPoisonNextTick >= level.time) return;
 	if(client->nitmodPoisonAttacker >= 0 && client->nitmodPoisonAttacker < level.maxclients)
 		attacker = &g_entities[client->nitmodPoisonAttacker];

@@ -1,11 +1,17 @@
 #include "g_nitmod_lua.h"
 #include "g_local.h"
+#include "g_nitmod_db_lifecycle.h"
+#include "g_nitmod_server_cvars.h"
+#include "g_nitmod_nxac.h"
+#include "g_nitmod_nxac_transfer.h"
+#include "g_nitmod_mdx.h"
 static void ClientSpawnContext(gentity_t *ent,qboolean revived,qboolean teamChange,qboolean restoreHealth);
 #include "g_nitmod_etbot_lifecycle.h"
 #include "g_nitmod_legacy_cvars.h"
 #include "g_nitmod_restrictions.h"
 #include "g_nitmod_integrity.h"
 #include "g_nitmod_abilities.h"
+#include "nitmod_powerup_ids.h"
 #include "nitmod_protocol.h"
 #include "nitmod_secondary_weapon.h"
 #include "nitmod_class_primaries.h"
@@ -380,6 +386,7 @@ void CopyToBodyQue( gentity_t *ent ) {
 //	trap_UnlinkEntity (body);
 
 	body->s = ent->s;
+	G_NITMOD_MDXCopy(body, ent);
 	body->s.eFlags = EF_DEAD;		// clear EF_TALK, etc
 
 	if( ent->client->ps.eFlags & EF_HEADSHOT ) {
@@ -467,6 +474,7 @@ void CopyToBodyQue( gentity_t *ent ) {
 
 
 	VectorCopy ( body->s.pos.trBase, body->r.currentOrigin );
+	G_NITMOD_MDXUpdate(body);
 	trap_LinkEntity (body);
 }
 
@@ -868,7 +876,8 @@ static void G_NITMOD_ApplySlashKillCharge(gclient_t *client) {
 	if(!client || !client->nitmodSlashKillPending) return;
 	options = G_NITMOD_LegacyCvarInteger("g_slashKill", 0);
 	if(options & 1) {
-		client->ps.classWeaponTime = level.time - G_NITMOD_ClassChargeTime(client) / 2;
+		/* Original x87 truncates only after subtraction, including odd times. */
+		client->ps.classWeaponTime = (int)((double)level.time - (double)G_NITMOD_ClassChargeTime(client) * 0.5);
 	} else if(options & 2) {
 		client->ps.classWeaponTime = level.time;
 	} else if(options & 4) {
@@ -971,6 +980,72 @@ static qboolean G_NITMOD_AddSpecialClassTool(gclient_t *client, weapon_t weapon)
 	ammo = GetAmmoTableData(weapon);
 	return AddWeaponToPlayer(client, weapon, ammo->defaultStartingAmmo,
 		ammo->defaultStartingClip, qfalse);
+}
+
+/* Original G_AddClassSpecificTools.part.3 0x47db0 and wrapper0x49f60.
+ * Class stealing needs this tool-only grant: no health, primary ammunition,
+ * charge timestamp or respawn-latch reset. Existing spawn primitives retain
+ * custom starting ammo, reward bonuses and bot notifications. */
+void G_NITMOD_AddClassSpecificTools(gclient_t *client) {
+	int pc, war;
+	unsigned int dmOptions, skills;
+	qboolean deathmatch, binoculars;
+	if(!client || client->sess.sessionTeam < TEAM_AXIS || client->sess.sessionTeam > TEAM_ALLIES) return;
+	war = G_NITMOD_ConfiguredWarMode();
+	if((unsigned int)war - 1u < 4u) return;
+	pc = client->sess.playerType;
+	deathmatch = g_gametype.integer == GT_WOLF_DM;
+	dmOptions = (unsigned int)g_DMOptions.integer;
+	skills = client->sess.nitmodSkillMasks[SK_EXPLOSIVES_AND_CONSTRUCTION];
+	binoculars = (client->sess.nitmodSkillMasks[SK_BATTLE_SENSE] & 2u) != 0;
+	G_NITMOD_GrantAdrenalineSpawn(client, G_NITMOD_FirstAidUnlocks(client),
+		(unsigned int)G_NITMOD_LegacyCvarInteger("g_adrenClasses", 2),
+		(unsigned int)G_NITMOD_LegacyCvarInteger("g_adrenaline", 0),
+		war, GetAmmoTableData(WP_MEDIC_ADRENALINE));
+#define CLASS_TOOL(w) AddWeaponToPlayer(client, (w), GetAmmoTableData(w)->defaultStartingAmmo, GetAmmoTableData(w)->defaultStartingClip, qfalse)
+	switch(pc) {
+	case PC_ENGINEER:
+		if(!deathmatch) AddWeaponToPlayer(client, WP_DYNAMITE, 0, 1, qfalse);
+		if(!deathmatch || (dmOptions & 0xb00u)) AddWeaponToPlayer(client, WP_PLIERS, 0, 1, qfalse);
+		if(!deathmatch || (dmOptions & 0x100u)) CLASS_TOOL(WP_LANDMINE);
+		if((skills & 32u) && (G_NITMOD_ConfiguredWeaponFlags() & 4) &&
+		   (!deathmatch || (dmOptions & 0x2000u))) CLASS_TOOL(WP_BOMB);
+		G_NITMOD_AddSpecialClassTool(client, WP_TRIPMINE);
+		G_NITMOD_AddSpecialClassTool(client, WP_POISON_MINE);
+		break;
+	case PC_MEDIC:
+		if(!deathmatch) { CLASS_TOOL(WP_MEDIC_SYRINGE); CLASS_TOOL(WP_MEDKIT); }
+		break;
+	case PC_FIELDOPS:
+		if(!(G_NITMOD_LegacyCvarInteger("g_fieldOps", 0) & 1) ||
+		   (client->sess.nitmodSkillMasks[SK_SIGNALS] & 2u)) binoculars = qtrue;
+		if(!deathmatch) {
+			AddWeaponToPlayer(client, WP_AMMO, 0, 1, qfalse);
+			CLASS_TOOL(WP_SMOKE_MARKER);
+		}
+		break;
+	case PC_COVERTOPS:
+		if(!deathmatch) CLASS_TOOL(WP_SMOKE_BOMB);
+		G_NITMOD_AddSpecialClassTool(client, WP_POISON_BOMB);
+		if(!deathmatch || (dmOptions & 0x1000u)) {
+			qboolean planted = G_FindSatchel(&g_entities[client->ps.clientNum]) != NULL;
+			AddWeaponToPlayer(client, WP_SATCHEL, 0, planted ? 0 : 1, qfalse);
+			AddWeaponToPlayer(client, WP_SATCHEL_DET, 0, planted ? 1 : 0, qfalse);
+		}
+		binoculars = qtrue;
+		break;
+	default: break;
+	}
+	if(binoculars) {
+		AddWeaponToPlayer(client, WP_BINOCULARS, 1, 0, qfalse);
+		client->ps.stats[STAT_KEYS] |= 1 << INV_BINOCS;
+	}
+	if(!deathmatch && (skills & 16u) &&
+	   (pc == PC_ENGINEER || (G_NITMOD_LegacyCvarInteger("g_skills", 0) & 1)))
+		client->ps.powerups[NITMOD_PW_FLAK] = INT_MAX;
+	if(g_poison.integer && (client->sess.nitmodSkillMasks[SK_LIGHT_WEAPONS] & 16u))
+		CLASS_TOOL(WP_POISON_SYRINGE);
+#undef CLASS_TOOL
 }
 
 void SetWolfSpawnWeapons( gclient_t *client )
@@ -1291,6 +1366,11 @@ void SetWolfSpawnWeapons( gclient_t *client )
 			GetAmmoTableData(extra)->defaultStartingClip, qfalse);
 	}
 	if(g_knifeonly.integer != 1) {
+		/* Original client+0x158 is the flak powerup, not binocular ammo.
+		 * g_skills bit 1 shares Engineering reward16 across classes. */
+		if(!deathmatch && (client->sess.nitmodSkillMasks[SK_EXPLOSIVES_AND_CONSTRUCTION] & 16u) &&
+			(pc == PC_ENGINEER || (G_NITMOD_LegacyCvarInteger("g_skills", 0) & 1)))
+			client->ps.powerups[NITMOD_PW_FLAK] = INT_MAX;
 		/* Class callers of original G_AddClassSpecificTools.part.3.
 		 * War modes have already returned before ordinary class grants. */
 		if(pc == PC_ENGINEER) {
@@ -1360,22 +1440,29 @@ int G_CountTeamMedics( team_t team, qboolean alivecheck ) {
 //
 int G_NITMOD_ClassMaxHealth(int playerClass) {
 	char text[MAX_CVAR_VALUE_STRING], *cursor, *token;
-	int i, override = 0;
+	int i, value;
+	if(playerClass < PC_SOLDIER || playerClass > PC_COVERTOPS) return 0;
 	Q_strncpyz(text, n_classesMaxHP.string, sizeof(text));
 	cursor = text;
-	for(i = 0; i < NUM_PLAYER_CLASSES; ++i) {
-		token = COM_Parse(&cursor);
-		if(!*token) break;
-		if(i == playerClass &&
-			(!NITMOD_ParseProtocolSigned(token, &override) || override < 0 || override > 32767))
-			override = 0;
+	/* Original nitrox_ParseMaxHP 0x10f550 uses strtok(" "), not the
+	 * command parser: tabs/newlines, quotes and comments are not separators. */
+	for(i = 0; i <= playerClass; ++i) {
+		while(*cursor == ' ') ++cursor;
+		if(!*cursor) return 0;
+		token = cursor;
+		while(*cursor && *cursor != ' ') ++cursor;
+		if(*cursor) *cursor++ = 0;
+		if(i == playerClass) {
+			value = NITMOD_ParseOriginalDecimal32(token);
+			return value > 0 ? value : 0;
+		}
 	}
-	return override;
+	return 0;
 }
 
 void G_NITMOD_SetHealthLimits(gclient_t *client, int numMedics, int war, int gametype, int override) {
 	int maximum;
-	if(!client || numMedics < 0 || numMedics > MAX_CLIENTS || override < 0 || override > 32767) return;
+	if(!client || numMedics < 0 || numMedics > MAX_CLIENTS || override < 0) return;
 	/* Original AddMedicTeamBonus: either special mode suppresses team and
 	 * battle-sense bonuses. The medic overhealth exception requires BOTH. */
 	maximum = 100;
@@ -1525,6 +1612,19 @@ if desired.
 ============
 */
 #include "g_nitmod_accounts.h"
+/* Keep the server's userinfo and published player name in sync after a hit.
+ * Original ClientConnect/ClientUserinfoChanged normalize before matching. */
+static qboolean G_NITMOD_CensorUserinfoName(int clientNum, char *userinfo) {
+	char name[MAX_INFO_STRING];
+	Q_strncpyz(name, Info_ValueForKey(userinfo, "name"), sizeof(name));
+	if(!G_NITMOD_CensorText("g_censorNames", name, sizeof(name))) return qfalse;
+	G_LogPrintf("[NAME CENSOR] Client %i Censored Name: \"%s\"\n",
+		clientNum, Info_ValueForKey(userinfo, "name"));
+	Info_SetValueForKey(userinfo, "name", name);
+	trap_SetUserinfo(clientNum, userinfo);
+	return qtrue;
+}
+
 void ClientUserinfoChanged( int clientNum ) {
 	gentity_t *ent;
 	char	*s;
@@ -1605,14 +1705,16 @@ void ClientUserinfoChanged( int clientNum ) {
 
 	// set name
 	Q_strncpyz( oldname, client->pers.netname, sizeof( oldname ) );
-	s = Info_ValueForKey (userinfo, "name");
-	ClientCleanName( s, client->pers.netname, sizeof(client->pers.netname) );
-	if( G_NITMOD_CensorText("g_censorNames", client->pers.netname,
-		sizeof(client->pers.netname)) &&
-		(G_NITMOD_LegacyCvarInteger("g_censorPenalty", 1) & 2) ) {
+	if(!(ent->r.svFlags & SVF_BOT) && !client->pers.nitmodDemoClient &&
+		G_NITMOD_CensorUserinfoName(clientNum, userinfo) &&
+		(G_NITMOD_LegacyCvarInteger("g_censorPenalty", 1) & 2)) {
+		G_LogPrintf("[DROPCLIENT] Client %d Name censor (%s)\n",
+			clientNum, Info_ValueForKey(userinfo, "name"));
 		trap_DropClient(clientNum, "Name censor. Please change your name.", 0);
 		return;
 	}
+	s = Info_ValueForKey(userinfo, "name");
+	ClientCleanName(s, client->pers.netname, sizeof(client->pers.netname));
 
 	if ( client->pers.connected == CON_CONNECTED ) {
 		if ( strcmp( oldname, client->pers.netname ) ) {
@@ -1750,9 +1852,19 @@ char *ClientConnect( int clientNum, qboolean firstTime, qboolean isBot ) {
 
 	ent = &g_entities[ clientNum ];
 	G_NITMOD_CvarScanResetClient(clientNum);
+	G_NITMOD_NxACResetClient(clientNum);
+	G_NITMOD_NxACTransferResetClient(clientNum);
+	G_NITMOD_MDXReset(&g_entities[clientNum]);
 	G_NITMOD_ResetClient(clientNum);
 
 	trap_GetUserinfo( clientNum, userinfo, sizeof( userinfo ) );
+
+	if(!isBot && G_NITMOD_CensorUserinfoName(clientNum, userinfo) &&
+		(G_NITMOD_LegacyCvarInteger("g_censorPenalty", 1) & 2)) {
+		G_LogPrintf("[DROPCLIENT] Client %d Name censor (%s)\n",
+			clientNum, Info_ValueForKey(userinfo, "name"));
+		return "Name censor. Please change your name.";
+	}
 
 	/* Bots keep their script-selected names.  Human names are cleaned with the
 	 * same routine used by ClientUserinfoChanged before applying Nitmod's
@@ -1766,17 +1878,6 @@ char *ClientConnect( int clientNum, qboolean firstTime, qboolean isBot ) {
 				clientNum, cleanName);
 			return va("Your name is too short, it must contain at least %d visible characters.\n",
 				minimumNameLength);
-		}
-	}
-	if( !isBot ) {
-		ClientCleanName( Info_ValueForKey( userinfo, "name" ), cleanName,
-			sizeof(cleanName) );
-		if( G_NITMOD_CensorText("g_censorNames", cleanName,
-			sizeof(cleanName)) &&
-			(G_NITMOD_LegacyCvarInteger("g_censorPenalty", 1) & 2) ) {
-			G_LogPrintf("[DROPCLIENT] Client %d censored name (%s)\n",
-				clientNum, cleanName);
-			return "Name censor. Please change your name.";
 		}
 	}
 
@@ -1819,6 +1920,11 @@ char *ClientConnect( int clientNum, qboolean firstTime, qboolean isBot ) {
 				return "Invalid password";
 			}
 		}
+	}
+
+	{
+		const char *denial = G_NITMOD_CheckConnection(clientNum, userinfo, isBot);
+		if (denial) return (char *)denial;
 	}
 
 	// Gordon: porting q3f flag bug fix
@@ -2004,6 +2110,7 @@ void ClientBegin( int clientNum )
 	int			spawn_count, lives_left;		// DHM - Nerve
 
 	ent = g_entities + clientNum;
+	G_NITMOD_MDXReset(ent);
 	restoreHealth = ent->health <= 0 || G_NITMOD_LegacyCvarInteger("g_teamChangeKills", 1);
 
 	client = level.clients + clientNum;
@@ -2019,6 +2126,7 @@ void ClientBegin( int clientNum )
 	ent->pain = 0;
 	ent->client = client;
 
+	if(notifyLuaBegin) G_NITMOD_SendForcedCvars(clientNum);
 	client->pers.connected = CON_CONNECTED;
 	client->pers.teamState.state = TEAM_BEGIN;
 
@@ -2237,6 +2345,9 @@ static void ClientSpawnContext( gentity_t *ent, qboolean revived, qboolean teamC
 	int			savedPing;
 	int			savedTeam;
 	int			savedSlotNumber;
+	qboolean savedSlashKillPending;
+	int savedSlashKillChargeTime, savedSlashKillDeathTime;
+	int savedSwitchTeamTime;
 	index = ent - g_entities;
 	client = ent->client;
 
@@ -2298,6 +2409,13 @@ static void ClientSpawnContext( gentity_t *ent, qboolean revived, qboolean teamC
 
 	ent->s.eFlags &= ~EF_MOUNTEDTANK;
 
+	/* Original slash-kill latch is persistent; sidecar fields must survive
+	 * this spawn reset until SetWolfSpawnWeapons consumes them. */
+	/* Original client+0x974 lies inside the preserved persistent block. */
+	savedSwitchTeamTime = client->switchTeamTime;
+	savedSlashKillPending = client->nitmodSlashKillPending;
+	savedSlashKillChargeTime = client->nitmodSlashKillChargeTime;
+	savedSlashKillDeathTime = client->nitmodSlashKillDeathTime;
 	saved			= client->pers;
 	savedSess		= client->sess;
 	savedPing		= client->ps.ping;
@@ -2319,6 +2437,10 @@ static void ClientSpawnContext( gentity_t *ent, qboolean revived, qboolean teamC
 		client->maxlivescalced = set;
 	}
 
+	client->switchTeamTime = savedSwitchTeamTime;
+	client->nitmodSlashKillPending = savedSlashKillPending;
+	client->nitmodSlashKillChargeTime = savedSlashKillChargeTime;
+	client->nitmodSlashKillDeathTime = savedSlashKillDeathTime;
 	client->pers			= saved;
 	client->sess			= savedSess;
 	client->ps.ping			= savedPing;
@@ -2592,11 +2714,14 @@ void ClientDisconnect( int clientNum ) {
 	int			i;
 
 	G_NITMOD_CvarScanResetClient(clientNum);
+	G_NITMOD_NxACResetClient(clientNum);
+	G_NITMOD_NxACTransferResetClient(clientNum);
+	G_NITMOD_MDXReset(&g_entities[clientNum]);
 	G_NITMOD_LuaClientEvent("et_ClientDisconnect",clientNum);
 	G_NITMOD_GlobalStatsUpload(clientNum);
 	G_NITMOD_GlobalStatsReset(clientNum);
 	Bot_Event_ClientDisConnected(clientNum);
-	G_NITMOD_AccountSaveXP(clientNum);
+	if(!G_NITMOD_DatabaseIsShuttingDown()) G_NITMOD_AccountSaveXP(clientNum);
 	G_NITMOD_AccountReset(clientNum);
 	G_NITMOD_ResetClient( clientNum );
 	ent = g_entities + clientNum;
@@ -2610,7 +2735,7 @@ void ClientDisconnect( int clientNum ) {
 
 	G_RemoveClientFromFireteams( clientNum, qtrue, qfalse );
 	G_RemoveFromAllIgnoreLists( clientNum );
-	G_LeaveTank( ent, qfalse );
+	G_LeaveTank( ent, qfalse, qfalse );
 
 	// stop any following clients
 	for ( i = 0 ; i < level.numConnectedClients ; i++ ) {

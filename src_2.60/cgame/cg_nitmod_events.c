@@ -145,8 +145,9 @@ qboolean CG_NitmodExtendedEvent(centity_t *cent, int wireEvent) {
 		if(wireEvent == 103 && !cg.snap) return qtrue;
 		client = wireEvent == 103 ? cg.snap->ps.clientNum : es->number;
 		if(client < 0 || client >= MAX_GENTITIES) return qtrue;
-		if(cgs.gameSounds[es->eventParm] > 0)
-			trap_S_StartSoundVControl(NULL, client, CHAN_AUTO, cgs.gameSounds[es->eventParm], 255);
+		/* Original private events address the fixed bank, never dynamic NCS. */
+		if(NITMOD_FixedSound(es->eventParm) > 0)
+			trap_S_StartSoundVControl(NULL, client, CHAN_AUTO, NITMOD_FixedSound(es->eventParm), 255);
 		return qtrue;
 	case 102:
 		if(!cg.snap) return qtrue;

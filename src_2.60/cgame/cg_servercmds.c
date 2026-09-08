@@ -3,6 +3,8 @@
 // be a valid snapshot this frame
 
 #include "cg_local.h"
+#include "cg_nitmod_nxac_transfer.h"
+#include "cg_nitmod_hudstats.h"
 #include "cg_nitmod_hud.h"
 #include "cg_nitmod_config.h"
 #include "cg_nitmod_log.h"
@@ -25,6 +27,8 @@ CG_ParseScores
 =================
 */
 // Gordon: NOTE: team doesnt actually signify team, think i was on drugs that day.....
+static int nitmodScoreFlagsCursor = -1;
+
 static void CG_ParseScore( team_t team ) {
 	int i, j, count, values[MAX_CLIENTS][7];
 	int first = team == TEAM_AXIS;
@@ -42,6 +46,7 @@ static void CG_ParseScore( team_t team ) {
 		if(values[i][0] < 0 || values[i][0] >= MAX_CLIENTS) return;
 	}
 	if(offset == 4) { cg.teamScores[0] = teamScores[0]; cg.teamScores[1] = teamScores[1]; }
+	if(first) nitmodScoreFlagsCursor = -1;
 	for(i = 0; i < count; ++i) {
 		score_t *score = &cg.scores[start + i];
 		clientInfo_t *client = &cgs.clientinfo[values[i][0]];
@@ -58,6 +63,27 @@ static void CG_ParseScore( team_t team ) {
 		client->score = score->score; client->powerups = score->powerUps;
 	}
 	cg.numScores = start + count;
+}
+
+
+/* Native sc rows retain ET's class word. Negotiated sf pages carry the
+ * original ready/BOT/muted bits separately and must match current row IDs. */
+static void CG_ParseNitmodScoreFlags(qboolean first) {
+ int count, i, clients[32], flags[32];
+ int start = first ? 0 : nitmodScoreFlagsCursor;
+ if(NITMOD_UsesOriginalProtocol() || !NITMOD_UsesNitmodHud() ||
+    !NITMOD_ServerSupports(NITMOD_FEATURE_SCORE_FLAGS)) return;
+ if(start < 0 || start > cg.numScores || start > MAX_CLIENTS ||
+    !NITMOD_ParseProtocolInteger(CG_Argv(1), &count) || count < 0 || count > 32 ||
+    count > cg.numScores - start || count > MAX_CLIENTS - start ||
+    trap_Argc() != 2 + count * 2) return;
+ for(i = 0; i < count; ++i) {
+  if(!NITMOD_ParseProtocolInteger(CG_Argv(2 + i * 2), &clients[i]) ||
+     clients[i] >= MAX_CLIENTS || clients[i] != cg.scores[start + i].client ||
+     !NITMOD_ParseProtocolInteger(CG_Argv(3 + i * 2), &flags[i]) || flags[i] > 7) return;
+ }
+ for(i = 0; i < count; ++i) cg.scores[start + i].nitmodFlags = flags[i];
+ nitmodScoreFlagsCursor = start + count;
 }
 
 /*
@@ -94,6 +120,26 @@ This is called explicitly when the gamestate is first received,
 and whenever the server updates any serverinfo flagged cvars
 ================
 */
+/* Original token 0x62/0x63 in CG_ParseServerinfo update only present
+ * serverinfo pairs. Values belong to the server, never client preferences. */
+static void CG_ParseNitmodFixedPhysics(const char *info) {
+ const char *cursor=info;
+ char key[MAX_INFO_KEY],text[MAX_INFO_VALUE];
+ int value;
+ if(!NITMOD_UsesNitmodHud()) {
+  cgs.nitmodFixedPhysics=0;cgs.nitmodFixedPhysicsFps=0;
+  return;
+ }
+ while(*cursor) {
+  Info_NextPair(&cursor,key,text);
+  if(!*key) break;
+  if(strcmp(key,"g_fixedphysics") && strcmp(key,"g_fixedphysicsfps")) continue;
+  if(!NITMOD_ParseProtocolInteger(text,&value)) value=0;
+  if(!strcmp(key,"g_fixedphysics")) cgs.nitmodFixedPhysics=value;
+  else cgs.nitmodFixedPhysicsFps=value;
+ }
+}
+
 void CG_ParseServerinfo( void ) {
 	const char	*info;
 	char	*mapname;
@@ -101,6 +147,7 @@ void CG_ParseServerinfo( void ) {
 	float floatValue;
 
 	info = CG_ConfigString( CS_SERVERINFO );
+	CG_ParseNitmodFixedPhysics(info);
 	if( !NITMOD_ParseProtocolInteger(Info_ValueForKey(info, "g_gametype"), &value) ||
 		value < GT_WOLF || value >= GT_MAX_GAME_TYPE ) value = GT_WOLF;
 	cg_gameType.integer = cgs.gametype = value;
@@ -594,6 +641,12 @@ static void CG_ConfigStringModified( void ) {
 	// new configstring already integrated
 	trap_GetGameState( &cgs.gameState );
 
+	/* Original CS38 is not native ET charge-times. Handle it before translation. */
+	if(NITMOD_UsesNitmodHud() && num == (NITMOD_UsesOriginalProtocol() ? 38 : CS_NITMOD_SVCVARS)) {
+		NITMOD_UpdateSvCvars();
+		return;
+	}
+
 	/* Nitmod's weapon-directory slot precedes the core layout translation. */
 	if(NITMOD_UsesNitmodHud() && num == (NITMOD_UsesOriginalProtocol() ? 36 : CS_NITMOD_INFO)) {
 		NITMOD_UpdateWeaponScripts(qtrue);
@@ -890,6 +943,7 @@ require a reload of all the media
 ===============
 */
 static void CG_MapRestart( void ) {
+	CG_NitmodResetNativeHudStats();
 	if ( cg_showmiss.integer ) {
 		CG_Printf( "CG_MapRestart\n" );
 	}
@@ -926,6 +980,7 @@ static void CG_MapRestart( void ) {
 
 	// clear pmext
 	memset( &cg.pmext, 0, sizeof(cg.pmext) );
+	CG_NitmodResetMovementDelayPrediction();
 
 	cg.pmext.bAutoReload = (cg_autoReload.integer > 0);
 
@@ -2168,6 +2223,8 @@ static void CG_ServerCommand( void ) {
 		return;
 	}
 
+	if ( CG_NITMOD_NxACTransferCommand(cmd) ) return;
+
 	if ( !strcmp( cmd, "tinfo" ) ) {
 		CG_ParseTeamInfo();
 		return;
@@ -2180,6 +2237,11 @@ static void CG_ServerCommand( void ) {
 		return;
 	}
 
+	if (!strcmp(cmd, "sf0") || !strcmp(cmd, "sf1")) {
+		CG_ParseNitmodScoreFlags(!strcmp(cmd, "sf0"));
+		return;
+	}
+
 	if ( !strcmp( cmd, "WeaponStats" ) ) {
 		CG_ParseAccuracyLog();
 		return;
@@ -2188,6 +2250,35 @@ static void CG_ServerCommand( void ) {
 	if ( !Q_stricmp( cmd, "cpm" ) ||
 		(NITMOD_UsesOriginalProtocol() && !Q_stricmp( cmd, "cpm_map" )) ) {
 		CG_AddPMItem( PM_MESSAGE, CG_LocalizeServerCommand( CG_Argv(1) ), cgs.media.voiceChatShader );
+		return;
+	}
+
+	/* Original CG_ServerCommand 0xa9675/0xa97ba: cp and announce share
+	 * text/logging rules, but only announce has the +2000ms priority channel. */
+	if ( NITMOD_UsesNitmodHud() &&
+		(!Q_stricmp(cmd, "cp") || !strcmp(cmd, "announce")) ) {
+		int args = trap_Argc();
+		int priority;
+		qboolean announcement = !strcmp(cmd, "announce");
+		char message[MAX_STRING_CHARS];
+		if(args < 3) {
+			CG_CenterPrint(CG_LocalizeServerCommand(CG_Argv(1)), 384, SMALLCHAR_WIDTH);
+			return;
+		}
+		/* Only the no-priority form is localized for display. Copy before
+		 * any further CG_Argv/va call, whose temporary storage may be reused. */
+		Q_strncpyz(message, CG_Argv(1), sizeof(message));
+		if(args == 4) {
+			char prefixed[MAX_STRING_CHARS];
+			Com_sprintf(prefixed, sizeof(prefixed), "%s%s", CG_Argv(3), message);
+			Q_strncpyz(message, prefixed, sizeof(message));
+		}
+		priority = NITMOD_ParseOriginalDecimal32(CG_Argv(2));
+		if(cg_printObjectiveInfo.integer > 0 && (args == 4 || priority > 1))
+			CG_Printf("[cgnotify]*** ^3%s: ^5%s\n", announcement ? "ANNOUNCEMENT" : "INFO",
+				CG_LocalizeServerCommand(CG_Argv(1)));
+		if(announcement) CG_NitmodPrintAnnouncement(message, 200, SMALLCHAR_WIDTH, priority);
+		else CG_CenterPrint(message, 384, SMALLCHAR_WIDTH);
 		return;
 	}
 
@@ -2212,20 +2303,6 @@ static void CG_ServerCommand( void ) {
 		else {
 			CG_CenterPrint( CG_LocalizeServerCommand( CG_Argv(1) ), SCREEN_HEIGHT - (SCREEN_HEIGHT * 0.20), SMALLCHAR_WIDTH );	//----(SA)	modified
 		}
-		return;
-	}
-	if ( NITMOD_UsesOriginalProtocol() && !strcmp( cmd, "announce" ) ) {
-		int argc = trap_Argc();
-		const char *message;
-		int priority = 0;
-		if(argc < 2 || argc > 4) return;
-		message = CG_LocalizeServerCommand(CG_Argv(1));
-		if(argc >= 3 && !NITMOD_ParseProtocolSigned(CG_Argv(2), &priority)) return;
-		if(argc == 4) message = va("%s%s", CG_Argv(3), message);
-		if(cg_printObjectiveInfo.integer > 0 && (argc == 4 || priority > 1))
-			CG_Printf("[cgnotify]*** ^3ANNOUNCEMENT: ^5%s\n", CG_LocalizeServerCommand(CG_Argv(1)));
-		if(argc < 3) CG_CenterPrint(message, SCREEN_HEIGHT - SCREEN_HEIGHT * .2f, SMALLCHAR_WIDTH);
-		else CG_NitmodPrintAnnouncement(message, 200, SMALLCHAR_WIDTH, priority);
 		return;
 	}
 
@@ -2310,7 +2387,7 @@ static void CG_ServerCommand( void ) {
 			CG_NitmodSpreeStart(actor, detail, 3);
 		return;
 	}
-	if ( !Q_stricmp( cmd, "an" ) && NITMOD_UsesOriginalProtocol() ) {
+	if ( !Q_stricmp( cmd, "an" ) && NITMOD_UsesNitmodHud() ) {
 		int type, xp;
 		int argc = trap_Argc();
 		if((argc == 2 || argc == 3) && NITMOD_ParseProtocolSigned(CG_Argv(1), &type)) {

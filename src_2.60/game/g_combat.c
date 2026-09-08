@@ -7,6 +7,8 @@
 */
 
 #include "g_local.h"
+#include "g_nitmod_mdx.h"
+#include "nitmod_powerup_ids.h"
 #include "g_nitmod_restrictions.h"
 #include "g_nitmod_weapon_definition.h"
 #include "g_nitmod_config.h"
@@ -33,7 +35,7 @@ extern void BotRecordDeath( int client, int enemy );
 extern vec3_t muzzleTrace;
 
 /* Recovered scoped-rifle branch in G_Damage (qagame 0x00079952).  In sniper
- * war, option bit 2 keeps calculated damage but marks it unprotected.  With
+ * war, option bit 2 selects original instant-kill damage.  With
  * the option disabled, the original level-five scoped-weapon reward turns a
  * live target's headshot damage into its current health. */
 static void G_NITMOD_ApplySniperWarHeadshot( gentity_t *targ,
@@ -51,7 +53,7 @@ static void G_NITMOD_ApplySniperWarHeadshot( gentity_t *targ,
 	options = (unsigned int)G_NITMOD_LegacyCvarInteger(
 		"n_sniperWarOptions", 7 );
 	if ( options & 2u ) {
-		*dflags |= DAMAGE_NO_PROTECTION;
+		*dflags |= DAMAGE_NITMOD_INSTANT_KILL;
 	} else {
 		scopedRewards = attacker->client->sess.nitmodSkillMasks[
 			SK_MILITARY_INTELLIGENCE_AND_SCOPED_WEAPONS];
@@ -451,19 +453,27 @@ static void G_NITMOD_RecordMultiKill( gentity_t *attacker ) {
 	if( !attacker || !attacker->client ||
 		!(trap_Cvar_VariableIntegerValue("g_announcer") & 4) ) return;
 	window = G_NITMOD_LegacyCvarInteger("g_multikillTime", 2000);
-	if( window < 0 || level.time - attacker->client->lastKillTime > window )
+	/* Original player_die 0x670ac..0x6713c and CSWTCH.57: signed32
+	 * elapsed time, private tiers2/3 and broadcast tiers4/5/6 only. */
+	if( (int)((unsigned int)level.time -
+		(unsigned int)attacker->client->lastKillTime) > window ) {
 		attacker->client->nitmodMultiKillCount = 1;
-	else
-		++attacker->client->nitmodMultiKillCount;
-	if( attacker->client->nitmodMultiKillCount >= 2 ) {
+		return;
+	}
+	attacker->client->nitmodMultiKillCount =
+		(int)((unsigned int)attacker->client->nitmodMultiKillCount + 1u);
+	if( attacker->client->nitmodMultiKillCount >= 2 &&
+		attacker->client->nitmodMultiKillCount <= 6 ) {
 		int detail = attacker->client->nitmodMultiKillCount - 2;
-		if( detail > 4 ) detail = 4;
-		trap_SendServerCommand(attacker->s.number,
-			va("z2 %i %i", attacker->s.number, detail));
+		if( detail < 2 )
+			trap_SendServerCommand(attacker->s.number,
+				va("z2 %i %i", attacker->s.number, detail));
+		else
+			nitmod_Announce(attacker->s.number, detail, 3);
 	}
 }
 
-static void G_NITMOD_EndReviveSpree( gentity_t *victim, gentity_t *attacker ) {
+void G_NITMOD_EndReviveSpree( gentity_t *victim, gentity_t *attacker ) {
 	int count;
 	int options;
 
@@ -491,6 +501,26 @@ static void G_NITMOD_EndReviveSpree( gentity_t *victim, gentity_t *attacker ) {
  * Do not use abs(), which is undefined for INT_MIN. */
 int G_NITMOD_ForceLimboThreshold(int configured) {
 	return configured > 0 ? -configured : configured ? configured : FORCE_LIMBO_HEALTH;
+}
+
+/* Original player_die 0x6789f..0x679be checks sess.kills (+0xc7c),
+ * separately from game_points (+0xc78), after the death/limbo and HP effects.
+ * The general rank/exit poll must not preempt that ordered completion. */
+static void G_NITMOD_CheckDeathmatchWinner(gentity_t *attacker) {
+	int limit=G_NITMOD_LegacyCvarInteger("g_DMFragLimit", 25);
+	char cs[MAX_STRING_CHARS];
+	if(!attacker || !attacker->client || limit<=0 ||
+	   attacker->client->sess.kills<limit || g_gamestate.integer!=GS_PLAYING ||
+	   level.intermissionQueued || level.intermissiontime) return;
+	trap_GetConfigstring(CS_MULTI_MAPWINNER, cs, sizeof(cs));
+	/* Original CS14 uses w=0; retain the native ET key for native readers. */
+	Info_SetValueForKey(cs, "w", "0");
+	Info_SetValueForKey(cs, "winner", "0");
+	trap_SetConfigstring(CS_MULTI_MAPWINNER, cs);
+	LogExit(va("^1Death Match^7: %s ^gwins this round",attacker->client->pers.netname));
+	trap_SendServerCommand(-1, va("DM %i", attacker->client->ps.clientNum));
+	trap_SendServerCommand(-1, va("print \"^1Death Match^7: %s ^gwins this round.\n\"",
+		attacker->client->pers.netname));
 }
 
 void player_die( gentity_t *self, gentity_t *inflictor, gentity_t *attacker, int damage, int meansOfDeath ) {
@@ -614,7 +644,7 @@ void player_die( gentity_t *self, gentity_t *inflictor, gentity_t *attacker, int
 	}
 
 	if( self->tankLink ) {
-		G_LeaveTank( self, qfalse );
+		G_LeaveTank( self, qfalse, qfalse );
 
 		killedintank = qtrue;
 	}
@@ -761,19 +791,6 @@ void player_die( gentity_t *self, gentity_t *inflictor, gentity_t *attacker, int
 				AddKillScore( attacker, WOLF_FRIENDLY_PENALTY );
 			}
 		} else {
-			/* Original g_DMOptions bit 1 awards up to 20 health for a hostile
-			 * player kill, capped at the attacker's typed maximum health. */
-			if( g_gametype.integer == GT_WOLF_DM &&
-				(g_DMOptions.integer & 1) ) {
-				int maximum = attacker->client->ps.stats[STAT_MAX_HEALTH];
-				int bonus = maximum - attacker->health;
-				if( bonus > 20 ) bonus = 20;
-				if( bonus > 0 ) {
-					attacker->health += bonus;
-					attacker->client->ps.stats[STAT_HEALTH] = attacker->health;
-					trap_SendServerCommand(attacker - g_entities, va("hpb %i", bonus));
-				}
-			}
 
 			//G_AddExperience( attacker, 1 );
 
@@ -955,30 +972,76 @@ void player_die( gentity_t *self, gentity_t *inflictor, gentity_t *attacker, int
 
 	CalculateRanks();
 
-	if( killedintank /*Gordon: automatically go to limbo from tank*/ ) {
-		limbo( self, qfalse ); // but no corpse
-	} else if( attacker && attacker->client &&
-		G_NITMOD_WeaponForcesLimbo(BG_WeaponForMOD(meansOfDeath)) ) {
-		/* Custom weaponDef limboKill: the original bypasses the revive wait
-		 * for kills attributed to a configured player weapon. */
+	/* Original player_die 0x67641: death consumes the playdead latch before
+	 * choosing any immediate-limbo or deathmatch completion branch. */
+	self->client->ps.eFlags &= ~EF_SPARE0;
+	if( killedintank ) {
+		limbo( self, qfalse );
+	} else if( (meansOfDeath == MOD_FEAR || meansOfDeath == MOD_SUICIDE) &&
+	           g_gamestate.integer == GS_PLAYING ) {
 		limbo( self, qtrue );
-	} else if( meansOfDeath == MOD_DYNAMITE &&
+	} else if( G_NITMOD_WeaponForcesLimbo(weap) ) {
+		/* The original uses the already-resolved weapon (including fear),
+		 * and does not require a player attacker for a weapon override. */
+		limbo( self, qtrue );
+	} else if( meansOfDeath == MOD_WATER &&
 		(G_NITMOD_LegacyCvarInteger("g_misc", 0) & 64) ) {
-		/* Original player_die g_misc bit 64: dynamite deaths cannot wait
-		 * for revival and enter limbo immediately. */
-		limbo( self, qtrue );
-	} else if ( (meansOfDeath == MOD_SUICIDE && g_gamestate.integer == GS_PLAYING) ) {
+		/* Original 0x6768d/0x67d25 tests wire MOD26: drowning. */
 		limbo( self, qtrue );
 	} else if( g_gametype.integer == GT_WOLF_LMS ) {
 		if( !G_CountTeamMedics( self->client->sess.sessionTeam, qtrue ) ) {
 			limbo( self, qtrue );
 		}
+	} else if( g_gametype.integer == GT_WOLF_DM ) {
+		/* Original 0x676b4..0x67727: one ordinary-fuse death grenade;
+		 * neither team relation nor warmup suppresses this option. The
+		 * excluded original MOD IDs are 57,58,31,32,0,64. */
+		if( (g_DMOptions.integer & 16) && attacker && attacker->client &&
+		    meansOfDeath != MOD_SWITCHTEAM && meansOfDeath != MOD_GOOMBA &&
+		    meansOfDeath != MOD_FALLING && meansOfDeath != MOD_SUICIDE &&
+		    meansOfDeath != MOD_UNKNOWN && meansOfDeath != MOD_GIBME ) {
+			G_NITMOD_CreateClusterNade(self, 1, qfalse);
+		}
+		/* Original 0x67738..0x67784 is the inlined AddKillScore path. */
+		if( attacker && attacker->client && !level.warmupTime && !level.lmsWinningTeam ) {
+			AddKillScore(attacker, 1);
+			CalculateRanks();
+		}
+		/* Original 0x67788..0x677f2: a gib-eligible death goes straight
+		 * to the same completion, while every other DM death enters limbo. */
+		if( self->health <= GIB_HEALTH &&
+		    G_NITMOD_WeaponGibAllowed(BG_WeaponForMOD(meansOfDeath),
+		                              G_WeaponIsExplosive(meansOfDeath)) ) {
+			GibEntity(self, killer);
+		} else {
+			limbo(self, qtrue);
+		}
+		if( attacker && attacker->client && (g_DMOptions.integer & 1) ) {
+			/* Original 0x67816..0x67885: min(health+20, baseMax), followed
+			 * by the signed delta even for a full-health or overhealed killer. */
+			long long maximum=attacker->client->ps.stats[STAT_MAX_HEALTH];
+			long long next=(long long)attacker->health+20, bonus=20;
+			if(next>=maximum) {next=maximum;bonus=maximum-attacker->health;}
+			if(next>=INT_MIN && next<=INT_MAX && bonus>=INT_MIN && bonus<=INT_MAX) {
+				attacker->health=(int)next;
+				trap_SendServerCommand(attacker-g_entities,va("hpb %i",(int)bonus));
+			}
+		}
+		G_NITMOD_CheckDeathmatchWinner(attacker);
 	}
 }
 
 qboolean IsHeadShotWeapon (int mod) {
 	int configured = G_NITMOD_WeaponHeadshotAllowed(BG_WeaponForMOD(mod), -1);
 	if(configured >= 0) return configured ? qtrue : qfalse;
+	/* Original IsHeadShotWeapon 0x666f0/0x66740/0x66750. Explicit
+	 * weapon-script overrides above take precedence over the Cvar bits. */
+	switch(mod) {
+	case MOD_KNIFE: return (G_NITMOD_ConfiguredWeaponFlags() & 1) != 0;
+	case MOD_THROWKNIFE: return (G_NITMOD_ConfiguredWeaponFlags() & 2) != 0;
+	case MOD_MOBILE_MG42: return (G_NITMOD_ConfiguredWeaponFlags() & 128) != 0;
+	default: break;
+	}
 	// players are allowed headshots from these weapons
 	if (	mod == MOD_LUGER ||
 			mod == MOD_COLT ||
@@ -1013,9 +1076,11 @@ gentity_t* G_BuildHead(gentity_t *ent) {
 	qboolean realHead;
 
 	head = G_Spawn ();
-	realHead = (G_NITMOD_LegacyCvarInteger("g_realHead", 1) & 1) != 0;
+	realHead = (G_NITMOD_LegacyCvarInteger("g_realHead", 1) & 1) != 0 && !(ent->client->ps.eFlags & EF_PRONE);
 
-	if (trap_GetTag( ent->s.number, 0, "tag_head", &or )) {
+	if(realHead && G_NITMOD_MDXHeadPosition(ent,or.origin)) {
+		G_SetOrigin(head,or.origin);
+	} else if (trap_GetTag( ent->s.number, 0, "tag_head", &or )) {
 		G_SetOrigin( head, or.origin );
 	} else {
 		float height, dest;
@@ -1024,7 +1089,9 @@ gentity_t* G_BuildHead(gentity_t *ent) {
 		G_SetOrigin (head, ent->r.currentOrigin); 
 
 		if( ent->client->ps.eFlags & EF_PRONE ) {
-			height = ent->client->ps.viewheight - 56;
+			height = ent->client->ps.viewheight - 60;
+		} else if(ent->client->ps.eFlags & (EF_DEAD|EF_SPARE0)) {
+			height = ent->client->ps.viewheight - 64;
 		} else if( ent->client->ps.pm_flags & PMF_DUCKED ) {	// closer fake offset for 'head' box when crouching
 			height = ent->client->ps.crouchViewHeight - 12;
 		} else {
@@ -1038,13 +1105,17 @@ gentity_t* G_BuildHead(gentity_t *ent) {
 		} else {
 			dest = angles[PITCH] * 0.75;
 		}
-		angles[PITCH] = dest;
+		angles[PITCH] = (ent->client->ps.eFlags & EF_PRONE) ? -10.f : dest;
 
 		AngleVectors( angles, forward, right, up );
 		if( ent->client->ps.eFlags & EF_PRONE ) {
-			VectorScale( forward, 24, v );
+			VectorScale( forward, 28, v );
+			VectorMA(v,7,right,v);
+		} else if(ent->client->ps.eFlags & (EF_DEAD|EF_SPARE0)) {
+			VectorScale(forward,-26,v);VectorMA(v,5,right,v);
 		} else {
 			VectorScale( forward, 5, v );
+			VectorMA(v,5,right,v);
 		}
 		VectorMA( v, 18, up, v );
 
@@ -1059,8 +1130,8 @@ gentity_t* G_BuildHead(gentity_t *ent) {
 	VectorCopy (head->s.angles, head->s.apos.trDelta);
 	/* Original G_BuildHead 0x68940 uses a symmetric 12-unit cube for
 	 * g_realHead bit 0 and the legacy asymmetric ET box otherwise.  The
-	 * recovered MDX position source is private to the old binary; trap_GetTag
-	 * above is the typed engine equivalent and retains the same fallback. */
+	 * MDX source now uses the original animated server skeleton; prone uses
+	 * the original engine-tag/fallback branch and asymmetric box. */
 	if(realHead) {
 		VectorSet(head->r.mins, -6, -6, -6);
 		VectorSet(head->r.maxs,  6,  6,  6);
@@ -1083,11 +1154,14 @@ gentity_t* G_BuildLeg(gentity_t *ent) {
 	vec3_t flatforward, org;
 	//orientation_t or;			// DHM - Nerve
 
-	if( !(ent->client->ps.eFlags & EF_PRONE) )
+	if( !(ent->client->ps.eFlags & (EF_PRONE|EF_DEAD|EF_SPARE0)) )
 		return NULL;
 
 	leg = G_Spawn ();
 
+	if(G_NITMOD_MDXLegsPosition(ent,org)) {
+		org[2]+=ent->client->pmext.proneLegsOffset-(playerlegsProneMins[2]+playerlegsProneMaxs[2])*.5f;
+	} else {
 	AngleVectors( ent->client->ps.viewangles, flatforward, NULL, NULL );
 	flatforward[2] = 0;
 	VectorNormalizeFast( flatforward );
@@ -1095,6 +1169,8 @@ gentity_t* G_BuildLeg(gentity_t *ent) {
 	org[0] = ent->r.currentOrigin[0] + flatforward[0] * -32;
 	org[1] = ent->r.currentOrigin[1] + flatforward[1] * -32;
 	org[2] = ent->r.currentOrigin[2] + ent->client->pmext.proneLegsOffset;
+
+	}
 
 	G_SetOrigin( leg, org );
 
@@ -1305,7 +1381,9 @@ void G_Damage( gentity_t *targ, gentity_t *inflictor, gentity_t *attacker,  vec3
 	int			knockback;
 	qboolean	headShot;
 	qboolean	wasAlive;
+	qboolean	onSameTeam;
 	hitRegion_t	hr = HR_NUM_HITREGIONS;
+	int mdxRegion = G_NITMOD_MDXDamageRegion(attacker,targ);
 
 	if (!targ->takedamage) {
 		return;
@@ -1337,8 +1415,17 @@ void G_Damage( gentity_t *targ, gentity_t *inflictor, gentity_t *attacker,  vec3
 		return;
 	}
 
+	/* Original G_Damage 0x6943c / 0x69e98: tripmine shootability is
+	 * checked at impact, so changing g_damageweapons also affects mines
+	 * that were already primed. The gate precedes damage protections. */
+	if( targ->s.eType == ET_BOMB && targ->methodOfDeath == MOD_TRIPMINE &&
+	    !(g_damageweapons.integer & 32) ) {
+		return;
+	}
+
 	// xkan, 12/23/2002 - was the bot alive before applying any damage?
 	wasAlive = (targ->health > 0);
+	onSameTeam = OnSameTeam(targ, attacker);
 
 	// Arnout: combatstate
 	if( targ->client && attacker && attacker->client && attacker != targ ) {
@@ -1420,7 +1507,9 @@ void G_Damage( gentity_t *targ, gentity_t *inflictor, gentity_t *attacker,  vec3
 		}
 
 		// check for team
-		if( G_GetTeamFromEntity( inflictor ) == G_GetTeamFromEntity( targ ) ) {
+		/* Original 0x69f00..0x69f31: bit8 permits friendly mover damage. */
+		if( G_GetTeamFromEntity( inflictor ) == G_GetTeamFromEntity( targ ) &&
+		    !(g_friendlyFire.integer & 8) ) {
 			return;
 		}
 	} else if ( targ->s.eType == ET_EXPLOSIVE ) {
@@ -1522,15 +1611,12 @@ void G_Damage( gentity_t *targ, gentity_t *inflictor, gentity_t *attacker,  vec3
 
 	client = targ->client;
 
-	if ( client ) {
-		if ( client->noclip || client->ps.powerups[PW_INVULNERABLE] ) {
+	/* Original dflags 0x8 also bypasses these early protections. */
+	if ( !(dflags & DAMAGE_NO_PROTECTION) ) {
+		if ( client && (client->noclip || client->ps.powerups[PW_INVULNERABLE]) )
 			return;
-		}
-	}
-
-	// check for godmode
-	if ( targ->flags & FL_GODMODE ) {
-		return;
+		if ( targ->flags & FL_GODMODE )
+			return;
 	}
 
 	if ( !dir ) {
@@ -1556,13 +1642,10 @@ void G_Damage( gentity_t *targ, gentity_t *inflictor, gentity_t *attacker,  vec3
 	if( client && (client->ps.weapon == WP_MORTAR_SET || client->ps.weapon == WP_MOBILE_MG42_SET) )
 		knockback *= 0.5;
 
-	if( targ->client && attacker && attacker->client && OnSameTeam(targ, attacker) &&
-	    g_gametype.integer != GT_WOLF_DM && !(g_friendlyFire.integer & 17) ) {
-		knockback = 0;
-	}
-	
-	// figure momentum add, even if the damage won't be taken
-	if ( knockback && targ->client ) {
+	/* Original 0x6959a..0x695df / 0x6a1e0 applies momentum only for
+	 * positive impulses; teammate pushing is independent of damage permission. */
+	if ( knockback > 0 && client && (!onSameTeam ||
+	     (g_friendlyFire.integer & 17) || g_gametype.integer == GT_WOLF_DM) ) {
 		vec3_t	kvel;
 		float	mass;
 
@@ -1589,16 +1672,17 @@ void G_Damage( gentity_t *targ, gentity_t *inflictor, gentity_t *attacker,  vec3
 			targ->client->ps.groundEntityNum = ENTITYNUM_NONE;	// flying high!
 		}*/
 
-		if (targ == attacker && !(	mod != MOD_ROCKET &&
-									mod != MOD_GRENADE &&
-									mod != MOD_GRENADE_LAUNCHER &&
-									mod != MOD_DYNAMITE
-									&& mod != MOD_GPG40
-									&& mod != MOD_M7
-									&& mod != MOD_LANDMINE
-									))
-		{
-			targ->client->ps.velocity[2] *= 0.25;
+		/* Original jump table at0x6aa60: these six causes keep full Z;
+		 * every other self-hit quarters the resulting vertical velocity. */
+		if (targ == attacker) {
+			switch(mod) {
+			case MOD_GRENADE: case MOD_GRENADE_LAUNCHER: case MOD_DYNAMITE:
+			case MOD_GPG40: case MOD_M7: case MOD_LANDMINE:
+				break;
+			default:
+				targ->client->ps.velocity[2] *= 0.25f;
+				break;
+			}
 		}
 
 		// set the timer so that the other client can't cancel
@@ -1618,23 +1702,16 @@ void G_Damage( gentity_t *targ, gentity_t *inflictor, gentity_t *attacker,  vec3
 		}
 	}
 
-	// check for completely getting out of the damage
-	if ( !(dflags & DAMAGE_NO_PROTECTION) ) {
-
-		// if TF_NO_FRIENDLY_FIRE is set, don't do damage to the target
-		// if the attacker was on the same team
-		if ( targ != attacker && OnSameTeam (targ, attacker)  ) {
-			if ( (g_gamestate.integer != GS_PLAYING && match_warmupDamage.integer == 1)) {
-				return;
-			}
-			else if (!g_friendlyFire.integer) {
-				// record "fake" pain - although the bot is not really hurt, his feeling has been hurt :-)
-				// well at least he wants to shout "watch your fire".
-				if (targ->s.number < level.maxclients && targ->r.svFlags & SVF_BOT) {
-					BotRecordPain( targ->s.number, attacker->s.number, mod );
-				}
-				return;
-			}
+	/* Original 0x695e0..0x69679: only bit1 enables ordinary team
+	 * damage; bit64 permits landmines independently. DM ignores team flags. */
+	if (!(dflags & DAMAGE_NO_PROTECTION) && targ != attacker && onSameTeam) {
+		if(g_gamestate.integer != GS_PLAYING && match_warmupDamage.integer == 1)
+			return;
+		if(!(g_friendlyFire.integer & 1) && g_gametype.integer != GT_WOLF_DM &&
+		   !(mod == MOD_LANDMINE && (g_friendlyFire.integer & 64))) {
+			if(targ->s.number < level.maxclients && (targ->r.svFlags & SVF_BOT))
+				BotRecordPain(targ->s.number, attacker->s.number, mod);
+			return;
 		}
 	}
 
@@ -1647,10 +1724,15 @@ void G_Damage( gentity_t *targ, gentity_t *inflictor, gentity_t *attacker,  vec3
 		}
 	}
 
-	if ( damage < 1 ) {
-		damage = 1;
+	/* Original 0x6a078 clamps to zero, then reflects before halving and
+	 * before adrenaline/flak/headshot processing (0x6967b..0x69710). */
+	take = damage < 0 ? 0 : damage;
+	if(g_gametype.integer != GT_WOLF_DM && targ != attacker && onSameTeam) {
+		if(g_friendlyFire.integer & 4)
+			G_Damage(attacker, attacker, attacker, dir, point, take, dflags, mod);
+		if((g_friendlyFire.integer & 2) && mod != MOD_POISON)
+			take = (int)(take * 0.5f);
 	}
-	take = damage;
 	save = 0;
 
 	// adrenaline junkie!
@@ -1658,31 +1740,41 @@ void G_Damage( gentity_t *targ, gentity_t *inflictor, gentity_t *attacker,  vec3
 		take *= .5f;
 	}
 
-	// save some from flak jacket
-	if( targ->client && targ->client->sess.skill[SK_EXPLOSIVES_AND_CONSTRUCTION] >= 4 && targ->client->sess.playerType == PC_ENGINEER ) {
-		if( mod == MOD_GRENADE ||
-			mod == MOD_GRENADE_LAUNCHER ||
-			mod == MOD_ROCKET ||
-			mod == MOD_GRENADE_PINEAPPLE ||
-			mod == MOD_MAPMORTAR ||
-			mod == MOD_MAPMORTAR_SPLASH || 
-			mod == MOD_EXPLOSIVE ||
-			mod == MOD_LANDMINE ||
-			mod == MOD_GPG40 ||
-			mod == MOD_M7 ||
-			mod == MOD_SATCHEL ||
-			mod == MOD_ARTY ||
-			mod == MOD_AIRSTRIKE ||
-			mod == MOD_DYNAMITE ||
-			mod == MOD_MORTAR ||
-			mod == MOD_PANZERFAUST ||
-			mod == MOD_MAPMORTAR ) {
-			take -= take * .5f;
+	/* Original G_HasFlakJacket reads powerup slot2. The spawn/upgrade
+	 * path owns the reward and g_skills gates; Lua may also set the powerup. */
+	if(targ->client && targ->client->ps.powerups[NITMOD_PW_FLAK] &&
+		(G_WeaponIsExplosive(mod) || mod == MOD_TRIPMINE))
+		take = (int)(take * .5f);
+
+	/* Original G_Damage 0x69777..0x697cf / 0x6a168..0x6a1d6:
+	 * both weapon options run after adrenaline/flak and before hit-region
+	 * rejection. Engineering reward32 is independent of current class. */
+	if( mod == MOD_LANDMINE && (G_NITMOD_ConfiguredWeaponFlags() & 8) ) {
+		if( attacker->client &&
+		    (attacker->client->sess.nitmodSkillMasks[SK_EXPLOSIVES_AND_CONSTRUCTION] & 32u) ) {
+			double boosted = (double)take * 1.5;
+			/* Keep conversion defined for synthetic damage beyond int range. */
+			take = boosted > 2147483647.0 ? 2147483647 : (int)boosted;
 		}
+	} else if( mod == MOD_THROWKNIFE && (G_NITMOD_ConfiguredWeaponFlags() & 2048) &&
+	           targ->client && targ->health > 0 ) {
+		/* A knife resets infection to one stack and restarts its timer;
+		 * syringe poison has a different, cumulative contract. */
+		targ->client->ps.eFlags |= NITMOD_EF_POISONED;
+		targ->client->nitmodPoisonAttacker = attacker->s.number;
+		targ->client->nitmodPoisonNextTick = level.time;
+		targ->client->nitmodPoisonStacks = 1;
 	}
 
-	headShot = IsHeadShot(targ, dir, point, mod);
+	headShot = dir && point ? (mdxRegion>=0 ? (mdxRegion==HR_HEAD && targ->client && targ->health>0 && IsHeadShotWeapon(mod)) : IsHeadShot(targ, dir, point, mod)) : qfalse;
+	if(headShot && mdxRegion>=0) ++level.totalHeadshots;
+	/* Original G_Damage 0x6a03e: headshot-only restricts client-caused damage
+	 * to clients, including non-headshot weapons; world and objects still work. */
+	if((G_NITMOD_LegacyCvarInteger("g_headshot", 0) & 1) &&
+		targ->client && attacker->client && !headShot) return;
 	if ( headShot ) {
+		if(G_NITMOD_LegacyCvarInteger("g_headshot", 0) & 2)
+			dflags |= DAMAGE_NITMOD_INSTANT_KILL;
 		/* Original ratio/minimum use the attacker's selected weapon; the
 		 * headshot eligibility above uses the means-of-death identity. */
 		take = G_NITMOD_HeadshotDamage(attacker ? attacker->s.weapon : WP_NONE, take);
@@ -1755,13 +1847,13 @@ void G_Damage( gentity_t *targ, gentity_t *inflictor, gentity_t *attacker,  vec3
 		}
 		G_LogRegionHit( attacker, HR_HEAD );
 		hr = HR_HEAD;
-	} else if ( IsLegShot(targ, dir, point, mod) ) {
+	} else if ( mdxRegion>=0 ? mdxRegion==HR_LEGS : IsLegShot(targ, dir, point, mod) ) {
 		G_LogRegionHit( attacker, HR_LEGS );
 		hr = HR_LEGS;
 		if( g_debugBullets.integer ) {
 			trap_SendServerCommand( attacker-g_entities, "print \"Leg Shot\n\"\n");
 		}
-	} else if ( IsArmShot(targ, attacker, point, mod) ) {
+	} else if ( mdxRegion>=0 ? mdxRegion==HR_ARMS : IsArmShot(targ, attacker, point, mod) ) {
 		G_LogRegionHit( attacker, HR_ARMS );
 		hr = HR_ARMS;
 		if( g_debugBullets.integer ) {
@@ -1775,6 +1867,20 @@ void G_Damage( gentity_t *targ, gentity_t *inflictor, gentity_t *attacker,  vec3
 		}
 	}
 
+	/* Original 0x69adf..0x69b04 applies flag0x20 after hit classification.
+	 * Without that flag, GOOMBA uses strict force-limbo thresholds:
+	 * 0x6a518..0x6a546 for living targets, 0x6ae82..0x6ae96 for corpses.
+	 * Keep comparisons/sums defined for configurable INT_MAX health. */
+	{
+		long long aliveHealth = targ->health > 0 ? targ->health : 0;
+		long long threshold = G_NITMOD_ForceLimboThreshold(g_forceLimboHealth.integer);
+		if((dflags & DAMAGE_NITMOD_INSTANT_KILL) ||
+		   (mod == MOD_GOOMBA && (long long)take > aliveHealth - threshold)) {
+			long long instantDamage = aliveHealth + 175;
+			take = instantDamage > INT_MAX ? INT_MAX : (int)instantDamage;
+		}
+	}
+
 #ifndef DEBUG_STATS
 	if ( g_debugDamage.integer )
 #endif
@@ -1785,16 +1891,19 @@ void G_Damage( gentity_t *targ, gentity_t *inflictor, gentity_t *attacker,  vec3
     /* Original G_Damage 0x79b04..0x79c30: hit feedback counts contacts,
      * while slots 5/6 count live-target head/body contacts. Native PERS_HITS
      * remains ET's damage counter and must never alias these Lua values. */
-    if(attacker && attacker->client && targ->client && attacker!=targ && !OnSameTeam(targ,attacker)) {
+    if(attacker && attacker->client && targ->client && attacker!=targ) {
+        int sameTeam=OnSameTeam(targ,attacker);
         int threshold=g_forceLimboHealth.integer;
         int disguised=targ->client->ps.powerups[PW_OPS_DISGUISED] && ((g_friendlyFire.integer&1) || g_gametype.integer==GT_WOLF_DM);
         int reveal=(attacker->client->sess.nitmodSkillMasks[SK_SIGNALS]&16) &&
-            (attacker->client->sess.playerType==PC_FIELDOPS || (G_NITMOD_LegacyCvarInteger("jp_keepAwards",0)&2));
+            (attacker->client->sess.playerType==PC_FIELDOPS || (G_NITMOD_LegacyCvarInteger("g_skills",0)&2));
         if(threshold>0) threshold=-threshold;
         if(!threshold) threshold=-75;
         if(headShot || (targ->health>threshold && mod!=MOD_SWITCHTEAM && mod!=MOD_SUICIDE && mod!=MOD_POISON && mod!=MOD_FEAR)) {
-            if(!disguised || reveal) ++attacker->client->nitmodLuaPersistant[headShot?1:2];
-            if(targ->health>0) {
+            if(sameTeam || (disguised && !reveal))
+                NITMOD_SendHitSound(attacker-g_entities,NITMOD_HIT_SOUND_TEAM);
+            else ++attacker->client->nitmodLuaPersistant[headShot?1:2];
+            if(!sameTeam && targ->health>0) {
                 ++attacker->client->nitmodLuaPersistant[headShot?5:6];
                 if(headShot) ++attacker->client->sess.nitmodHeadHits;
                 else ++attacker->client->sess.nitmodBodyHits;
@@ -1811,7 +1920,13 @@ void G_Damage( gentity_t *targ, gentity_t *inflictor, gentity_t *attacker,  vec3
 		} else {
 			client->ps.persistant[PERS_ATTACKER] = ENTITYNUM_WORLD;
 		}
-		client->damage_blood += take;
+		/* Instant damage can reach INT_MAX; accumulating feedback must not
+		 * wrap into a negative screen-damage value. */
+		{
+			long long blood = (long long)client->damage_blood + take;
+			client->damage_blood = blood > INT_MAX ? INT_MAX :
+				blood < INT_MIN ? INT_MIN : (int)blood;
+		}
 		client->damage_knockback += knockback;
 
 		if ( dir ) {
@@ -1830,9 +1945,9 @@ void G_Damage( gentity_t *targ, gentity_t *inflictor, gentity_t *attacker,  vec3
 		// set the last client who damaged the target
 		targ->client->lasthurt_client = attacker->s.number;
 		targ->client->lasthurt_mod = mod;
-		if (take > 0 && attacker && attacker != targ) {
-			targ->client->nitmodLastHurtTime = level.time;
-		}
+        /* Original 0x69c64 records every admitted contact, including zero
+         * and self damage, for the slash-kill fight/fear window. */
+		targ->client->nitmodLastHurtTime = level.time;
 	}
 
 	// do the damage
@@ -1844,7 +1959,11 @@ void G_Damage( gentity_t *targ, gentity_t *inflictor, gentity_t *attacker,  vec3
 			if( take <= 0x7fffffff - *received ) *received += take;
 			else *received = 0x7fffffff;
 		}
-		targ->health -= take;
+		{
+			long long remaining = (long long)targ->health - take;
+			targ->health = remaining < INT_MIN ? INT_MIN :
+				remaining > INT_MAX ? INT_MAX : (int)remaining;
+		}
 		if (targ->client && attacker && attacker != targ) {
 			Bot_Event_TakeDamage(targ - g_entities, attacker);
 		}

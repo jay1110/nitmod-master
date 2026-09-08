@@ -11,7 +11,7 @@ static qhandle_t transGunWhiteShader, demoRedShader, transGunGreenShader,
 void CG_NitmodRegisterDebugMedia(void) {
     transGunWhiteShader = demoRedShader = transGunGreenShader =
         demoBlueShader = constructionShader = 0;
-    if(!NITMOD_UsesOriginalProtocol()) return;
+    if(!NITMOD_UsesNitmodHud()) return;
     transGunWhiteShader = trap_R_RegisterShader("textures/sfx/transgunWhite");
     demoRedShader = trap_R_RegisterShader("textures/sfx/transgunRed");
     transGunGreenShader = trap_R_RegisterShader("textures/sfx/transgunGreen");
@@ -23,14 +23,16 @@ void CG_NitmodRegisterDebugMedia(void) {
  * Mode 1 is normal media; 2..6 replace every first-person weapon part. */
 qhandle_t CG_NitmodViewWeaponShader(int drawGun) {
     qhandle_t shader;
-    if(!NITMOD_UsesOriginalProtocol()) return 0;
+    if(!NITMOD_UsesNitmodHud()) return 0;
     switch(drawGun) {
     case 2: shader = transGunWhiteShader; break;
     case 3: shader = demoRedShader; break;
     case 4: shader = transGunGreenShader; break;
     case 5: shader = demoBlueShader; break;
     case 6: shader = constructionShader; break;
-    default: return 0;
+    /* Original 0xcd629 -> 0xcdb2f: every other value above one
+     * uses the white inspection shader, including values above six. */
+    default: if(drawGun <= 1) return 0; shader = transGunWhiteShader; break;
     }
     return shader > 0 ? shader : 0;
 }
@@ -38,7 +40,7 @@ qhandle_t CG_NitmodViewWeaponShader(int drawGun) {
 qhandle_t CG_NitmodDemoPlayerShader(team_t team) {
     qhandle_t shader;
     /* Demo-only even when a modified engine fails to enforce CVAR_CHEAT. */
-    if(!cg.demoPlayback || !demo_wallHack.integer || !NITMOD_UsesOriginalProtocol()) return 0;
+    if(!cg.demoPlayback || !demo_wallHack.integer || !NITMOD_UsesNitmodHud()) return 0;
     shader = team == TEAM_AXIS ? demoRedShader : demoBlueShader;
     return shader > 0 ? shader : 0;
 }
@@ -47,7 +49,7 @@ qhandle_t CG_NitmodDemoPlayerShader(team_t team) {
  * Only the already-authorized mine renderer consumes this accessor. */
 qhandle_t CG_NitmodMineTeamShader(team_t team) {
     qhandle_t shader;
-    if(!NITMOD_UsesOriginalProtocol() || !(NITMOD_SimpleConfig()->misc & 16)) return 0;
+    if(!NITMOD_UsesNitmodHud() || !(NITMOD_SimpleConfig()->misc & 16)) return 0;
     if(team != TEAM_AXIS && team != TEAM_ALLIES) return 0;
     shader = team == TEAM_AXIS ? demoRedShader : demoBlueShader;
     return shader > 0 ? shader : 0;
@@ -240,7 +242,7 @@ static void DebugLine(const vec3_t start, const vec3_t end) {
 void CG_NitmodDrawPlayerDebug(const centity_t *cent, const refEntity_t *body) {
     nitmodDebugGeometry_t geometry;
     int b, corner, axis, flags = cg_drawHitbox.integer & 7;
-    if(!flags || !cent || !body || !body->hModel || !NITMOD_UsesOriginalProtocol() ||
+    if(!flags || !cent || !body || !body->hModel || !NITMOD_UsesNitmodHud() ||
        cgs.media.railCoreShader <= 0) return;
     CG_NitmodDebugGeometry(cent, &cg.predictedPlayerState, &cg.pmext, flags, &geometry);
     for(b = 0; b < geometry.count; ++b) {

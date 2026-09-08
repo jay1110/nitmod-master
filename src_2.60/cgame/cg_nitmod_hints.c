@@ -115,9 +115,9 @@ void CG_NitmodDrawCrosshairHealth(int health, int maxHealth, const vec4_t color)
 qboolean CG_NitmodCanIdentifyDisguise(int client) {
 	if(client < 0 || client >= MAX_CLIENTS) return qfalse;
 	if(!NITMOD_ClientSkillUnlocked(client, SK_SIGNALS, 4)) return qfalse;
-	/* Original cgs+0x2038628 is # argument 8 (currently named keepAwards). */
+	/* Original g_skills is # argument 8 (legacy field name keepAwards). */
 	return cgs.clientinfo[client].cls == PC_FIELDOPS ||
-		(NITMOD_UsesOriginalProtocol() && (NITMOD_GameState()->keepAwards & 2));
+		(NITMOD_UsesNitmodHud() && (NITMOD_GameState()->keepAwards & 2));
 }
 
 int CG_NitmodCrosshairMaxHealth(int client) {
@@ -130,9 +130,12 @@ int CG_NitmodCrosshairMaxHealth(int client) {
     if(!ci->infoValid || ci->cls < PC_SOLDIER || ci->cls > PC_COVERTOPS) return 0;
     health = NITMOD_ClassMaxHealth(ci->cls);
     if(health > 0) return health;
-    if(NITMOD_UsesOriginalProtocol() &&
-       NITMOD_ParseProtocolInteger(Info_ValueForKey(CG_ConfigString(39), keys[ci->cls]), &health) && health > 0)
-        return health;
+    if(NITMOD_UsesOriginalProtocol()) {
+        /* Original CG_UpdateClassesMaxHP 0xf79b0: signed base10 strtol,
+         * including decimal prefixes and the original 32-bit LONG limits. */
+        health = NITMOD_ParseOriginalDecimal32(Info_ValueForKey(CG_ConfigString(39), keys[ci->cls]));
+        if(health > 0) return health;
+    }
     health = 100;
     viewer = cg.snap->ps.clientNum;
     count = cgs.maxclients;
@@ -177,21 +180,22 @@ qboolean CG_NitmodDrawCrosshairPlayer(int client, qboolean disguised, int health
     qhandle_t icon;
     vec4_t tint;
     nitmodHudAnchor_t previous;
-    if(!NITMOD_UsesNitmodHud() || (disguised && !NITMOD_UsesOriginalProtocol()) || client < 0 || client >= MAX_CLIENTS ||
+    if(!NITMOD_UsesNitmodHud() || client < 0 || client >= MAX_CLIENTS ||
        !color || !cg_drawCrosshairNames.integer) return qfalse;
     ci = &cgs.clientinfo[client];
     if(!ci->infoValid) return qfalse;
     name = disguised ? ci->disguiseName : ci->name;
-    cls = disguised ? ((cg_entities[client].currentState.powerups >> 8) & 7) : ci->cls;
+    cls = disguised ? ((cg_entities[client].currentState.powerups >> (NITMOD_UsesOriginalProtocol() ? 8 : PW_OPS_CLASS_1)) & 7) : ci->cls;
     rank = disguised ? ci->disguiseRank : ci->rank;
     if(!*name || cls < PC_SOLDIER || cls > PC_COVERTOPS) return qfalse;
     skill = BG_ClassSkillForClass(cls);
     if(skill < 0 || skill >= SK_NUM_SKILLS) return qfalse;
-    Vector4Copy(color, tint);
+    /* Original 0x4738c/0x4753b: text/icons stay opaque; only the health bar fades. */
+    Vector4Copy(colorWhite, tint);
     width = CG_Text_Width_Ext(name, .2f, 0, &cgs.media.limboFont2);
     icon = cgs.media.skillPics[skill];
     previous = CG_NitmodHudAnchor(NITMOD_HUD_CENTER);
-    trap_R_SetColor(color);
+    trap_R_SetColor(NULL);
     /* Original HUD rank shaders are identical in the two team banks;
      * the native second slot is helmet media and must not be used here. */
     if((cg_drawCrosshairNames.integer & 2) && rank > 0 && rank < NUM_EXPERIENCE_LEVELS) {

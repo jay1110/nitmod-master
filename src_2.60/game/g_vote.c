@@ -3,6 +3,7 @@
 //
 #include "g_local.h"
 #include "g_nitmod_legacy_cvars.h"
+#include "g_nitmod_admin.h"
 #include "../../pak/ui/menudef.h"	// For vote options
 
 
@@ -25,9 +26,8 @@ static const char *DISABLED = "DISABLED";
 void G_voteDisableMessage(gentity_t *ent, const char *cmd);
 
 /* Original G_Poll_v, ELF 0xe8f30: concatenate argv[2..], require two
- * characters, and perform no action when the vote passes. The original
- * permission-6 override is not available yet: disabled means denied even
- * for a player referee; a trusted console invocation remains allowed. */
+ * characters, and perform no action when the vote passes. ELF 0xe8f6b
+ * requires BOTH referee status and permission 6 for a disabled poll. */
 static int G_NITMOD_PollVote(gentity_t *ent, unsigned int index,
     char *arg, char *arg2, qboolean referee) {
 	char question[VOTE_MAXSTRING], token[VOTE_MAXSTRING + 1];
@@ -35,7 +35,9 @@ static int G_NITMOD_PollVote(gentity_t *ent, unsigned int index,
 	size_t length, i;
 	(void)index; (void)referee;
 	if(!arg) return G_OK;
-	if(ent && !vote_allow_poll.integer) {
+	if(ent && !vote_allow_poll.integer &&
+	   !(ent->client && ent->client->sess.referee &&
+	     G_NITMOD_AdminPrivilege((int)(ent - g_entities), "novotelimit"))) {
 		G_voteDisableMessage(ent, arg);
 		return G_INVALID;
 	}
@@ -403,6 +405,12 @@ int G_Kick_v( gentity_t *ent, unsigned int dwVoteIndex, char *arg, char *arg2, q
 			return G_INVALID;
 		}
 
+		if( level.clients[pid].sess.nitmodEttvSlave &&
+			(G_NITMOD_LegacyCvarInteger("g_ettv_flags", 3) & 1) ) {
+			G_refPrintf(ent, "Can't vote to kick ETTV Slaves!");
+			return G_INVALID;
+		}
+
 		if( !fRefereeCmd && ent ) {
 			if( level.clients[ pid ].sess.sessionTeam != TEAM_SPECTATOR && level.clients[ pid ].sess.sessionTeam != ent->client->sess.sessionTeam ) {
 				G_refPrintf( ent, "Can't vote to kick players on opposing team!" );
@@ -595,9 +603,10 @@ int G_MapRestart_v(gentity_t *ent, unsigned int dwVoteIndex, char *arg, char *ar
 {
 	// Vote request (vote is being initiated)
 	if(arg) {
-		/* Original permission-6 override is deliberately not inferred from
-         * ET referee status until the Nitmod permission owner is ported. */
-		if(ent && !vote_allow_maprestart.integer) {
+		/* Original ELF 0xebbf7: referee and permission 6 are both required. */
+		if(ent && !vote_allow_maprestart.integer &&
+		   !(ent->client && ent->client->sess.referee &&
+		     G_NITMOD_AdminPrivilege((int)(ent - g_entities), "novotelimit"))) {
 			G_voteDisableMessage(ent, arg);
 			return G_INVALID;
 		}

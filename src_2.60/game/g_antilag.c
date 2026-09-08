@@ -1,18 +1,22 @@
 #include "g_local.h"
+#include "g_nitmod_mdx.h"
 #include "g_nitmod_legacy_cvars.h"
+
+/* Original G_AntilagSafe / G_ReAdjustSingleClientPosition 0x451b0. */
+static qboolean G_NITMOD_AntilagSafe(gentity_t *ent) {
+ if(!ent || !ent->inuse || !ent->r.linked || !ent->client ||
+  (ent->client->sess.sessionTeam!=TEAM_AXIS && ent->client->sess.sessionTeam!=TEAM_ALLIES) ||
+  (ent->client->ps.pm_flags&PMF_LIMBO)) return qfalse;
+ if(ent->client->backupMarker.time==level.time && ent->client->ps.pm_type==PM_DEAD)
+  return G_NITMOD_LegacyCvarInteger("g_realHead",0)!=0;
+ return ent->health>0 && ent->client->ps.pm_type==PM_NORMAL &&
+  !(ent->client->ps.eFlags&EF_MOUNTEDTANK);
+}
 
 void G_StoreClientPosition( gentity_t* ent ) {
 	int	top;
 
-	if(!( ent->inuse && 
- 		(ent->client->sess.sessionTeam == TEAM_AXIS || ent->client->sess.sessionTeam == TEAM_ALLIES) && 
- 		ent->r.linked &&
- 		(ent->health > 0) &&
- 		!(ent->client->ps.pm_flags & PMF_LIMBO) &&
-		(ent->client->ps.pm_type == PM_NORMAL)
- 	)) {
-		return;
-	}
+	if(!G_NITMOD_AntilagSafe(ent)) return;
 
 	ent->client->topMarker++;
 	if( ent->client->topMarker >= MAX_CLIENT_MARKERS ) {
@@ -25,6 +29,7 @@ void G_StoreClientPosition( gentity_t* ent ) {
 	VectorCopy( ent->r.maxs, ent->client->clientMarkers[top].maxs );
 	VectorCopy( ent->s.pos.trBase, ent->client->clientMarkers[top].origin );
 	ent->client->clientMarkers[top].time = level.time;
+	G_NITMOD_MDXStoreMarker(ent,top);
 }
 
 static void G_AdjustSingleClientPosition( gentity_t* ent, int time ) {
@@ -73,11 +78,12 @@ static void G_AdjustSingleClientPosition( gentity_t* ent, int time ) {
 		VectorCopy( ent->client->clientMarkers[j].maxs,	ent->r.maxs );
 	}
 
+	G_NITMOD_MDXRewind(ent,i==ent->client->topMarker?j:i,j,time);
 	trap_LinkEntity( ent );
 }
 
 static void G_ReAdjustSingleClientPosition( gentity_t* ent ) {
-	if( !ent || !ent->client ) {
+	if(!G_NITMOD_AntilagSafe(ent)) {
 		return;
 	}
 
@@ -87,6 +93,7 @@ static void G_ReAdjustSingleClientPosition( gentity_t* ent ) {
 		VectorCopy( ent->client->backupMarker.mins, ent->r.mins );
 		VectorCopy( ent->client->backupMarker.maxs, ent->r.maxs );
 		ent->client->backupMarker.time = 0;
+		G_NITMOD_MDXRestore(ent);
 
 		trap_LinkEntity( ent );
 	}
@@ -98,16 +105,7 @@ void G_AdjustClientPositions( gentity_t* ent, int time, qboolean forward ) {
 
 	for( i = 0; i < level.numConnectedClients; i++, list++ ) {
 		list = g_entities + level.sortedClients[i];
-		// Gordon: ok lets test everything under the sun
- 		if( list->client && 
- 			list->inuse && 
- 			(list->client->sess.sessionTeam == TEAM_AXIS || list->client->sess.sessionTeam == TEAM_ALLIES) && 
- 			(list != ent) &&
- 			list->r.linked &&
- 			(list->health > 0) &&
- 			!(list->client->ps.pm_flags & PMF_LIMBO) &&
-			(list->client->ps.pm_type == PM_NORMAL)
- 		) {
+		if(list != ent && G_NITMOD_AntilagSafe(list)) {
 			if( forward ) {
 				G_AdjustSingleClientPosition( list, time );
 			} else {
@@ -137,6 +135,7 @@ void G_ResetMarkers( gentity_t* ent ) {
 		VectorCopy( ent->r.maxs, ent->client->clientMarkers[i].maxs );
 		VectorCopy( ent->r.currentOrigin, ent->client->clientMarkers[i].origin );
 		ent->client->clientMarkers[i].time = time;
+		G_NITMOD_MDXStoreMarker(ent,i);
 	}
 }
 
@@ -246,7 +245,7 @@ void G_HistoricalTrace( gentity_t* ent, trace_t *results, const vec3_t start, co
 	int res;
 	vec3_t dir;
 
-	if( !g_antilag.integer || !ent->client ) {
+	if( !(g_antilag.integer & 1) || !ent->client ) {
 		G_AttachBodyParts( ent );
 
 		trap_Trace( results, start, mins, maxs, end, passEntityNum, contentmask );
@@ -273,6 +272,7 @@ void G_HistoricalTrace( gentity_t* ent, trace_t *results, const vec3_t start, co
 }
 
 void G_HistoricalTraceBegin( gentity_t *ent ) {
+	if(!g_antilag.integer || !ent || !ent->client) return;
 	G_AdjustClientPositions( ent, ent->client->pers.cmd.serverTime, qtrue );
 }
 

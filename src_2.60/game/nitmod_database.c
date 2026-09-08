@@ -8,12 +8,14 @@ static sqlite3 *database;
 static char lastError[256];
 static int users,version;
 static int writable;
-static unsigned int epoch;
+static unsigned int epoch,workingGeneration;
+unsigned int NITMOD_DBWorkingGeneration(void) { return workingGeneration; }
 unsigned int NITMOD_DBEpoch(void) { return epoch; }
 static void Error(const char *text) {
     size_t n=strlen(text); if(n>=sizeof(lastError)) n=sizeof(lastError)-1;
     memcpy(lastError,text,n); lastError[n]=0;
 }
+#ifdef __EMSCRIPTEN__
 /* No host filesystem access. Existing DB bytes arrive through engine VFS.
  * This base VFS only allows SQLite's in-memory/deserialize implementation. */
 static int NoOpen(sqlite3_vfs *v,const char *n,sqlite3_file *f,int flags,int *out) { return SQLITE_CANTOPEN; }
@@ -30,9 +32,10 @@ static sqlite3_vfs memoryVfs={1,sizeof(sqlite3_file),1024,0,"nitmod-snapshot",0,
     NoOpen,NoDelete,NoAccess,FullPath,0,0,0,0,RandomBytes,Sleep,CurrentTime,0};
 int sqlite3_os_init(void) { return sqlite3_vfs_register(&memoryVfs,1); }
 int sqlite3_os_end(void) { return SQLITE_OK; }
+#endif
 const char *NITMOD_DBError(void) { return lastError; }
 void NITMOD_DBClose(void) {
-    ++epoch;
+    ++epoch; ++workingGeneration;
     if(database) sqlite3_close(database);
     database=0; users=version=0; writable=0;
 }
@@ -79,6 +82,21 @@ int NITMOD_DBOpenWorking(const void *bytes,int length) {
     writable=1; return 1;
 failed:
     Error(database?sqlite3_errmsg(database):"SQLite open failed"); NITMOD_DBClose(); return 0;
+}
+int NITMOD_DBRestoreWorking(const void *bytes,int length) {
+    unsigned int sameDatabase=workingGeneration;
+    if(!NITMOD_DBOpenWorking(bytes,length)) return 0;
+    workingGeneration=sameDatabase; return 1;
+}
+int NITMOD_DBInstallWorking(const void *bytes,int length) {
+    sqlite3 *old=database; int oldUsers=users,oldVersion=version,oldWritable=writable,ok;
+    unsigned int oldEpoch=epoch,oldGeneration=workingGeneration;
+    /* OpenWorking operates on an isolated handle until validation succeeds. */
+    database=0; users=version=writable=0;
+    ok=NITMOD_DBOpenWorking(bytes,length);
+    if(ok) { if(old) sqlite3_close(old); }
+    else { database=old; users=oldUsers; version=oldVersion; writable=oldWritable; }
+    epoch=oldEpoch; workingGeneration=oldGeneration; return ok;
 }
 void *NITMOD_DBExport(int *length) {
     sqlite3_int64 size=0;
@@ -352,8 +370,8 @@ int NITMOD_DBPenaltyAt(int mute,int index,nitmodDatabasePenalty_t *result) {
 failed:
     Error("Invalid penalty record"); sqlite3_finalize(s); return -1;
 }
-int NITMOD_DBPenaltyCheck(int mute,const char *ip,const char *guid,const char *mac,
-    int now,nitmodDatabasePenalty_t *result,int *expired) {
+static int PenaltyCheck(int mute,const char *ip,const char *guid,const char *mac,
+    int now,nitmodDatabasePenalty_t *result,int *expired,int removeExpired) {
     sqlite3_stmt *s=0; nitmodDatabasePenalty_t *rows; int count=0,rc,i,found=0;
     if(expired) *expired=0;
     if(!database || !ip || !guid || !mac || !result || !expired || (mute!=0 && mute!=1)) return -1;
@@ -375,7 +393,7 @@ int NITMOD_DBPenaltyCheck(int mute,const char *ip,const char *guid,const char *m
         nitmodDatabasePenalty_t *p=&rows[i];
         int guidEqual=!sqlite3_stricmp(guid,p->guid),macEqual=*mac && !sqlite3_stricmp(mac,p->mac);
         if(p->expires && p->expires<=now && (!mute || guidEqual || macEqual)) {
-            if(!NITMOD_DBPenaltySave(mute,p,0)) goto failed;
+            if(removeExpired && !NITMOD_DBPenaltySave(mute,p,0)) goto failed;
             ++*expired; if(mute) { free(rows); return 0; } continue;
         }
         if(!found && ((strlen(guid)==32 && guidEqual) ||
@@ -386,6 +404,14 @@ int NITMOD_DBPenaltyCheck(int mute,const char *ip,const char *guid,const char *m
     free(rows); return found;
 failed:
     Error("Invalid penalty table or operation failed"); sqlite3_finalize(s); free(rows); return -1;
+}
+int NITMOD_DBPenaltyCheck(int mute,const char *ip,const char *guid,const char *mac,
+    int now,nitmodDatabasePenalty_t *result,int *expired) {
+    return PenaltyCheck(mute,ip,guid,mac,now,result,expired,1);
+}
+int NITMOD_DBPenaltyPeek(int mute,const char *ip,const char *guid,const char *mac,
+    int now,nitmodDatabasePenalty_t *result,int *expired) {
+    return PenaltyCheck(mute,ip,guid,mac,now,result,expired,0);
 }
 int NITMOD_DBRecords(const char *map,nitmodDatabaseRecords_t *result) {
     sqlite3_stmt *s=0; nitmodDatabaseRecords_t next; int i,rc;
@@ -434,4 +460,292 @@ int NITMOD_DBClearRecords(const char *map) {
     ok=sqlite3_prepare_v2(database,"DELETE FROM records WHERE map=?1 COLLATE BINARY",-1,&s,0)==SQLITE_OK &&
        BindText(s,1,map) && sqlite3_step(s)==SQLITE_DONE;
     if(!ok) Error(sqlite3_errmsg(database)); sqlite3_finalize(s); return ok;
+}
+
+/* Synchronization operates on rows inside the destination transaction.  It
+ * deliberately does not replace a live SQLite file with a serialized image.
+ * Independent column edits merge; a changed common column is a conflict. */
+static sqlite3 *storage;
+static sqlite3 *SyncImage(const void *bytes,int length) {
+    sqlite3 *db=0; unsigned char *copy; sqlite3_stmt *s=0;
+    if(!bytes || length<100 || length>64*1024*1024 || memcmp(bytes,"SQLite format 3\000",16)) {
+        Error("Invalid synchronization image"); return 0;
+    }
+    if(sqlite3_open(":memory:",&db)!=SQLITE_OK) goto failed;
+    sqlite3_db_config(db,SQLITE_DBCONFIG_DQS_DML,0,0);
+    copy=sqlite3_malloc(length); if(!copy) goto failed;
+    memcpy(copy,bytes,length);
+    if(sqlite3_deserialize(db,"main",copy,length,length,
+        SQLITE_DESERIALIZE_FREEONCLOSE|SQLITE_DESERIALIZE_RESIZEABLE)!=SQLITE_OK) goto failed;
+    if(sqlite3_prepare_v2(db,"PRAGMA quick_check",-1,&s,0)!=SQLITE_OK ||
+       sqlite3_step(s)!=SQLITE_ROW || strcmp((const char *)sqlite3_column_text(s,0),"ok") ||
+       sqlite3_step(s)!=SQLITE_DONE) goto failed;
+    sqlite3_finalize(s); return db;
+failed:
+    Error(db?sqlite3_errmsg(db):"Synchronization allocation failed");
+    sqlite3_finalize(s); if(db) sqlite3_close(db); return 0;
+}
+static void *SyncExport(sqlite3 *db,int *length) {
+    sqlite3_int64 n=0; void *out=sqlite3_serialize(db,"main",&n,0);
+    if(!out || n<100 || n>64*1024*1024) {
+        sqlite3_free(out); Error("Synchronization image exceeds 64 MiB"); return 0;
+    }
+    *length=(int)n; return out;
+}
+static int SyncPrepare(sqlite3 *db,sqlite3_stmt **s,char *sql) {
+    int rc=sql && sqlite3_prepare_v2(db,sql,-1,s,0)==SQLITE_OK;
+    if(!rc) Error(sql?sqlite3_errmsg(db):"Synchronization allocation failed");
+    sqlite3_free(sql); return rc;
+}
+static int SyncSame(sqlite3_stmt *a,int i,sqlite3_stmt *b,int j) {
+    int type=sqlite3_column_type(a,i),size;
+    if(type!=sqlite3_column_type(b,j)) return 0;
+    if(type==SQLITE_NULL) return 1;
+    if(type==SQLITE_INTEGER) return sqlite3_column_int64(a,i)==sqlite3_column_int64(b,j);
+    if(type==SQLITE_FLOAT) return sqlite3_column_double(a,i)==sqlite3_column_double(b,j);
+    size=sqlite3_column_bytes(a,i);
+    return size==sqlite3_column_bytes(b,j) &&
+        (!size || !memcmp(sqlite3_column_blob(a,i),sqlite3_column_blob(b,j),size));
+}
+static int SyncRowSame(sqlite3_stmt *a,sqlite3_stmt *b,int n) {
+    int i; for(i=1;i<n;++i) if(!SyncSame(a,i,b,i)) return 0; return 1;
+}
+static int SyncFind(sqlite3_stmt *s,sqlite3_stmt *row) {
+    int rc;
+    sqlite3_reset(s); sqlite3_clear_bindings(s);
+    if(sqlite3_bind_value(s,1,sqlite3_column_value(row,0))!=SQLITE_OK) return -1;
+    rc=sqlite3_step(s); return rc==SQLITE_ROW?1:rc==SQLITE_DONE?0:-1;
+}
+static int SyncConflict(const char *table,const char *column) {
+    char text[256]; sqlite3_snprintf(sizeof(text),text,"SQLite sync conflict in %s.%s",table,column);
+    Error(text); return 0;
+}
+static int SyncTable(sqlite3 *base,sqlite3 *local,sqlite3 *remote,const char *table,const char *onlyGuid) {
+    const char *key=!strcmp(table,"users")?"guid":!strcmp(table,"records")?"map":!strcmp(table,"mails")?"id":"rowid";
+    sqlite3_stmt *b=0,*l=0,*r=0,*all=0,*lookup=0,*s=0;
+    sqlite3_str *columns=0,*sql=0; char *projection=0; int n,i,rc,lr,rr,ok=0,exists;
+    if(!SyncPrepare(local,&s,sqlite3_mprintf("SELECT sql FROM sqlite_master WHERE type='table' AND name=%Q",table))) goto done;
+    rc=sqlite3_step(s); if(rc==SQLITE_DONE) { ok=1; goto done; } if(rc!=SQLITE_ROW) goto done;
+    if(!SyncPrepare(remote,&lookup,sqlite3_mprintf("SELECT count(*) FROM sqlite_master WHERE type='table' AND name=%Q",table)) || sqlite3_step(lookup)!=SQLITE_ROW) goto done;
+    exists=sqlite3_column_int(lookup,0); sqlite3_finalize(lookup); lookup=0;
+    if(!exists && sqlite3_exec(remote,(const char *)sqlite3_column_text(s,0),0,0,0)!=SQLITE_OK) goto sqlError;
+    sqlite3_finalize(s); s=0;
+    if(!SyncPrepare(local,&all,sqlite3_mprintf("SELECT \"%w\",* FROM \"%w\"",key,table))) goto done;
+    n=sqlite3_column_count(all); columns=sqlite3_str_new(0);
+    sqlite3_str_appendf(columns,"\"%w\"",key);
+    for(i=1;i<n;++i) sqlite3_str_appendf(columns,",\"%w\"",sqlite3_column_name(all,i));
+    projection=sqlite3_str_finish(columns); columns=0; if(!projection) goto done;
+    if(!SyncPrepare(base,&s,sqlite3_mprintf("SELECT count(*) FROM sqlite_master WHERE type='table' AND name=%Q",table)) || sqlite3_step(s)!=SQLITE_ROW) goto done;
+    exists=sqlite3_column_int(s,0); sqlite3_finalize(s); s=0;
+    /* No original mutator drops tables or removes columns.  Such a concurrent
+     * schema change is rejected by preparation, rather than guessed around. */
+    if(!SyncPrepare(base,&b,exists?sqlite3_mprintf("SELECT %s FROM \"%w\"",projection,table):sqlite3_mprintf("SELECT NULL WHERE 0")) ||
+       !SyncPrepare(local,&l,sqlite3_mprintf("SELECT %s FROM \"%w\" WHERE \"%w\" IS ?1",projection,table,key)) ||
+       !SyncPrepare(remote,&r,sqlite3_mprintf("SELECT %s FROM \"%w\" WHERE \"%w\" IS ?1",projection,table,key))) goto done;
+    /* Natural keys in old databases are not necessarily declared UNIQUE. */
+    for(i=0;i<3;++i) {
+        sqlite3 *db=i==0?base:i==1?local:remote;
+        if(i==0 && !exists) continue;
+        if(!SyncPrepare(db,&s,sqlite3_mprintf("SELECT 1 FROM \"%w\" GROUP BY \"%w\" HAVING count(*)>1 OR \"%w\" IS NULL LIMIT 1",table,key,key))) goto done;
+        rc=sqlite3_step(s); sqlite3_finalize(s); s=0;
+        if(rc!=SQLITE_DONE) { SyncConflict(table,"ambiguous key"); goto done; }
+    }
+    while((rc=sqlite3_step(b))==SQLITE_ROW) {
+        int changed=0;
+        if(onlyGuid && strcmp((const char *)sqlite3_column_text(b,0),onlyGuid)) continue;
+        lr=SyncFind(l,b); rr=SyncFind(r,b); if(lr<0 || rr<0) goto sqlError;
+        if(!lr) {
+            if(!rr) continue;
+            if(!SyncRowSame(b,r,n)) { SyncConflict(table,"delete/update"); goto done; }
+            if(!SyncPrepare(remote,&s,sqlite3_mprintf("DELETE FROM \"%w\" WHERE \"%w\" IS ?1",table,key))) goto done;
+            sqlite3_bind_value(s,1,sqlite3_column_value(b,0));
+        } else {
+            for(i=1;i<n;++i) if(!SyncSame(b,i,l,i)) ++changed;
+            if(!changed) continue;
+            if(!rr) { SyncConflict(table,"update/delete"); goto done; }
+            sql=sqlite3_str_new(0); sqlite3_str_appendf(sql,"UPDATE \"%w\" SET ",table); changed=0;
+            for(i=1;i<n;++i) if(!SyncSame(b,i,l,i)) {
+                if(!SyncSame(b,i,r,i) && !SyncSame(l,i,r,i)) { SyncConflict(table,sqlite3_column_name(l,i)); goto done; }
+                sqlite3_str_appendf(sql,"%s\"%w\"=?%d",changed++?",":"",sqlite3_column_name(l,i),i+1);
+            }
+            sqlite3_str_appendf(sql," WHERE \"%w\" IS ?1",key);
+            { char *query=sqlite3_str_finish(sql); sql=0; if(!SyncPrepare(remote,&s,query)) goto done; }
+            sqlite3_bind_value(s,1,sqlite3_column_value(b,0));
+            for(i=1;i<n;++i) if(!SyncSame(b,i,l,i)) sqlite3_bind_value(s,i+1,sqlite3_column_value(l,i));
+        }
+        if(sqlite3_step(s)!=SQLITE_DONE) goto sqlError;
+        sqlite3_finalize(s); s=0;
+    }
+    if(rc!=SQLITE_DONE) goto sqlError;
+    if(exists && !SyncPrepare(base,&lookup,sqlite3_mprintf("SELECT %s FROM \"%w\" WHERE \"%w\" IS ?1",projection,table,key))) goto done;
+    while((rc=sqlite3_step(all))==SQLITE_ROW) {
+        int first=1;
+        if(onlyGuid && strcmp((const char *)sqlite3_column_text(all,0),onlyGuid)) continue;
+        lr=exists?SyncFind(lookup,all):0; if(lr<0) goto sqlError; if(lr) continue;
+        rr=SyncFind(r,all); if(rr<0) goto sqlError;
+        if(rr) { if(SyncRowSame(all,r,n)) continue; SyncConflict(table,"insert/insert"); goto done; }
+        sql=sqlite3_str_new(0); sqlite3_str_appendf(sql,"INSERT INTO \"%w\" (",table);
+        /* User IDs are SQLite allocation details; the original GUID is the
+         * stable key.  Concurrent unrelated user inserts may reuse an ID. */
+        for(i=0;i<n;++i) {
+            const char *name=i?sqlite3_column_name(all,i):key;
+            if((!strcmp(table,"users") && !strcmp(name,"id")) || (i==0 && strcmp(key,"rowid"))) continue;
+            sqlite3_str_appendf(sql,"%s\"%w\"",first?"":",",name); first=0;
+        }
+        sqlite3_str_appendall(sql,") VALUES ("); first=1;
+        for(i=0;i<n;++i) {
+            const char *name=i?sqlite3_column_name(all,i):key;
+            if((!strcmp(table,"users") && !strcmp(name,"id")) || (i==0 && strcmp(key,"rowid"))) continue;
+            sqlite3_str_appendf(sql,"%s?%d",first?"":",",i+1); first=0;
+        }
+        sqlite3_str_appendall(sql,")");
+        { char *query=sqlite3_str_finish(sql); sql=0; if(!SyncPrepare(remote,&s,query)) goto done; }
+        for(i=0;i<n;++i) sqlite3_bind_value(s,i+1,sqlite3_column_value(all,i));
+        if(sqlite3_step(s)!=SQLITE_DONE) goto sqlError;
+        sqlite3_finalize(s); s=0;
+    }
+    if(rc!=SQLITE_DONE) goto sqlError; ok=1; goto done;
+sqlError:
+    Error(sqlite3_errmsg(remote));
+done:
+    sqlite3_finalize(b); sqlite3_finalize(l); sqlite3_finalize(r); sqlite3_finalize(all); sqlite3_finalize(lookup); sqlite3_finalize(s);
+    sqlite3_free(projection); if(columns) sqlite3_free(sqlite3_str_finish(columns)); if(sql) sqlite3_free(sqlite3_str_finish(sql));
+    return ok;
+}
+static int SyncSchema(sqlite3 *base,sqlite3 *local,sqlite3 *remote) {
+    sqlite3_stmt *rows=0,*b=0,*r=0,*d=0; int rc,br,rr,ok=0;
+    const char *query="SELECT name,sql FROM sqlite_master WHERE sql IS NOT NULL AND name NOT LIKE 'sqlite_%' AND name!='nitmod_storage_origin' ORDER BY type='trigger',type='view',type='index'";
+    if(!SyncPrepare(local,&rows,sqlite3_mprintf("%s",query)) ||
+       !SyncPrepare(base,&b,sqlite3_mprintf("SELECT sql FROM sqlite_master WHERE name=?1")) ||
+       !SyncPrepare(remote,&r,sqlite3_mprintf("SELECT sql FROM sqlite_master WHERE name=?1"))) goto done;
+    while((rc=sqlite3_step(rows))==SQLITE_ROW) {
+        const char *name=(const char *)sqlite3_column_text(rows,0),*sql=(const char *)sqlite3_column_text(rows,1);
+        br=SyncFind(b,rows); rr=SyncFind(r,rows); if(br<0||rr<0) goto done;
+        if(br && !strcmp(sql,(const char *)sqlite3_column_text(b,0))) continue;
+        if(rr && !strcmp(sql,(const char *)sqlite3_column_text(r,0))) continue;
+        if(br || rr) { SyncConflict(name,"schema change"); goto done; }
+        if(sqlite3_exec(remote,sql,0,0,0)!=SQLITE_OK) { Error(sqlite3_errmsg(remote)); goto done; }
+    }
+    if(rc!=SQLITE_DONE) goto done;
+    sqlite3_finalize(rows); rows=0;
+    if(!SyncPrepare(base,&rows,sqlite3_mprintf("%s",query)) || !SyncPrepare(local,&d,sqlite3_mprintf("SELECT sql FROM sqlite_master WHERE name=?1"))) goto done;
+    while((rc=sqlite3_step(rows))==SQLITE_ROW) {
+        br=SyncFind(d,rows); rr=SyncFind(r,rows);
+        if(br<0||rr<0) goto done;
+        if(!br && rr) { SyncConflict((const char *)sqlite3_column_text(rows,0),"schema removal"); goto done; }
+    }
+    ok=rc==SQLITE_DONE;
+done:
+    sqlite3_finalize(rows); sqlite3_finalize(b); sqlite3_finalize(r); sqlite3_finalize(d); return ok;
+}
+static int SyncMerge(sqlite3 *base,sqlite3 *local,sqlite3 *remote,const char *guid) {
+    sqlite3_stmt *rows=0; int rc,ok=0;
+    if(guid) return SyncTable(base,local,remote,"users",guid);
+    if(!SyncSchema(base,local,remote)) return 0;
+    if(!SyncPrepare(local,&rows,sqlite3_mprintf("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%%' AND name!='nitmod_storage_origin'"))) return 0;
+    while((rc=sqlite3_step(rows))==SQLITE_ROW)
+        if(!SyncTable(base,local,remote,(const char *)sqlite3_column_text(rows,0),0)) goto done;
+    ok=rc==SQLITE_DONE;
+done:
+    sqlite3_finalize(rows); return ok;
+}
+void *NITMOD_DBMergeImages(const void *before,int beforeLength,const void *changed,int changedLength,
+                         const void *current,int currentLength,int *length) {
+    sqlite3 *base=0,*local=0,*remote=0; void *out=0;
+    *length=0;
+    base=SyncImage(before,beforeLength); local=SyncImage(changed,changedLength); remote=SyncImage(current,currentLength);
+    if(base && local && remote && sqlite3_exec(remote,"BEGIN IMMEDIATE",0,0,0)==SQLITE_OK &&
+       SyncMerge(base,local,remote,0) && sqlite3_exec(remote,"COMMIT",0,0,0)==SQLITE_OK) out=SyncExport(remote,length);
+    if(base) sqlite3_close(base); if(local) sqlite3_close(local); if(remote) sqlite3_close(remote); return out;
+}
+/* Copy a single existing cached row.  Missing persistent rows retain the
+ * cached entry, matching callback_loadsingleuser's no-result behavior. */
+int NITMOD_DBSyncUser(const void *current,int length,const char *guid) {
+    sqlite3 *source=SyncImage(current,length),*save; nitmodDatabaseAccount_t account; int rc;
+    if(!source) return -1;
+    save=database; database=source; rc=NITMOD_DBAccount(guid,&account); database=save; sqlite3_close(source);
+    if(rc==1) return NITMOD_DBSaveAccount(&account,2)?1:-1;
+    return rc;
+}
+void NITMOD_DBStorageClose(void) { if(storage) sqlite3_close(storage); storage=0; }
+int NITMOD_DBStorageOpen(const char *path) {
+#ifndef __EMSCRIPTEN__
+    NITMOD_DBStorageClose();
+    if(sqlite3_open_v2(path,&storage,SQLITE_OPEN_READWRITE|SQLITE_OPEN_CREATE,0)!=SQLITE_OK) {
+        Error(storage?sqlite3_errmsg(storage):"Cannot open live SQLite database"); NITMOD_DBStorageClose(); return 0;
+    }
+    sqlite3_db_config(storage,SQLITE_DBCONFIG_DQS_DML,0,0);
+    sqlite3_busy_timeout(storage,250); return 1;
+#else
+    (void)path; Error("Engine VFS has no SQLite locking interface"); return 0;
+#endif
+}
+void *NITMOD_DBStorageRead(int *length) {
+    void *out=0; *length=0;
+    if(storage && sqlite3_exec(storage,"BEGIN",0,0,0)==SQLITE_OK) {
+        out=SyncExport(storage,length); sqlite3_exec(storage,"ROLLBACK",0,0,0);
+    } else Error(storage?sqlite3_errmsg(storage):"Live storage is closed");
+    return out;
+}
+int NITMOD_DBStorageCommit(const void *before,int length) {
+    sqlite3 *base=SyncImage(before,length); int ok=0;
+    if(base && storage) {
+        if(sqlite3_exec(storage,"BEGIN IMMEDIATE",0,0,0)!=SQLITE_OK) Error(sqlite3_errmsg(storage));
+        else {
+            ok=SyncMerge(base,database,storage,0);
+            if(ok && sqlite3_exec(storage,"COMMIT",0,0,0)!=SQLITE_OK) { Error(sqlite3_errmsg(storage)); ok=0; }
+            if(!ok) sqlite3_exec(storage,"ROLLBACK",0,0,0);
+        }
+    }
+    if(base) sqlite3_close(base); return ok;
+}
+
+void *NITMOD_DBImageSyncUser(const void *cache,int cacheLength,const void *current,int currentLength,const char *guid,int *length) {
+    sqlite3 *db=SyncImage(cache,cacheLength),*save=database; int saveUsers=users,saveVersion=version,saveWritable=writable; void *out=0;
+    *length=0; if(!db) return 0;
+    database=db; writable=1;
+    if(NITMOD_DBSyncUser(current,currentLength,guid)>=0) out=SyncExport(db,length);
+    database=save; users=saveUsers; version=saveVersion; writable=saveWritable; sqlite3_close(db); return out;
+}
+void *NITMOD_DBImageOrigin(const void *image,int imageLength,int *length) {
+    sqlite3 *db=SyncImage(image,imageLength); sqlite3_stmt *s=0; void *out=0; int n;
+    *length=-1; if(!db) return 0;
+    if(sqlite3_prepare_v2(db,"SELECT image FROM nitmod_storage_origin WHERE id=1",-1,&s,0)==SQLITE_OK && sqlite3_step(s)==SQLITE_ROW) {
+        n=sqlite3_column_bytes(s,0); *length=n;
+        if(n && (out=sqlite3_malloc(n))) memcpy(out,sqlite3_column_blob(s,0),n);
+        if(n && !out) *length=-1;
+    }
+    sqlite3_finalize(s); sqlite3_close(db); return out;
+}
+void *NITMOD_DBImageSetOrigin(const void *image,int imageLength,const void *origin,int originLength,int *length) {
+    sqlite3 *db=SyncImage(image,imageLength); sqlite3_stmt *s=0; void *out=0;
+    *length=0; if(!db) return 0;
+    if(sqlite3_exec(db,"CREATE TABLE IF NOT EXISTS nitmod_storage_origin(id INTEGER PRIMARY KEY CHECK(id=1),image BLOB)",0,0,0)==SQLITE_OK &&
+       sqlite3_prepare_v2(db,"INSERT INTO nitmod_storage_origin VALUES(1,?1) ON CONFLICT(id) DO UPDATE SET image=excluded.image WHERE image IS NOT excluded.image",-1,&s,0)==SQLITE_OK &&
+       sqlite3_bind_blob(s,1,origin,originLength,SQLITE_STATIC)==SQLITE_OK && sqlite3_step(s)==SQLITE_DONE)
+        out=SyncExport(db,length);
+    if(!out) Error(sqlite3_errmsg(db)); sqlite3_finalize(s); sqlite3_close(db); return out;
+}
+int NITMOD_DBStorageInitSchema(int mail,int records) {
+    sqlite3 *save=database; int saveUsers=users,saveVersion=version,saveWritable=writable,ok;
+    if(!storage) return 0;
+    database=storage; writable=1; ok=NITMOD_DBInitSchema(mail,records);
+    database=save; users=saveUsers; version=saveVersion; writable=saveWritable; return ok;
+}
+
+void *NITMOD_DBImageInitialize(const void *image,int imageLength,int mail,int records,int *length) {
+    sqlite3 *db=SyncImage(image,imageLength),*save=database; int saveUsers=users,saveVersion=version,saveWritable=writable; void *out=0;
+    *length=0; if(!db) return 0;
+    database=db; writable=1;
+    if(NITMOD_DBInitSchema(mail,records)) out=SyncExport(db,length);
+    database=save; users=saveUsers; version=saveVersion; writable=saveWritable; sqlite3_close(db); return out;
+}
+void *NITMOD_DBMergeUserImages(const void *before,int beforeLength,const void *changed,int changedLength,
+                         const void *current,int currentLength,const char *guid,int *length) {
+    sqlite3 *base=0,*local=0,*remote=0; void *out=0;
+    *length=0;
+    base=SyncImage(before,beforeLength); local=SyncImage(changed,changedLength); remote=SyncImage(current,currentLength);
+    if(base && local && remote && sqlite3_exec(remote,"BEGIN IMMEDIATE",0,0,0)==SQLITE_OK &&
+       SyncMerge(base,local,remote,guid) && sqlite3_exec(remote,"COMMIT",0,0,0)==SQLITE_OK) out=SyncExport(remote,length);
+    if(base) sqlite3_close(base); if(local) sqlite3_close(local); if(remote) sqlite3_close(remote); return out;
 }

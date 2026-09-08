@@ -1,5 +1,6 @@
 #include "g_local.h"
 #include "g_nitmod_legacy_cvars.h"
+#include "nitmod_build.h"
 typedef struct {
 	vmCvar_t value;
 	const char *name, *defaultValue;
@@ -35,11 +36,7 @@ static nitmodLegacyCvar_t legacyGameplayCvars[] = {
 	{{0},"g_censor","",0}, {{0},"g_censorNames","",0},
 	{{0},"g_censorPenalty","1",0}, {{0},"g_censorMuteTime","0",0},
 	{{0},"mod_version","2.3.5",68},
-#ifdef __EMSCRIPTEN__
-	{{0},"mod_build","wasm32",68},
-#else
-	{{0},"mod_build","linux-i386",68},
-#endif
+	{{0},"mod_build",NITMOD_BUILD_STRING,68},
 	{{0},"g_maxLevelLightWeapons","6",0}, {{0},"g_maxLevelBattleSense","6",0},
 	{{0},"g_maxLevelSoldier","6",0}, {{0},"g_maxLevelMedic","6",0},
 	{{0},"g_maxLevelEngineer","6",0}, {{0},"g_maxLevelFieldOp","6",0},
@@ -53,7 +50,7 @@ static nitmodLegacyCvar_t legacyGameplayCvars[] = {
 	{{0},"g_announcer","127",0},
 	{{0},"g_weaponScriptsDir","",0}, {{0},"g_missileGravity","0",0},
 	{{0},"g_fixedphysics","0",5}, {{0},"g_fixedphysicsfps","125",5},
-	{{0},"g_adrenaline","0",0}, {{0},"jp_keepAwards","0",0},
+	{{0},"g_adrenaline","0",0},
 	{{0},"g_adrenClasses","2",0},
 	{{0},"omnibot_path","",1025}, {{0},"omnibot_enable","0",9217},
 	{{0},"omnibot_playing","0",8256}, {{0},"ip_max_clients","3",0},
@@ -92,7 +89,7 @@ static qboolean G_NITMOD_LegacyCvarPublishesSnapshot(const char *name) {
 	static const char *published[] = {
 		"g_missileCams", "g_misc", "n_proneDelay", "n_dynamiteTimer",
 		"n_crouchStandDelay", "n_standCrouchDelay", "g_adrenaline",
-		"jp_keepAwards", "g_TDMOptions"
+		"g_skills", "g_TDMOptions"
 	};
 	unsigned int i;
 	for(i = 0; i < sizeof(published) / sizeof(published[0]); ++i)
@@ -151,36 +148,49 @@ void G_NITMOD_LegacyCvarString(const char *name,char *buffer,int bufferSize,cons
 	Q_strncpyz(buffer,fallback ? fallback : "",bufferSize);
 }
 
+/* Original dictionaries use 50 entries of 20 bytes and strtok(" ,").
+ * Normalize only the candidate: an unmatched message keeps its case/colors.
+ * G_CensorText (qagame ELF 0x51560) walks text positions before dictionary
+ * entries, advancing after a match; restarting every word changes overlaps. */
 qboolean G_NITMOD_CensorText(const char *cvarName,char *text,int textSize) {
-	char list[MAX_CVAR_VALUE_STRING];
-	char word[MAX_TOKEN_CHARS];
+	char list[MAX_CVAR_VALUE_STRING], words[50][20];
+	char normalized[MAX_STRING_CHARS];
 	char *cursor, *start, *scan;
-	int length;
-	qboolean matched = qfalse;
+	int count = 0, length, i, capacity;
+	qboolean matched = qfalse, matchedLast;
 
 	if(!text || textSize <= 0) return qfalse;
 	G_NITMOD_LegacyCvarString(cvarName,list,sizeof(list),"");
 	cursor = list;
-	while(*cursor) {
-		while(*cursor == ',' || *cursor == ' ' || *cursor == '\t') cursor++;
+	while(*cursor && count < 50) {
+		while(*cursor == ',' || *cursor == ' ') cursor++;
 		start = cursor;
-		while(*cursor && *cursor != ',') cursor++;
+		while(*cursor && *cursor != ',' && *cursor != ' ') cursor++;
 		length = cursor - start;
-		while(length > 0 && (start[length - 1] == ' ' || start[length - 1] == '\t')) length--;
 		if(length > 0) {
-			if(length >= (int)sizeof(word)) length = sizeof(word) - 1;
-			memcpy(word,start,length);
-			word[length] = '\0';
-			for(scan = text; *scan; scan++) {
-				if(!Q_stricmpn(scan,word,length)) {
-					memset(scan,'*',length);
-					matched = qtrue;
-					scan += length - 1;
-				}
+			if(length > 19) length = 19;
+			memcpy(words[count],start,length);
+			words[count++][length] = '\0';
+		}
+	}
+	if(!count) return qfalse;
+	capacity = textSize < (int)sizeof(normalized) ? textSize : sizeof(normalized);
+	Q_strncpyz(normalized,text,capacity);
+	SanitizeString(normalized,normalized,qtrue);
+	for(scan = normalized; *scan; ) {
+		matchedLast = qfalse;
+		for(i = 0; i < count && *scan; i++) {
+			length = strlen(words[i]);
+			if(!Q_stricmpn(scan,words[i],length)) {
+				memset(scan,'*',length);
+				scan += length;
+				matched = qtrue;
+				if(i == count - 1) matchedLast = qtrue;
 			}
 		}
-		if(*cursor == ',') cursor++;
+		/* Keep the original search order, but never walk beyond the NUL. */
+		if(*scan && !matchedLast) scan++;
 	}
-	text[textSize - 1] = '\0';
+	if(matched) Q_strncpyz(text,normalized,textSize);
 	return matched;
 }

@@ -1098,6 +1098,13 @@ DEFAULT_ALLIES - This spawn region belongs to the Alles at the start of the map
 */
 static int numobjectives = 0; // TTimo
 
+/* Original nitrox_ResetNumObjectives, ELF 0xdcb90. Map/warmup restarts
+ * reuse the WASM instance, so clearing level alone cannot reset this static. */
+void nitrox_ResetNumObjectives(void) {
+	numobjectives = 0;
+	level.numspawntargets = 0;
+}
+
 // swaps the team
 void team_wolf_objective_use( gentity_t *self, gentity_t *other, gentity_t *activator ) {
 	char cs[MAX_STRING_CHARS];
@@ -1686,7 +1693,7 @@ void G_shuffleTeams(void)
 		cTeam = (i % 2) + TEAM_AXIS;
 
 		if( cl->sess.sessionTeam != cTeam ) {
-			G_LeaveTank( g_entities + sortClients[i], qfalse );
+			G_LeaveTank( g_entities + sortClients[i], qfalse, qfalse );
 			G_RemoveClientFromFireteams( sortClients[i], qtrue, qfalse );
 			if( g_landminetimeout.integer ) {
 				G_ExplodeMines( g_entities + sortClients[i] );
@@ -1828,6 +1835,19 @@ qboolean G_teamJoinCheck(int team_num, gentity_t *ent)
 				return(qfalse);
 			}
 		} else {
+			/* Original G_teamJoinCheck 0xdd870..0xdd8de: check the current
+			 * class before team capacity/lock and update both class fields only
+			 * when a replacement is needed. Counts use the caller's current team. */
+			if(G_IsClassDisabled(ent, ent->client->sess.playerType, qtrue)) {
+				int selected = NITMOD_SelectAvailableClass(ent, ent->client->sess.playerType);
+				if(selected < 0) {
+					G_printFull(va("The %s has no classes left!", aTeams[team_num]), ent);
+					return qfalse;
+				}
+				ent->client->sess.playerType = selected;
+				ent->client->sess.latchPlayerType = selected;
+			}
+
 			if(team_maxplayers.integer > 0 && team_maxplayers.integer <= cnt) {
 				G_printFull(va("The %s team is full!", aTeams[team_num]), ent);
 				return(qfalse);

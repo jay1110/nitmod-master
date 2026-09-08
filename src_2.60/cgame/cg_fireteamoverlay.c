@@ -16,8 +16,8 @@ static int sortedFireTeamClients[MAX_CLIENTS];
 
 fireteamData_t *CG_IsOnFireteam(int clientNum) {
     if(clientNum < 0 || clientNum >= MAX_CLIENTS) return NULL;
-    if(NITMOD_UsesOriginalProtocol() &&
-       (cgs.gametype == 8 || cgs.clientinfo[clientNum].team == TEAM_SPECTATOR)) return NULL;
+    if(NITMOD_UsesNitmodHud() &&
+       (cgs.gametype == GT_WOLF_DM || cgs.clientinfo[clientNum].team == TEAM_SPECTATOR)) return NULL;
     return cgs.clientinfo[clientNum].fireteamData;
 }
 
@@ -51,7 +51,7 @@ qboolean CG_DecodeFireteam(const char *text, qboolean original, fireteamData_t *
  * frame. Disabled mode leaves manual selections alone; it does not clear. */
 int CG_NitmodAutoSelectFireteam(void) {
     int i;
-    if(!NITMOD_UsesOriginalProtocol() || !cg_FTAutoSelect.integer || cg.clientNum < 0 ||
+    if(!NITMOD_UsesNitmodHud() || !cg_FTAutoSelect.integer || cg.clientNum < 0 ||
        cg.clientNum >= MAX_CLIENTS || !CG_IsOnFireteam(cg.clientNum)) return 0;
     for(i = 0; i < 6; ++i) {
         clientInfo_t *ci = CG_SortedFireTeamPlayerForPosition(i, 6);
@@ -337,7 +337,7 @@ void CG_DrawFireTeamOverlay( rectDef_t* rect ) {
 	vec4_t bgColor		= { 0.0f, 0.0f, 0.0f, 0.6f };		// window
 	vec4_t borderColor	= { 0.5f, 0.5f, 0.5f, 0.5f };	// window
 
-	if(NITMOD_UsesOriginalProtocol()) { CG_DrawOriginalFireTeamOverlay(rect); return; }
+	if(NITMOD_UsesNitmodHud()) { CG_DrawOriginalFireTeamOverlay(rect); return; }
 
 	if(!(f = CG_IsOnFireteam( cg.clientNum ))) {
 		return;

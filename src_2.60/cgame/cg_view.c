@@ -2,6 +2,8 @@
 // for a 3D rendering
 #include "cg_local.h"
 #include "cg_nitmod_config.h"
+#include "cg_nitmod_nxac.h"
+#include "cg_nitmod_nxac_transfer.h"
 #include "cg_nitmod_view.h"
 #include "cg_nitmod_hud.h"
 #include "cg_nitmod_locations.h"
@@ -168,7 +170,7 @@ Sets the coordinates of the rendered window
 
 //static float letterbox_frac = 1.0f;	// used for transitioning to letterbox for cutscenes // TODO: add to cg. // TTimo: unused
 void CG_Letterbox( float xsize, float ysize, qboolean center ) {
-	if(NITMOD_UsesOriginalProtocol()) {
+	if(NITMOD_UsesNitmodHud()) {
 		CG_NitmodLetterbox(&cg.refdef, cgs.glconfig.vidWidth, cgs.glconfig.vidHeight, xsize, ysize, center);
 		return;
 	}
@@ -501,7 +503,7 @@ CG_ZoomSway
 void CG_ZoomSway( void ) {
 	float spreadfrac;
 	float phase;
-	if(NITMOD_UsesOriginalProtocol()) {
+	if(NITMOD_UsesNitmodHud()) {
 		CG_NitmodZoomSway(cg.time, cg.zoomval, cg.snap ? &cg.snap->ps : NULL, cg.refdefViewAngles);
 		return;
 	}
@@ -603,6 +605,17 @@ static void CG_OffsetFirstPersonView( void ) {
 		}
 
 		origin[2] += cg.predictedPlayerState.viewheight;
+		return;
+	}
+
+	/* Original CG_CalcViewValues 0xbc89f..0xbc8e4 / 0xbcbb8..0xbcbea.
+	 * The snapshot chooses playdead; the predicted stats carry its yaw.
+	 * Keep the original 750 ms transition, without ordinary camera bob/kick. */
+	if(NITMOD_UsesNitmodHud() && (cg.snap->ps.eFlags & EF_SPARE0)) {
+		timeDelta = cg.time - cg.duckTime;
+		if(timeDelta < 0) cg.duckTime = cg.time - 750;
+		if(timeDelta < 750) origin[2] -= (750 - timeDelta) * cg.duckChange / 750.f;
+		angles[YAW] += SHORT2ANGLE(cg.predictedPlayerState.stats[STAT_DEAD_YAW]);
 		return;
 	}
 
@@ -1599,6 +1612,7 @@ void CG_DrawActiveFrame( int serverTime, stereoFrame_t stereoView, qboolean demo
 	cg.time = serverTime;
 	cgDC.realTime = cg.time;
 	cg.demoPlayback = demoPlayback;
+	CG_NITMOD_NxACTransferFrame();
 
 #ifdef FAKELAG
 	cg.time -= snapshotDelayTime;
@@ -1610,6 +1624,8 @@ void CG_DrawActiveFrame( int serverTime, stereoFrame_t stereoView, qboolean demo
 #endif
 	DEBUGTIME
 
+	// Original constraints run before local Cvar refresh and forced values.
+	NITMOD_ApplySvCvars();
 	// update cvars
 	CG_UpdateCvars();
 	NITMOD_ApplyForcedCvars();
@@ -1837,5 +1853,5 @@ void CG_DrawActiveFrame( int serverTime, stereoFrame_t stereoView, qboolean demo
 	DEBUGTIME
 
 	// let the client system know what our weapon, holdable item and zoom settings are
-	trap_SetUserCmdValue( cg.weaponSelect, cg.showGameView ? 0x01 : 0x00, cg.zoomSensitivity, cg.identifyClientRequest );
+	trap_SetUserCmdValue( cg.weaponSelect, CG_NITMOD_NxACUsercmdFlags(cg.showGameView ? 0x01 : 0x00), cg.zoomSensitivity, cg.identifyClientRequest );
 }
