@@ -31,6 +31,9 @@ void G_WriteClientSessionData( gclient_t *client, qboolean restart )
 
 	/* Original G_WriteClientSessionData resets this distinct session statistic. */
 	client->sess.nitmodKillingSpree = 0;
+	/* Original write unconditionally calls G_deleteStats at 0xb6c2a.
+	 * Preserve its health-counter reset independently of ET fResetStats. */
+	client->sess.nitmodHealthSupplied = 0;
 
 	// OSP -- stats reset check
 	if(level.fResetStats) G_deleteStats(client - level.clients);
@@ -82,6 +85,8 @@ void G_WriteClientSessionData( gclient_t *client, qboolean restart )
 	trap_Cvar_Set(va("nitmod_headhits%i", client - level.clients), va("%i", client->sess.nitmodHeadHits));
 	trap_Cvar_Set(va("nitmod_bodyhits%i", client - level.clients), va("%i", client->sess.nitmodBodyHits));
 	trap_Cvar_Set(va("nitmod_killingspree%i", client-level.clients), "0");
+	/* Typed sidecar for Original session column 29 (+0xecc). */
+	trap_Cvar_Set(va("nitmod_healthsupplied%i", client-level.clients), "0");
 	G_NITMOD_WriteEquipment( client, client - level.clients );
 
 	// Arnout: store the clients stats (7) and medals (7)
@@ -178,6 +183,7 @@ void G_ReadSessionData( gclient_t *client )
 	client->sess.nitmodKillingSpree=trap_Cvar_VariableIntegerValue(va("nitmod_killingspree%i", client-level.clients));
 	client->sess.nitmodHeadHits=trap_Cvar_VariableIntegerValue(va("nitmod_headhits%i", client-level.clients));
 	client->sess.nitmodBodyHits=trap_Cvar_VariableIntegerValue(va("nitmod_bodyhits%i", client-level.clients));
+	client->sess.nitmodHealthSupplied=trap_Cvar_VariableIntegerValue(va("nitmod_healthsupplied%i", client-level.clients));
 
 	trap_Cvar_VariableStringBuffer( va( "session%i", client - level.clients ), s, sizeof(s) );
 

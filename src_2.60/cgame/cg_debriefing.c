@@ -2675,6 +2675,11 @@ static const char *nitmodRoundAwardTitles[16] = {
 static struct { char names[1024]; int offsets[16], teams[16]; } nitmodRoundAwards;
 static qhandle_t nitmodRoundAwardIcons[16];
 
+static qboolean CG_NitmodUsesRoundAwards(void) {
+	/* Older native Nitmod servers publish ET's fourteen awards only. */
+	return NITMOD_UsesNitmodHud() && (NITMOD_UsesOriginalProtocol() || *CG_ConfigString(CS_NITMOD_ROUND_AWARDS));
+}
+
 qboolean CG_NitmodParseRoundAwards(const char *text) {
 	char buffer[1024], names[1024], *cursor, *p;
 	int offsets[16], teams[16], i, used = 0;
@@ -2692,7 +2697,14 @@ qboolean CG_NitmodParseRoundAwards(const char *text) {
 		token = COM_Parse(&cursor);
 		if(!NITMOD_ParseProtocolInteger(token, &teams[i]) || teams[i] > TEAM_ALLIES) return qfalse;
 	}
+	/* jP_BuildEndgameStats appends one empty name/team-zero sentinel after
+	 * the sixteen awards. Original cgame stops reading at award sixteen. */
 	if(*COM_Parse(&cursor)) return qfalse;
+	if(cursor) {
+		int sentinelTeam;
+		if(!NITMOD_ParseProtocolInteger(COM_Parse(&cursor), &sentinelTeam) || sentinelTeam) return qfalse;
+		if(*COM_Parse(&cursor) || cursor) return qfalse;
+	}
 	memcpy(nitmodRoundAwards.names, names, used);
 	memcpy(nitmodRoundAwards.offsets, offsets, sizeof(offsets));
 	memcpy(nitmodRoundAwards.teams, teams, sizeof(teams));
@@ -2708,13 +2720,14 @@ const char *CG_NitmodRoundAward(int index, const char **winner, int *team) {
 
 void CG_Debreifing2_Awards_Parse( void ) {
 	int i = 0, used = 0;
-	char* cs = (char*)CG_ConfigString( CS_ENDGAME_STATS );
+	char* cs = (char*)CG_ConfigString(CG_NitmodUsesRoundAwards() && !NITMOD_UsesOriginalProtocol()
+		? CS_NITMOD_ROUND_AWARDS : CS_ENDGAME_STATS);
 	const char* token;
 	char* s;
 	int len, offsets[NUM_ENDGAME_AWARDS], teams[NUM_ENDGAME_AWARDS];
 	char buffer[sizeof( cgs.dbAwardNamesBuffer )];
 	char names[sizeof( cgs.dbAwardNamesBuffer )];
-	if(NITMOD_UsesOriginalProtocol()) {
+	if(CG_NitmodUsesRoundAwards()) {
 		CG_NitmodParseRoundAwards(cs);
 		cgs.dbAwardsParsed = qtrue;
 		return;
@@ -2762,7 +2775,7 @@ void CG_Debreifing2_Awards_Draw( panel_button_t* button ) {
 	if( !cgs.dbAwardsParsed ) {
 		CG_Debreifing2_Awards_Parse();
 	}
-	if(NITMOD_UsesOriginalProtocol()) {
+	if(CG_NitmodUsesRoundAwards()) {
 		for(i = 0; i < 16; ++i) {
 			const char *winner, *title;
 			int team;

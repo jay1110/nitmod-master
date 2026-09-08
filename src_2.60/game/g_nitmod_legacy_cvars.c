@@ -1,5 +1,6 @@
 #include "g_local.h"
 #include "g_nitmod_legacy_cvars.h"
+#include "g_nitmod_config.h"
 #include "nitmod_build.h"
 typedef struct {
 	vmCvar_t value;
@@ -118,6 +119,7 @@ qboolean G_NITMOD_UpdateLegacyGameplayCvars(void) {
 		trap_Cvar_Update(&legacyGameplayCvars[i].value);
 		if(legacyGameplayCvars[i].modificationCount != legacyGameplayCvars[i].value.modificationCount) {
 			legacyGameplayCvars[i].modificationCount = legacyGameplayCvars[i].value.modificationCount;
+			if(!Q_stricmp(legacyGameplayCvars[i].name,"g_TDMScore")) nitmod_SendTDMScoreLimit(-1);
             if(!Q_stricmp(legacyGameplayCvars[i].name,"lua_modules") ||
                !Q_stricmp(legacyGameplayCvars[i].name,"lua_allowedModules")) luaConfigurationChanged=qtrue;
 			if(G_NITMOD_LegacyCvarPublishesSnapshot(legacyGameplayCvars[i].name))

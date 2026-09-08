@@ -772,7 +772,7 @@ void Use_Shooter( gentity_t *ent, gentity_t *other, gentity_t *activator ) {
 		VectorCopy( ent->movedir, dir );
 	}
 
-	if (ent->s.weapon == WP_MAPMORTAR) {
+	if (ent->s.weapon == WP_MORTAR_SET) {
 		AimAtTarget(ent);	// store in ent->s.origin2 the direction/force needed to pass through the target
 		VectorCopy(ent->s.origin2, dir);
 	}
@@ -805,7 +805,7 @@ void Use_Shooter( gentity_t *ent, gentity_t *other, gentity_t *activator ) {
 		fire_speargun(ent, ent->s.origin, dir);
 		break;*/
 
-	case WP_MAPMORTAR:
+	case WP_MORTAR_SET:
 		AimAtTarget(ent);	// store in ent->s.origin2 the direction/force needed to pass through the target
 		VectorScale(dir, VectorLength(ent->s.origin2), dir);
 		fire_mortar(ent, ent->s.origin, dir);
@@ -850,7 +850,7 @@ if FLASH_FX is checked a muzzle flash effect will play at the origin of this ent
 */
 void SP_shooter_mortar( gentity_t *ent ) {
 	// (SA) TODO: must have a self->target.  Do a check/print if this is not the case.
-	InitShooter( ent, WP_MAPMORTAR );
+	InitShooter( ent, WP_MORTAR_SET );
 
 	if(ent->spawnflags & 1) {	// smoke at source
 	}

@@ -5,6 +5,7 @@
 #include <limits.h>
 
 #include "cg_local.h"
+#include "../game/nitmod_lua_events.h"
 #include "../game/nitmod_skills.h"
 #include "cg_nitmod_hud.h"
 #include "cg_nitmod_events.h"
@@ -228,6 +229,7 @@ const char *NITMOD_PlayerConfigString(int clientNum) {
 int NITMOD_PredictedEventId(int event) {
 	int id = event & ~EV_EVENT_BITS;
 	int mapped = CG_NitmodEventDispatch(id);
+	if(id == 96) return NITMOD_LuaEventEncode(96) | (event & EV_EVENT_BITS);
 	if(id == 97) return EV_NITMOD_ALTWEAPON | (event & EV_EVENT_BITS);
 	return mapped >= 0 ? mapped | (event & EV_EVENT_BITS) : event;
 }
@@ -1378,7 +1380,7 @@ void NITMOD_TDMScoreLimitCommand( void ) {
 		!NITMOD_ParseProtocolSigned( CG_Argv( 1 ), &limit ) ) {
 		return;
 	}
-	/* A non-positive value disables the widget, matching Nit_TDMInfo. */
+	/* The information command checks positive limits; the HUD accepts the signed value. */
 	nitmodGameState.tdmScoreLimit = limit;
 }
 

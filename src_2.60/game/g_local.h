@@ -508,6 +508,8 @@ struct gentity_s {
 	int nitmodDropAmmo;
 	/* Original gentity+0x5f0: tool progress, separate from destructible health. */
 	int nitmodMineProgress;
+	/* Original gentity +0x5c4/+0x5c8: independent item slide/alignment flags. */
+	qboolean nitmodItemSlide, nitmodItemAlign;
 };
 
 // Ridah
@@ -630,6 +632,7 @@ typedef struct {
 	qboolean	versionOK;
 	qboolean	botSuicide;
 	qboolean	botPush;
+	int nitmodHealthSupplied; /* Original session +0xecc, healing supplies. */
 } clientSession_t;
 
 //
@@ -756,6 +759,13 @@ typedef struct {
 
 	ipFilter_t		complaintips[MAX_COMPLAINTIPS];
 	nitmodClientAddress_t nitmodAddress;
+	int nitmodUniformsStolen; /* Original pers +0xba0; retained across respawn. */
+ int nitmodAmmoSupplied; /* Original pers +0xba4, retained across respawn. */
+ int nitmodEngineerObjectives; /* Original pers +0xb9c objective award. */
+	int nitmodRevengeTarget; /* Original client +0x9e4; survives respawn, reset by ClientBegin. */
+	int nitmodRealPing; /* Original client +0x9e8; separate from engine ps.ping. */
+	int nitmodPingSamples[64];
+	unsigned int nitmodPingSampleHead;
 } clientPersistant_t;
 
 typedef struct {
@@ -803,10 +813,7 @@ struct gclient_s {
 	int			lastCmdTime;		// level.time of last usercmd_t, for EF_CONNECTION
 									// we can't just use pers.lastCommand.time, because
 									// of the g_sycronousclients case
-	/* Original Nitmod ClientEndFrame ring used by g_truePing.  Keep this in
-	 * private qagame state: only the resulting ps.ping crosses the VM ABI. */
-	int			nitmodPingSamples[64];
-	unsigned int nitmodPingSampleHead;
+	int nitmodPingFrameOffset; /* Original client +0x5388, zero-initialized. */
 	/* Original antiwarp command ring and per-frame correction latches. */
 	usercmd_t nitmodWarpCommands[512];
 	int nitmodWarpHead, nitmodWarpCount, nitmodWarpTime;

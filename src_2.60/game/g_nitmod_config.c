@@ -429,7 +429,7 @@ int G_NITMOD_LegacySessionCommand(int clientNum,const char *command) {
 	if(g_gametype.integer==GT_WOLF_TDM) {
 		for(i=0;i<MAX_CLIENTS;++i) if(nitmodLegacyStateReady[i] &&
 			G_NITMOD_ReceivesOriginalState(i,NITMOD_FEATURE_TEAM_SCORES))
-			trap_SendServerCommand(i,va("z1 %i",G_NITMOD_LegacyCvarInteger("g_TDMScore",500)));
+			nitmod_SendTDMScoreLimit(i);
 	}
 	nitmod_SimpleCS(clientNum);
 	nitmod_SendNCS(clientNum);
@@ -459,6 +459,7 @@ void G_NITMOD_ClientCapabilities( int clientNum, int protocolVersion, unsigned i
 	nitmod_SendNCS( clientNum );
 	nitmod_SendChargeTimes( clientNum );
 	nitmod_SendTeamScores( clientNum );
+	if(g_gametype.integer == GT_WOLF_TDM) nitmod_SendTDMScoreLimit(clientNum);
 	nitmod_SendSkillLevels( clientNum );
 	nitmod_SendClassHealth( clientNum );
 	if( level.intermissiontime ) {
@@ -641,8 +642,8 @@ void nitmod_SendChargeTimes( int clientNum ) {
 
 	for( i = firstClient; i <= lastClient; i++ ) {
 		if(G_NITMOD_ClientSupports(i,NITMOD_FEATURE_PACK_CHARGE)) {
-			int war=G_NITMOD_ConfiguredWarMode();
-			trap_SendServerCommand(i,va("npcc %i",G_NITMOD_LegacyCvarInteger("g_noCharge",0)!=0 || war==1 || war==3));
+			/* Original noCharge/war affect payment, never the prediction gate. */
+			trap_SendServerCommand(i,"npcc 0");
 		}
 		if( G_NITMOD_ReceivesOriginalState( i, NITMOD_FEATURE_CHARGE_TIMES ) ) {
 			trap_SendServerCommand( i, va( "ct %i %i %i %i %i %i %i %i %i %i",
@@ -712,8 +713,8 @@ void nitmod_SetGameState( const nitmodGameState_t *state ) {
 void nitmod_RefreshBaseSettings( void ) {
 	nitmodSimpleConfig_t simple = nitmodSimpleConfig;
 	nitmodGameState_t state = nitmodGameState;
-	/* Legacy settings updates include noCharge/war; resend negotiated pack
-	 * bypass together with the existing charge-time snapshot. */
+	/* Publish the negotiated prediction inputs. Original noCharge
+	 * suppresses payment only; it does not alter charge times or this gate. */
 	nitmod_SendChargeTimes(-1);
 
 	simple.filterCams = g_filtercams.integer;
@@ -833,6 +834,18 @@ void nitmod_SendNCS( int clientNum ) {
 	}
 }
 
+/* z1 is independent from # and tsc. Native clients receive the original
+ * text format under the existing team-score capability. */
+void nitmod_SendTDMScoreLimit(int clientNum) {
+	int i;
+	if(clientNum == -1) {
+		for(i = 0; i < MAX_CLIENTS; ++i) nitmod_SendTDMScoreLimit(i);
+		return;
+	}
+	if(!G_NITMOD_ReceivesOriginalState(clientNum, NITMOD_FEATURE_TEAM_SCORES)) return;
+	trap_SendServerCommand(clientNum, va("z1 %i", G_NITMOD_LegacyCvarInteger("g_TDMScore", 500)));
+}
+
 void nitmod_SendTeamScores( int clientNum ) {
 	if ( !G_NITMOD_ReceivesOriginalState( clientNum, NITMOD_FEATURE_TEAM_SCORES ) ) {
 		return;
@@ -894,6 +907,21 @@ void nitmod_ObjectiveEvent( int type, int detail, int objective, int actor, int 
 
 	if ( actor < 0 || actor >= MAX_CLIENTS ) {
 		return;
+	}
+	/* Original 0x10c3ba..0x10c46c: objective actions count independently
+	 * of recipients, skill XP and g_misc. Original MOD21/22/25 are native
+	 * DYNAMITE/AIRSTRIKE/ARTY. Preserve the separate two pers counters. */
+	if ( (type == 0 || type == 4) && detail >= 0 && detail <= 4 &&
+		g_entities[actor].client ) {
+		int *counter = NULL;
+		if ( detail <= 2 || meansOfDeath == MOD_DYNAMITE ) {
+			counter = &g_entities[actor].client->pers.nitmodEngineerObjectives;
+		} else if ( meansOfDeath == MOD_AIRSTRIKE || meansOfDeath == MOD_ARTY ) {
+			counter = &g_entities[actor].client->pers.nitmodAmmoSupplied;
+		}
+		if ( counter ) {
+			*counter = *counter == INT_MAX ? INT_MIN : *counter + 1;
+		}
 	}
 	for ( clientNum = 0; clientNum < MAX_CLIENTS; clientNum++ ) {
 		if ( G_NITMOD_ClientSupports( clientNum, NITMOD_FEATURE_OBJECTIVES ) ) {

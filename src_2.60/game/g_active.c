@@ -584,7 +584,7 @@ qboolean ClientInactivityTimer( gclient_t *client ) {
 	 * one-minute grace period, including after a live Cvar change. */
 	if((client->sess.sessionTeam == TEAM_SPECTATOR && duration <= 0) ||
 	   ((client->sess.sessionTeam == TEAM_AXIS || client->sess.sessionTeam == TEAM_ALLIES) && duration <= 0)) {
-		client->inactivityTime = level.time + 60000;
+		client->inactivityTime = (int)((unsigned int)level.time + 60000u);
 		client->inactivityWarning = qfalse;
 		return qtrue;
 	}
@@ -613,12 +613,12 @@ qboolean ClientInactivityTimer( gclient_t *client ) {
 		/* Permission9 (inactivity) always protects spectators; option4 only
 		 * removes the playing-team exemption. ETTV is independently exempt. */
 		client->inactivityWarning = qfalse;
-		client->inactivityTime = level.time + 1000 * duration;
+		client->inactivityTime = (int)((unsigned int)level.time + 1000u * (unsigned int)duration);
 		return qtrue;
 	}
 	if(client->pers.localClient) return qtrue;
 	if(!client->inactivityWarning) {
-		if((double)level.time <= (double)client->inactivityTime - (double)duration * 500.0) return qtrue;
+		if(level.time <= (int)((unsigned int)client->inactivityTime - (unsigned int)duration * 500u)) return qtrue;
 		if(client->sess.sessionTeam == TEAM_SPECTATOR) {
 			trap_SendServerCommand(clientNum, va("pop \"^8INACTIVITY WARNING: ^7%i seconds until inactivity drop!\"", duration / 2));
 			G_Printf("%is spectator inactivity warning issued to: %s\n", duration / 2, client->pers.netname);
@@ -631,7 +631,7 @@ qboolean ClientInactivityTimer( gclient_t *client ) {
 	}
 	if(level.time <= client->inactivityTime) return qtrue;
 	if(client->sess.sessionTeam != TEAM_SPECTATOR) {
-		client->inactivityTime = level.time + (g_spectatorInactivity.integer ? g_spectatorInactivity.integer * 1000 : 60000);
+		client->inactivityTime = (int)((unsigned int)level.time + (g_spectatorInactivity.integer ? (unsigned int)g_spectatorInactivity.integer * 1000u : 60000u));
 		client->inactivityWarning = qfalse;
 		SetTeam(&g_entities[clientNum], "spectator", qtrue, 0, 0, qfalse);
 		trap_SendServerCommand(-1, va("pop \"^8INACTIVITY: ^7%s^7 moved to spectators\"", client->pers.netname));
@@ -654,7 +654,7 @@ void G_NITMOD_HealthTimer(gentity_t *ent, int msec, unsigned int medicOptions, i
 	gclient_t *client;
 	int baseRate, extraRate;
 	qboolean regenerate;
-	if(!ent || !ent->client || msec < 0) return;
+	if(!ent || !ent->client) return;
 
 	client = ent->client;
 	/* Original ClientTimerActions gates before residual accumulation. */
@@ -662,8 +662,8 @@ void G_NITMOD_HealthTimer(gentity_t *ent, int msec, unsigned int medicOptions, i
 		(client->sess.playerType == PC_MEDIC && (medicOptions & 32u))) return;
 	extraRate = medicOptions & 64u ? 1 : medicOptions & 128u ? 0 : 2;
 	baseRate = extraRate + 1;
-	if(client->timeResidual < 0 || msec > INT_MAX - client->timeResidual) return;
-	client->timeResidual += msec;
+	/* Original 0x3e2ce..0x3e2d9 stores the wrapping ADD result. */
+	client->timeResidual = (int)((unsigned int)client->timeResidual + (unsigned int)msec);
 
 	while( client->timeResidual >= 1000 ) {
 		client->timeResidual -= 1000;
@@ -680,11 +680,11 @@ void G_NITMOD_HealthTimer(gentity_t *ent, int msec, unsigned int medicOptions, i
 		if( regenerate ) {
 			int maximum = BG_EffectiveMaxHealth(&client->ps);
 			if( ent->health < client->ps.stats[STAT_MAX_HEALTH]) {
-				long long next = (long long)ent->health + baseRate;
+				int next = (int)((unsigned int)ent->health + (unsigned int)baseRate);
 				ent->health = (int)(next > client->ps.stats[STAT_MAX_HEALTH] ?
 					client->ps.stats[STAT_MAX_HEALTH] : next);
 			} else if( ent->health < maximum) {
-				long long next = (long long)ent->health + extraRate;
+				int next = (int)((unsigned int)ent->health + (unsigned int)extraRate);
 				ent->health = (int)(next > maximum ? maximum : next);
 			}
 		} else {
@@ -731,16 +731,25 @@ but any server game effects are handled here
 */
 /* Original ClientEvents: ordinary shots retain the first 500 ms after spawn;
  * mounted MG42 shots revoke protection immediately. Event IDs are native here. */
+/* Original x87 FISTP with truncation returns integer-indefinite outside
+ * signed32, including NaN. Avoid target-dependent float-to-int casts. */
+static int NITMOD_SpeedInteger(double value) {
+	if(!(value >= -2147483648.0 && value < 2147483648.0)) return INT_MIN;
+	return (int)value;
+}
+
 void G_NITMOD_AttackInvulnerability(gentity_t *ent, int event, int now, int enabled) {
 	if(!ent || !ent->client || !enabled) return;
 	switch(event) {
 	case EV_FIRE_WEAPON:
 	case EV_FIRE_WEAPONB:
 	case EV_FIRE_WEAPON_LASTSHOT:
-		if((double)now - ent->client->pers.lastSpawnTime <= 500.0) return;
+		/* Original ClientEvents subtracts in signed 32-bit timer space. */
+		if((int)((unsigned int)now - (unsigned int)ent->client->pers.lastSpawnTime) <= 500) return;
 		break;
 	case EV_FIRE_WEAPON_MG42:
 	case EV_FIRE_WEAPON_MOUNTEDMG42:
+	case EV_NITMOD_THROW_KNIFE: /* Original event 95 cancels immediately. */
 		break;
 	default:
 		return;
@@ -762,31 +771,30 @@ void G_NITMOD_FallDamage(gentity_t *ent, int event) {
 	case EV_FALL_DMG_50: damage = 50; stun = 1000; break;
 	default: return;
 	}
-	if(g_goomba.integer) {
-		slot = ent->s.groundEntityNum;
-		if(slot >= 0 && slot < MAX_GENTITIES && g_entities[slot].client) target = &g_entities[slot];
-		else {
-			trace_t trace;
-			vec3_t end;
-			VectorCopy(ent->r.currentOrigin, end); end[2] -= 4;
-			trap_Trace(&trace, ent->r.currentOrigin, NULL, NULL, end, ent->s.number, MASK_SHOT);
-			if(trace.entityNum >= 0 && trace.entityNum < MAX_GENTITIES)
-				target = &g_entities[trace.entityNum];
-		}
+	/* Original resolves the ground client before consulting g_goomba. */
+	slot = ent->s.groundEntityNum;
+	if(slot >= 0 && slot < MAX_GENTITIES && g_entities[slot].client) target = &g_entities[slot];
+	else {
+		trace_t trace;
+		vec3_t end;
+		VectorCopy(ent->r.currentOrigin, end); end[2] -= 4;
+		trap_Trace(&trace, ent->r.currentOrigin, NULL, NULL, end, ent->s.number, MASK_SHOT);
+		if(trace.entityNum >= 0 && trace.entityNum < MAX_GENTITIES)
+			target = &g_entities[trace.entityNum];
 	}
-	if(target == ent || (target && (!target->client || !target->takedamage))) target = NULL;
+	if(!g_goomba.integer || (target && (!target->client || !target->takedamage))) target = NULL;
 	sameTeam = target && target->client->sess.sessionTeam == ent->client->sess.sessionTeam;
 	if(event == EV_FALL_SHORT && (!target || (flags & 2) || (sameTeam && (flags & 4)))) return;
 	if(target) {
-		double amount;
+		int amount;
 		if(g_gametype.integer != 8 && sameTeam && (flags & 1)) return;
 		if(!damage) damage = 5;
 		if(stun) { target->client->ps.pm_time = stun; target->client->ps.pm_flags |= PMF_TIME_KNOCKBACK; }
-		target->pain_debounce_time = level.time + 200;
-		amount = (flags & 16) ? target->health : (double)damage * g_goomba.integer;
-		/* Preserve normal configured values, reject overflow before int conversion. */
-		if(ent->health > 0 && amount >= -2147483647.0 && amount <= 2147483647.0)
-			G_Damage(target, ent, ent, NULL, NULL, (int)amount,
+		target->pain_debounce_time = (int)((unsigned int)level.time + 200u);
+		/* Original IMUL retains the low 32 bits, including negative results. */
+		amount = (flags & 16) ? target->health : (int)((unsigned int)damage * (unsigned int)g_goomba.integer);
+		if(ent->health > 0)
+			G_Damage(target, ent, ent, NULL, NULL, amount,
 				(flags & 16) ? DAMAGE_NITMOD_INSTANT_KILL : 0, MOD_GOOMBA);
 		/* Original short falls play sound slot 5 at the stomped client after
 		 * applying damage. This uses the existing typed general-sound path. */
@@ -798,7 +806,7 @@ void G_NITMOD_FallDamage(gentity_t *ent, int event) {
 		damage = (int)(damage * .2f);
 	} else {
 		if(stun) { ent->client->ps.pm_time = stun; ent->client->ps.pm_flags |= PMF_TIME_KNOCKBACK; }
-		ent->pain_debounce_time = level.time + 200;
+		ent->pain_debounce_time = (int)((unsigned int)level.time + 200u);
 	}
 	G_Damage(ent, NULL, NULL, NULL, NULL, damage, 0, MOD_FALLING);
 }
@@ -874,7 +882,7 @@ void ClientEvents( gentity_t *ent, int oldEventSequence ) {
 			FireWeapon( ent );
 			break;
 		case EV_NITMOD_THROW_KNIFE:
-			G_NITMOD_AttackInvulnerability(ent, EV_FIRE_WEAPON, level.time, g_noAttackInvul.integer);
+			G_NITMOD_AttackInvulnerability(ent, event, level.time, g_noAttackInvul.integer);
 			G_NITMOD_ThrowKnife(ent);
 			break;
 
@@ -1037,6 +1045,27 @@ void ClientThink_real( gentity_t *ent ) {
 
 	ent->client->ps.identifyClient = ucmd->identClient;		// NERVE - SMF
 
+	/* Original ClientThink_real 0x402a5: sample each processed command before
+	 * antiwarp/time clamping. The ring and reported ping survive respawn. */
+	{
+		unsigned int index = client->pers.nitmodPingSampleHead & 63u;
+		unsigned int sample = (unsigned int)client->nitmodPingFrameOffset +
+			(unsigned int)level.previousTime - (unsigned int)ucmd->serverTime;
+		client->pers.nitmodPingSamples[index] = (int)sample;
+		client->pers.nitmodPingSampleHead = (index + 1u) & 63u;
+		if (G_NITMOD_LegacyCvarInteger("g_truePing", 0)) {
+			unsigned int total = 0;
+			int i;
+			for (i = 0; i < 64; ++i)
+				total += (unsigned int)client->pers.nitmodPingSamples[i];
+			client->pers.nitmodRealPing = (int)total / 64;
+		} else {
+			client->pers.nitmodRealPing = client->ps.ping;
+		}
+		if (client->pers.nitmodRealPing < 0)
+			client->pers.nitmodRealPing = 0;
+	}
+
 	G_NITMOD_PrepareUsercmd(ent);
 
 	// sanity check the command time to prevent speedup cheating
@@ -1148,10 +1177,10 @@ void ClientThink_real( gentity_t *ent ) {
 	client->ps.gravity = g_gravity.value;
 
 	// set speed
-	client->ps.speed = g_speed.value;
+	client->ps.speed = NITMOD_SpeedInteger(g_speed.value);
 
 	if( client->speedScale )				// Goalitem speed scale
-		client->ps.speed *= (client->speedScale * 0.01);
+		client->ps.speed = NITMOD_SpeedInteger(client->ps.speed * (client->speedScale * 0.01));
 
 	// set up for pmove
 	oldEventSequence = client->ps.eventSequence;
@@ -1235,26 +1264,22 @@ void ClientThink_real( gentity_t *ent ) {
 
 	// NERVE - SMF
 	pm.gametype = g_gametype.integer;
-	if (G_NITMOD_LegacyCvarInteger("g_noCharge", 0)) {
-		pm.ltChargeTime = pm.soldierChargeTime = pm.engineerChargeTime = pm.medicChargeTime = 0;
-	} else {
-		pm.ltChargeTime = level.lieutenantChargeTime[client->sess.sessionTeam-1];
-		pm.soldierChargeTime = level.soldierChargeTime[client->sess.sessionTeam-1];
-		pm.engineerChargeTime = level.engineerChargeTime[client->sess.sessionTeam-1];
-		pm.medicChargeTime = level.medicChargeTime[client->sess.sessionTeam-1];
-	}
+	/* Original ClientThink_doPmove keeps the real charge threshold even with
+	 * g_noCharge. That Cvar suppresses payment after an accepted action. */
+	pm.ltChargeTime = level.lieutenantChargeTime[client->sess.sessionTeam-1];
+	pm.soldierChargeTime = level.soldierChargeTime[client->sess.sessionTeam-1];
+	pm.engineerChargeTime = level.engineerChargeTime[client->sess.sessionTeam-1];
+	pm.medicChargeTime = level.medicChargeTime[client->sess.sessionTeam-1];
 	// -NERVE - SMF
 
 	pm.skill = client->sess.skill;
-	pm.nitmodPackChargeEnabled=G_NITMOD_ClientSupports(ent->s.number,NITMOD_FEATURE_PACK_CHARGE);
-	pm.nitmodPackChargeBypass=G_NITMOD_LegacyCvarInteger("g_noCharge",0) ||
-		G_NITMOD_ConfiguredWarMode()==1 || G_NITMOD_ConfiguredWarMode()==3;
+	pm.nitmodPackChargeEnabled=qtrue; /* Server rules do not depend on client negotiation. */
+	pm.nitmodPackChargeBypass=qfalse;
 	memcpy(pm.nitmodPackSkillMasks,client->sess.nitmodSkillMasks,sizeof(pm.nitmodPackSkillMasks));
 
 	client->pmext.airleft = NITMOD_AirRemaining( ent->client->airOutTime, level.time );
 
-	pm.covertopsChargeTime = G_NITMOD_LegacyCvarInteger("g_noCharge", 0) ? 0 :
-		level.covertopsChargeTime[client->sess.sessionTeam-1];
+	pm.covertopsChargeTime = level.covertopsChargeTime[client->sess.sessionTeam-1];
 
 	if( client->ps.pm_type != PM_DEAD && level.timeCurrent - client->pers.lastBattleSenseBonusTime > 45000 ) {
 		/*switch( client->combatState )
@@ -1490,8 +1515,8 @@ void ClientThink( int clientNum ) {
 		G_NITMOD_QueueUsercmd(ent, &cmd);
 		G_NITMOD_RunUsercmds(ent);
 	} else {
-		ent->client->nitmodWarpHead = ent->client->nitmodWarpCount = 0;
-		ent->client->nitmodWarpBudget = 0;
+		/* Original ClientThink keeps queued commands/debt across an inactive
+		 * antiwarp interval; DoClientThinks reconciles them on re-entry. */
 		ent->client->pers.oldcmd = ent->client->pers.cmd;
 		ent->client->pers.cmd = cmd;
 #ifdef ALLOW_GSYNC
@@ -1815,8 +1840,6 @@ while a slow client may have multiple ClientEndFrame between ClientThink.
 */
 void ClientEndFrame( gentity_t *ent ) {
 	int			i;
-	int			pingSample;
-	unsigned int pingIndex;
 
 	/* Original Nitmod applies the configured rate once per elapsed minute. */
 	if((G_NITMOD_LegacyCvarInteger("g_XPDecay", 0) & 1) &&
@@ -1826,32 +1849,12 @@ void ClientEndFrame( gentity_t *ent ) {
 
 	/* Original ClientEndFrame drains one pending command per frame after the
 	 * last flood wait plus 999 ms; the 30-second window does not clear count. */
-	if((long long)ent->client->pers.nitmodFloodNextTime + 999 < level.time &&
+	if((int)((unsigned int)ent->client->pers.nitmodFloodNextTime + 999u) < level.time &&
 		ent->client->pers.nitmodFloodCount != 0) {
-		ent->client->pers.nitmodFloodCount--;
+		ent->client->pers.nitmodFloodCount = (int)((unsigned int)ent->client->pers.nitmodFloodCount - 1u);
 		if(!ent->client->pers.nitmodFloodCount)
 			ent->client->pers.nitmodFloodWindowTime = 0;
 	}
-
-	/* Original Nitmod 0x502a0: maintain a 64-frame latency history for every
-	 * connected client.  g_truePing selects its arithmetic mean; disabled
-	 * mode deliberately leaves the engine supplied ps.ping untouched. */
-	pingSample = level.time - ent->client->pers.cmd.serverTime;
-	pingIndex = ent->client->nitmodPingSampleHead & 63u;
-	ent->client->nitmodPingSamples[pingIndex] = pingSample;
-	ent->client->nitmodPingSampleHead = (pingIndex + 1u) & 63u;
-	if (G_NITMOD_LegacyCvarInteger("g_truePing", 0)) {
-		int pingTotal = 0;
-
-		for (i = 0; i < 64; ++i) {
-			pingTotal += ent->client->nitmodPingSamples[i];
-		}
-		ent->client->ps.ping = pingTotal / 64;
-		if (ent->client->ps.ping < 0) {
-			ent->client->ps.ping = 0;
-		}
-	}
-
 
 	// used for informing of speclocked teams.
 	// Zero out here and set only for certain specs
@@ -1890,7 +1893,9 @@ void ClientEndFrame( gentity_t *ent ) {
 			// Make sure we dont let stuff like CTF flags expire.
 			if(level.match_pause != PAUSE_NONE &&
 			  ent->client->ps.powerups[i] != INT_MAX) {
-				ent->client->ps.powerups[i] += level.time - level.previousTime;
+				/* Original ClientEndFrame ADD wraps the timer in 32 bits. */
+				ent->client->ps.powerups[i] = (int)((unsigned int)ent->client->ps.powerups[i]
+					+ (unsigned int)level.time - (unsigned int)level.previousTime);
 			}
 
 

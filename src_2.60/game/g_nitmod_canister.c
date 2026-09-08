@@ -1,5 +1,6 @@
 #include "g_local.h"
 #include <limits.h>
+#include "g_nitmod_hitboxdebug.h"
 
 /* Original fire_grenade kick branch, independent of damageability. The
  * engine computes world abs bounds when linking the initialized missile. */
@@ -27,12 +28,11 @@ void G_NITMOD_ConfigureCanisterKick(gentity_t *missile) {
 }
 
 static float KickRound(float value) {
-    double rounded = value < 0 ? ceil((double)value) : floor((double)value);
-    /* 0xfd44a sets x87 RC=11: truncate toward zero, despite Ghidra's ROUND.
-     * Avoid overflowing float-to-int conversion for extreme Cvar settings. */
-    if(rounded > INT_MAX) rounded = INT_MAX;
-    if(rounded < INT_MIN) rounded = INT_MIN;
-    return (float)rounded;
+    /* Original FISTP with RC=11 returns integer-indefinite for NaN or
+     * out-of-range values. Preserve that result without undefined C casts. */
+    if(!((double)value >= -2147483648.0 && (double)value < 2147483648.0))
+        return (float)INT_MIN;
+    return (float)(int)value;
 }
 
 /* Original G_CanisterKick 0xfd070: original IDs 4,9,21,28,48,50.
@@ -40,18 +40,23 @@ static float KickRound(float value) {
  * This does not implement the poison projectile's damage/think behavior. */
 void G_CanisterKick(gentity_t *actor) {
     vec3_t angles, forward, center, mins, maxs;
-    int entities[MAX_GENTITIES], count, i;
+    int entities[MAX_GENTITIES], count, i, scale, lift;
     gentity_t *missile;
-    if(!g_canisterKick.integer || !actor || !actor->client ||
+    if(!actor || !actor->client ||
        (actor->client->ps.pm_flags & PMF_LIMBO) ||
        actor->client->ps.pm_type == PM_DEAD ||
        (actor->client->ps.eFlags & EF_PRONE)) return;
     VectorSet(angles, 0, actor->client->ps.viewangles[YAW], 0);
     AngleVectors(angles, forward, NULL, NULL);
-    VectorMA(actor->r.currentOrigin, 24, forward, center);
+    for(i = 0; i < 3; ++i)
+        center[i] = (float)((double)actor->r.currentOrigin[i] + (double)forward[i] * 24.0);
     VectorSet(mins, center[0] - 32, center[1] - 32, center[2] - 24);
     VectorSet(maxs, center[0] + 32, center[1] + 32, center[2] + 8);
     count = trap_EntitiesInBox(mins, maxs, entities, MAX_GENTITIES);
+    if(g_debugBullets.integer) {
+        vec3_t red = {1, 0, 0};
+        G_NITMOD_DebugRailBox(center, mins, maxs, red, -1);
+    }
     if(count > MAX_GENTITIES) count = MAX_GENTITIES;
     for(i = 0; i < count; ++i) {
         if(entities[i] < 0 || entities[i] >= MAX_GENTITIES) continue;
@@ -69,11 +74,16 @@ void G_CanisterKick(gentity_t *actor) {
         if(angles[PITCH] > -15) angles[PITCH] = -15;
         AngleVectors(angles, forward, NULL, NULL);
         missile->s.pos.trType = TR_GRAVITY;
-        missile->s.pos.trTime = level.time < INT_MIN + 50 ? INT_MIN : level.time - 50;
+        missile->s.pos.trTime = (int)((unsigned int)level.time - 50u);
         missile->s.pos.trBase[2] += 30;
         VectorCopy(missile->s.pos.trBase, missile->r.currentOrigin);
-        VectorScale(forward, (float)g_canisterKick.integer * 10, missile->s.pos.trDelta);
-        missile->s.pos.trDelta[2] += (float)g_canisterKick.integer * 2;
+        /* Original LEA/ADD wrap the integer factors before FILD. Z is
+         * stored once after adding lift, then all three floats truncate. */
+        scale = (int)((unsigned int)g_canisterKick.integer * 10u);
+        lift = (int)((unsigned int)g_canisterKick.integer * 2u);
+        missile->s.pos.trDelta[0] = (float)((double)forward[0] * scale);
+        missile->s.pos.trDelta[1] = (float)((double)forward[1] * scale);
+        missile->s.pos.trDelta[2] = (float)((double)forward[2] * scale + lift);
         missile->s.pos.trDelta[0] = KickRound(missile->s.pos.trDelta[0]);
         missile->s.pos.trDelta[1] = KickRound(missile->s.pos.trDelta[1]);
         missile->s.pos.trDelta[2] = KickRound(missile->s.pos.trDelta[2]);

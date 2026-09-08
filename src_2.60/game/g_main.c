@@ -1890,6 +1890,9 @@ void G_NITMOD_LoadMapCycleConfig(void) {
 
 #include "g_nitmod_database.h"
 #include "nitmod_database.h"
+/* Original deadline at 0x2b8a32c, reset by G_InitGame 0x7fee1. */
+static int nitmodCrazyGravityDeadline = -1;
+
 void G_InitGame( int levelTime, int randomSeed, int restart ) {
 	int					i;
 	char				cs[MAX_INFO_STRING];
@@ -1953,6 +1956,7 @@ void G_InitGame( int levelTime, int randomSeed, int restart ) {
 		memcpy( &votedata, &level.voteInfo, sizeof( voteInfo_t ) );
 
 		memset( &level, 0, sizeof( level ) );
+		nitmodCrazyGravityDeadline = -1;
 
 		memcpy( &level.voteInfo, &votedata, sizeof( voteInfo_t ) );
 
@@ -3135,9 +3139,9 @@ wait 10 seconds before going on.
 =================
 */
 int NITMOD_IntermissionDisplayStart(int now, int durationSeconds) {
-	double start = now;
-	if(durationSeconds > 0) start += (double)durationSeconds * 1000.0 - 60000.0;
-	return start > INT_MAX ? INT_MAX : start < INT_MIN ? INT_MIN : (int)start;
+	/* Original BeginIntermission: IMUL/LEA retain the low 32 bits. */
+	if(durationSeconds <= 0) return now;
+	return (int)((unsigned int)now + (unsigned int)durationSeconds * 1000u - 60000u);
 }
 
 qboolean NITMOD_IntermissionCanExit(void) {
@@ -3155,7 +3159,8 @@ qboolean NITMOD_IntermissionCanExit(void) {
 	}
 	/* Original x87 0x7bdcb..0x7bddd keeps the ratio above Float32 precision. */
 	if(humans && (double)ready / (double)humans * 100.0 >= (double)g_intermissionReadyPercent.value) return qtrue;
-	return (double)level.time >= (double)level.intermissiontime + (double)g_intermissionTime.integer * 1000.0;
+	/* Original CheckIntermissionExit compares a wrapped signed32 deadline. */
+	return level.time >= (int)((unsigned int)level.intermissiontime + (unsigned int)g_intermissionTime.integer * 1000u);
 }
 
 void CheckIntermissionExit( void ) {
@@ -3163,11 +3168,11 @@ void CheckIntermissionExit( void ) {
 
 	// OSP - end-of-level auto-actions
 	//		  maybe make the weapon stats dump available to single player?
-	if(!(fActions & EOM_WEAPONSTATS) && level.time - level.intermissiontime > 300) {
+	if(!(fActions & EOM_WEAPONSTATS) && (int)((unsigned int)level.time - (unsigned int)level.intermissiontime) > 300) {
 		G_matchInfoDump(EOM_WEAPONSTATS);
 		fActions |= EOM_WEAPONSTATS;
 	}
-	if(!(fActions & EOM_MATCHINFO) && level.time - level.intermissiontime > 800) {
+	if(!(fActions & EOM_MATCHINFO) && (int)((unsigned int)level.time - (unsigned int)level.intermissiontime) > 800) {
 		G_matchInfoDump(EOM_MATCHINFO);
 		fActions |= EOM_MATCHINFO;
 	}
@@ -3783,12 +3788,13 @@ Runs thinking code for this frame if necessary
 =============
 */
 void G_RunThink (gentity_t *ent) {
-	float	thinktime;
+	int	thinktime; /* Original compares integer millisecond deadlines. */
 
 	// OSP - If paused, push nextthink
 	if(level.match_pause != PAUSE_NONE && (ent - g_entities) >= g_maxclients.integer &&
 	  ent->nextthink > level.time && strstr(ent->classname, "DPRINTF_") == NULL) {
-		ent->nextthink += level.time - level.previousTime;
+		ent->nextthink = (int)((unsigned int)ent->nextthink + (unsigned int)level.time
+			- (unsigned int)level.previousTime);
 	}
 
 	// RF, run scripting
@@ -4163,29 +4169,7 @@ Advances the non-player objects in the world
 ================
 */
 static void G_NITMOD_RunServerAutomation( void ) {
-	static int crazyGravityDeadline = -1;
 	int crazyGravity = G_NITMOD_LegacyCvarInteger("n_crazyGravity", 0);
-
-	if( crazyGravity == 1 ) {
-		if( crazyGravityDeadline == -1 || crazyGravityDeadline < level.time ) {
-			int minimum = G_NITMOD_LegacyCvarInteger("n_crazyGravityMin", 100);
-			int maximum = G_NITMOD_LegacyCvarInteger("n_crazyGravityMax", 2000);
-			int interval = G_NITMOD_LegacyCvarInteger("n_crazyGravityInterval", 30000);
-			int gravity;
-			if( minimum < 0 ) minimum = 0;
-			if( maximum <= minimum ) maximum = minimum + 1;
-			gravity = minimum + rand() % (maximum - minimum);
-			trap_Cvar_Set("g_gravity", va("%d", gravity));
-			crazyGravityDeadline = level.time + interval;
-			trap_SendServerCommand(-1,
-				va("cpm \"^8crazygravity: ^9gravity changed to ^g%d\"", gravity));
-		}
-	} else if( crazyGravityDeadline != -1 ) {
-		crazyGravityDeadline = -1;
-		trap_Cvar_Set("g_gravity", "800");
-		trap_SendServerCommand(-1,
-			"cpm \"^8crazygravity: ^9gravity changed to ^g800\"");
-	}
 
 	/* Preserve the original minute-of-hour interpretation. The first issued
 	 * quit command terminates the otherwise repeatedly true condition. */
@@ -4195,6 +4179,30 @@ static void G_NITMOD_RunServerAutomation( void ) {
 		if( delay > 0 && delay <= minute && level.numConnectedClients == 0 )
 			trap_SendConsoleCommand(EXEC_NOW, "quit\n");
 	}
+
+	if( crazyGravity == 1 ) {
+		if( nitmodCrazyGravityDeadline == -1 || nitmodCrazyGravityDeadline < level.time ) {
+			int minimum = G_NITMOD_LegacyCvarInteger("n_crazyGravityMin", 50);
+			int maximum = G_NITMOD_LegacyCvarInteger("n_crazyGravityMax", 1000);
+			int interval = G_NITMOD_LegacyCvarInteger("n_crazyGravityInterval", 30000);
+			int gravity;
+			if( minimum < 0 ) minimum = 0;
+			if( maximum <= minimum ) maximum = (int)((unsigned int)minimum + 1u);
+			gravity = (int)((unsigned int)minimum + (unsigned int)(rand() %
+				(int)((unsigned int)maximum - (unsigned int)minimum)));
+			trap_Cvar_Set("g_gravity", va("%d", gravity));
+			nitmodCrazyGravityDeadline = (int)((unsigned int)level.time + (unsigned int)interval);
+			trap_SendServerCommand(-1,
+				va("cpm \"^8crazygravity: ^9gravity changed to ^g%d\"", gravity));
+		}
+	} else if( nitmodCrazyGravityDeadline != -1 ) {
+		nitmodCrazyGravityDeadline = -1;
+		trap_Cvar_Set("g_gravity", "800");
+		trap_SendServerCommand(-1,
+			"cpm \"^8crazygravity: ^9gravity changed to ^g800\"");
+	}
+
+
 }
 
 void G_RunFrame( int levelTime ) {

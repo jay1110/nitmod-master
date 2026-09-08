@@ -653,6 +653,13 @@ static void CG_ConfigStringModified( void ) {
 		return;
 	}
 
+	/* Native Nitmod publishes its sixteen round awards separately from
+	 * ET's fourteen-award configstring; raw Original slot 42 is unrelated. */
+	if(NITMOD_UsesNitmodHud() && !NITMOD_UsesOriginalProtocol() && num == CS_NITMOD_ROUND_AWARDS) {
+		cgs.dbAwardsParsed = qfalse;
+		return;
+	}
+
 	// look up the individual string that was modified
 	if(NITMOD_UsesOriginalProtocol()) {
 		num = NITMOD_CoreConfigFromWire(num);
@@ -2368,7 +2375,7 @@ static void CG_ServerCommand( void ) {
 		NITMOD_TeamScoresCommand();
 		return;
 	}
-	if ( !Q_stricmp( cmd, "z1" ) && NITMOD_UsesOriginalProtocol() ) {
+	if ( !Q_stricmp( cmd, "z1" ) && NITMOD_UsesNitmodHud() ) {
 		NITMOD_TDMScoreLimitCommand();
 		return;
 	}

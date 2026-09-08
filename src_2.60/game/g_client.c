@@ -18,13 +18,12 @@ static void ClientSpawnContext(gentity_t *ent,qboolean revived,qboolean teamChan
 #include <limits.h>
 
 void NITMOD_SetSpawnProtection(gclient_t *client, qboolean revived) {
-	double expiry;
+	unsigned int duration;
 	if(!client || client->sess.sessionTeam == TEAM_SPECTATOR) return;
-	expiry = (double)level.time + (revived ? (g_fastres.integer == 1 ? 1000.0 : 3000.0)
-		: (double)g_spawnInvul.integer * 1000.0);
-	/* Preserve ordinary signed settings; avoid undefined overflow at extremes. */
-	client->ps.powerups[PW_INVULNERABLE] = expiry > INT_MAX ? INT_MAX :
-		expiry < INT_MIN ? INT_MIN : (int)expiry;
+	/* Original ClientSpawn uses 32-bit IMUL/ADD, including timer wrap. */
+	duration = revived ? (g_fastres.integer == 1 ? 1000u : 3000u)
+		: (unsigned int)g_spawnInvul.integer * 1000u;
+	client->ps.powerups[PW_INVULNERABLE] = (int)((unsigned int)level.time + duration);
 }
 #include "g_nitmod_teamcount.h"
 #include "nitmod_air.h"
@@ -399,6 +398,8 @@ void CopyToBodyQue( gentity_t *ent ) {
 	body->s.loopSound = 0;	// clear lava burning
 	body->s.number = body - g_entities;
 	body->timestamp = level.time;
+	body->nitmodItemSlide = qfalse;
+	body->nitmodItemAlign = qfalse;
 	body->physicsObject = qtrue;
 	body->physicsBounce = 0;		// don't bounce
 	if ( body->s.groundEntityNum == ENTITYNUM_NONE ) {
@@ -522,10 +523,6 @@ void limbo( gentity_t *ent, qboolean makeCorpse )
 	//int startclient = ent->client->sess.spectatorClient;
 	int startclient = ent->client->ps.clientNum;
 
-	if(ent->r.svFlags & SVF_POW) {
-		return;
-	}
-
 	if (!(ent->client->ps.pm_flags & PMF_LIMBO)) {
 
 		if( ent->client->ps.persistant[PERS_RESPAWNS_LEFT] == 0 ) {
@@ -602,39 +599,15 @@ reinforce
 // -- called when time expires for a team deployment cycle and there is at least one guy ready to go
 */
 void reinforce(gentity_t *ent) {
-	int p, team;// numDeployable=0, finished=0; // TTimo unused
-	char *classname;
+	int p;
 	gclient_t *rclient;
-	char	userinfo[MAX_INFO_STRING], *respawnStr;
 
-	if (ent->r.svFlags & SVF_BOT) {
-		trap_GetUserinfo( ent->s.number, userinfo, sizeof(userinfo) );
-		respawnStr = Info_ValueForKey( userinfo, "respawn" );
-		if (!Q_stricmp( respawnStr, "no" ) || !Q_stricmp( respawnStr, "off" )) {
-			return;	// no respawns
-		}
-	}
-
+	/* Original reinforce 0x4e2a0: only limbo gates deployment; bot userinfo
+	 * and multiview must not bypass or alter the reinforcement path. */
 	if (!(ent->client->ps.pm_flags & PMF_LIMBO)) {
 		G_Printf("player already deployed, skipping\n");
 		return;
 	}
-
-	if(ent->client->pers.mvCount > 0) {
-		G_smvRemoveInvalidClients(ent, TEAM_AXIS);
-		G_smvRemoveInvalidClients(ent, TEAM_ALLIES);
-	}
-
-	// get team to deploy from passed entity
-	team = ent->client->sess.sessionTeam;
-
-	// find number active team spawnpoints
-	if (team == TEAM_AXIS)
-		classname = "team_CTF_redspawn";
-	else if (team == TEAM_ALLIES)
-		classname = "team_CTF_bluespawn";
-	else
-		assert(0);
 
 	// DHM - Nerve :: restore persistant data now that we're out of Limbo
 	rclient = ent->client;
@@ -1584,7 +1557,8 @@ static int G_NITMOD_VisibleNameLength( const char *name )
 	int length = 0;
 
 	while( name && *name ) {
-		if( *name == Q_COLOR_ESCAPE && name[1] ) {
+		if( *name == Q_COLOR_ESCAPE ) {
+			if( !name[1] ) break;
 			name += 2;
 			continue;
 		}
@@ -1842,9 +1816,10 @@ char *ClientConnect( int clientNum, qboolean firstTime, qboolean isBot ) {
 	char		*value;
 	gclient_t	*client;
 	char		userinfo[MAX_INFO_STRING];
-	char		cleanName[MAX_NETNAME];
+	const char	*rawName;
 	gentity_t	*ent;
 	int		minimumNameLength;
+	qboolean demoClient;
 #ifdef USEXPSTORAGE
 	ipXPStorage_t* xpBackup;
 	int			i;
@@ -1859,23 +1834,24 @@ char *ClientConnect( int clientNum, qboolean firstTime, qboolean isBot ) {
 
 	trap_GetUserinfo( clientNum, userinfo, sizeof( userinfo ) );
 
-	if(!isBot && G_NITMOD_CensorUserinfoName(clientNum, userinfo) &&
+	/* Original ClientConnect exempts server-demo slots from name admission. */
+	demoClient = G_NITMOD_IsDemoClient(clientNum,
+		trap_Cvar_VariableIntegerValue("sv_demoState"),
+		trap_Cvar_VariableIntegerValue("sv_demoClients"));
+	if(!isBot && !demoClient && G_NITMOD_CensorUserinfoName(clientNum, userinfo) &&
 		(G_NITMOD_LegacyCvarInteger("g_censorPenalty", 1) & 2)) {
 		G_LogPrintf("[DROPCLIENT] Client %d Name censor (%s)\n",
 			clientNum, Info_ValueForKey(userinfo, "name"));
 		return "Name censor. Please change your name.";
 	}
 
-	/* Bots keep their script-selected names.  Human names are cleaned with the
-	 * same routine used by ClientUserinfoChanged before applying Nitmod's
-	 * visible-character minimum. */
+	/* Original ClientConnect counts the received name before ClientCleanName. */
 	minimumNameLength = G_NITMOD_LegacyCvarInteger("n_minNameLength", 0);
-	if( !isBot && minimumNameLength > 0 ) {
-		ClientCleanName( Info_ValueForKey( userinfo, "name" ), cleanName,
-			sizeof(cleanName) );
-		if( G_NITMOD_VisibleNameLength(cleanName) < minimumNameLength ) {
+	if( !isBot && !demoClient && minimumNameLength > 0 ) {
+		rawName = Info_ValueForKey(userinfo, "name");
+		if( G_NITMOD_VisibleNameLength(rawName) < minimumNameLength ) {
 			G_LogPrintf("[DROPCLIENT] Client %d Name too short (%s)\n",
-				clientNum, cleanName);
+				clientNum, rawName);
 			return va("Your name is too short, it must contain at least %d visible characters.\n",
 				minimumNameLength);
 		}
@@ -2156,6 +2132,10 @@ void ClientBegin( int clientNum )
 	client->ps.persistant[PERS_SPAWN_COUNT] = spawn_count;
 	client->ps.persistant[PERS_RESPAWNS_LEFT] = lives_left;
 	
+
+	client->pers.nitmodLastKillerClient = -1;
+	client->pers.nitmodRevengeTarget = -1;
+	client->pers.nitmodLastKilledClient = -1;
 
 	client->pers.complaintClient = -1;
 	client->pers.complaintEndTime = -1;
@@ -2630,7 +2610,7 @@ static void ClientSpawnContext( gentity_t *ent, qboolean revived, qboolean teamC
 	}
 
 	client->respawnTime = level.timeCurrent;
-	client->inactivityTime = level.time + g_inactivity.integer * 1000;
+	client->inactivityTime = (int)((unsigned int)level.time + (unsigned int)g_inactivity.integer * 1000u);
 	client->latched_buttons = 0;
 	client->latched_wbuttons = 0;	//----(SA)	added
 

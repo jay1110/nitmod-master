@@ -480,6 +480,8 @@ void G_deleteStats(int nClient)
 	cl->sess.nitmodKillingSpree = 0;
 	cl->sess.nitmodHeadHits = 0;
 	cl->sess.nitmodBodyHits = 0;
+	/* Original G_deleteStats 0x82e9f; the pers ammo counter is not reset. */
+	cl->sess.nitmodHealthSupplied = 0;
 	cl->sess.game_points = 0;
 	cl->sess.rounds = 0;
 	cl->sess.kills = 0;

@@ -47,6 +47,10 @@ static qboolean PM_NITMOD_PackChargeAvailable(const pmove_t *move) {
 	nitmodSkillTable_t table;
 	float fraction;
 	if(!NITMOD_WeaponChargeTable(move->ps->weapon,&table,&skill)) return qtrue;
+	/* Original BG_CheckCharge shares the Satchel threshold for smoke and
+	 * poison bombs; FireWeapon still pays through the Smoke table. */
+	if(move->ps->weapon == WP_SMOKE_BOMB || move->ps->weapon == WP_POISON_BOMB)
+		table=NITMOD_TABLE_SATCHEL;
 	if(move->nitmodPackChargeBypass) return qtrue;
 	switch(move->ps->stats[STAT_PLAYER_CLASS]) {
 	case PC_MEDIC: skill=SK_FIRST_AID; duration=move->medicChargeTime; break;
@@ -771,7 +775,10 @@ static qboolean PM_CheckJump( void ) {
 
 	// rain - revert to using pmext for this since pmext is fixed now.
 	// fix for #166
-	if (pm->cmd.serverTime - pm->pmext->jumpTime < 850)
+	/* Original PmoveSingle 0x30e22 subtracts in signed 32-bit before
+	 * comparing with 849; elapsed time remains valid across timer wrap. */
+	if (NITMOD_AddWeaponTime32(pm->cmd.serverTime,
+		NITMOD_AddWeaponTime32(~pm->pmext->jumpTime, 1)) < 850)
 		return qfalse;
 
 	// don't allow if player tired 
@@ -974,8 +981,8 @@ static qboolean PM_CheckProne (void)
 				}
 
 				// don't jump for a bit
-				pm->pmext->jumpTime = pm->cmd.serverTime - 650;
-				pm->ps->jumpTime = pm->cmd.serverTime - 650;
+				pm->pmext->jumpTime = NITMOD_AddWeaponTime32(pm->cmd.serverTime, -650);
+				pm->ps->jumpTime = pm->pmext->jumpTime;
 			}
 		}
 	}
@@ -1276,8 +1283,9 @@ qboolean BG_NITMOD_CheckAirJump(pmove_t *move) {
 	ps->pm_flags |= PMF_JUMP_HELD | PMF_NITMOD_DOUBLEJUMPED;
 	ps->groundEntityNum = ENTITYNUM_NONE;
 	ps->velocity[2] = JUMP_VELOCITY * move->nitmodDoubleJumpHeight;
-	if(move->cmd.serverTime - move->pmext->jumpTime >= 850) {
-		move->pmext->sprintTime -= 2500;
+	if(NITMOD_AddWeaponTime32(move->cmd.serverTime,
+		NITMOD_AddWeaponTime32(~move->pmext->jumpTime, 1)) >= 850) {
+		move->pmext->sprintTime = NITMOD_AddWeaponTime32(move->pmext->sprintTime, -2500);
 		if(move->pmext->sprintTime < 0) move->pmext->sprintTime = 0;
 		move->pmext->jumpTime = move->cmd.serverTime;
 	}
@@ -1402,9 +1410,10 @@ static void PM_WalkMove( void ) {
 			PM_AirMove();
 		}
 
-		if (!(pm->cmd.serverTime - pm->pmext->jumpTime < 850)) {
+		if (NITMOD_AddWeaponTime32(pm->cmd.serverTime,
+			NITMOD_AddWeaponTime32(~pm->pmext->jumpTime, 1)) >= 850) {
 
-			pm->pmext->sprintTime -= 2500;
+			pm->pmext->sprintTime = NITMOD_AddWeaponTime32(pm->pmext->sprintTime, -2500);
 			if (pm->pmext->sprintTime < 0)
 				pm->pmext->sprintTime = 0;
 
@@ -3614,7 +3623,7 @@ static void PM_Weapon( void ) {
 
 
 	if(pm->nitmodPackChargeEnabled) {
-		if(!PM_NITMOD_PackChargeAvailable(pm)) {
+		if(((pm->cmd.buttons & BUTTON_ATTACK) || pm->ps->weapon == WP_MEDIC_ADRENALINE) && !PM_NITMOD_PackChargeAvailable(pm)) {
 			if((pm->ps->weapon==WP_AMMO || pm->ps->weapon==WP_MEDKIT) &&
 			   (pm->cmd.buttons & BUTTON_ATTACK))
 				BG_AnimScriptEvent(pm->ps,pm->character->animModelInfo,ANIM_ET_NOPOWER,qtrue,qfalse);

@@ -3082,8 +3082,8 @@ void Reached_Train_rotating( gentity_t *ent ) {
 		ent->s.pos.trDuration = (next->duration * 1000);	
 	else	
 		ent->s.pos.trDuration = length * 1000 / speed;
-	/* SetMoverState(MOVER_1TO2) consumes gDuration, not trDuration. */
-	ent->gDuration = ent->s.pos.trDuration;
+	/* Original 0x921e3 restores the existing gDuration for translation.
+	 * The corner-derived duration above controls rotation only. */
 
 	// Rotate the train
 	frames = floor(ent->s.pos.trDuration / 100);

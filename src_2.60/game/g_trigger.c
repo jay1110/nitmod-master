@@ -554,12 +554,13 @@ void heal_touch( gentity_t *self, gentity_t *other, trace_t *trace ) {
 
 #define HEALTH_REGENTIME g_healthCabinetTime.integer
 void trigger_heal_think(gentity_t* self) {
-	self->nextthink = level.time + HEALTH_REGENTIME;
+	self->nextthink = (int)((unsigned int)level.time + (unsigned int)HEALTH_REGENTIME);
 /*	if(self->timestamp - level.time > -HEALTH_REGENTIME) {
 		return;
 	}*/
 
-	self->health += self->damage;
+	/* Original adds in 32 bits before the signed capacity comparison. */
+	self->health = (int)((unsigned int)self->health + (unsigned int)self->damage);
 	if(self->health > self->count) {
 		self->health = self->count;
 	}
@@ -574,7 +575,7 @@ void trigger_heal_setup(gentity_t* self) {
 
 	if(TRIGGER_HEAL_CANTHINK(self)) {
 		self->think = trigger_heal_think;
-		self->nextthink = level.time + FRAMETIME;
+		self->nextthink = (int)((unsigned int)level.time + (unsigned int)FRAMETIME);
 	}	
 }
 
@@ -629,10 +630,10 @@ void SP_trigger_heal( gentity_t *self ) {
 	self->target_ent = NULL;
 	if(self->target && *self->target) {
 		self->think = trigger_heal_setup;
-		self->nextthink = level.time + FRAMETIME;
+		self->nextthink = (int)((unsigned int)level.time + (unsigned int)FRAMETIME);
 	} else if(TRIGGER_HEAL_CANTHINK(self)) {
 		self->think = trigger_heal_think;
-		self->nextthink = level.time + HEALTH_REGENTIME;
+		self->nextthink = (int)((unsigned int)level.time + (unsigned int)HEALTH_REGENTIME);
 	}
 
 	// healrate specifies the amount of healing per second
@@ -745,12 +746,13 @@ void ammo_touch( gentity_t *self, gentity_t *other, trace_t *trace ) {
 
 #define AMMO_REGENTIME g_ammoCabinetTime.integer
 void trigger_ammo_think(gentity_t* self) {
-	self->nextthink = level.time + AMMO_REGENTIME;
+	self->nextthink = (int)((unsigned int)level.time + (unsigned int)AMMO_REGENTIME);
 /*	if(self->timestamp - level.time > -AMMO_REGENTIME) {
 		return;
 	}*/
 
-	self->health += self->damage;
+	/* Original adds in 32 bits before the signed capacity comparison. */
+	self->health = (int)((unsigned int)self->health + (unsigned int)self->damage);
 	if(self->health > self->count) {
 		self->health = self->count;
 	}
@@ -765,7 +767,7 @@ void trigger_ammo_setup(gentity_t* self) {
 
 	if(TRIGGER_AMMO_CANTHINK(self)) {
 		self->think = trigger_ammo_think;
-		self->nextthink = level.time + FRAMETIME;
+		self->nextthink = (int)((unsigned int)level.time + (unsigned int)FRAMETIME);
 	}	
 }
 
@@ -828,10 +830,10 @@ void SP_trigger_ammo( gentity_t *self ) {
 	self->target_ent = NULL;
 	if(self->target && *self->target) {
 		self->think = trigger_ammo_setup;
-		self->nextthink = level.time + FRAMETIME;
+		self->nextthink = (int)((unsigned int)level.time + (unsigned int)FRAMETIME);
 	} else if(TRIGGER_AMMO_CANTHINK(self)) {
 		self->think = trigger_ammo_think;
-		self->nextthink = level.time + AMMO_REGENTIME;
+		self->nextthink = (int)((unsigned int)level.time + (unsigned int)AMMO_REGENTIME);
 	}
 
 	// ammorate specifies the amount of ammo added per second

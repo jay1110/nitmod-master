@@ -233,12 +233,12 @@ void TossClientItems( gentity_t *self ) {
 		}
 	}
 
-	if( (options & 2) && COM_BitCheck(self->client->ps.weapons, WP_BINOCULARS) ) {
+	if( (options & 2) && (self->client->sess.nitmodSkillMasks[SK_BATTLE_SENSE] & 2u) ) {
 		G_DropWeapon( self, WP_BINOCULARS );
 	}
 
 	if( (options & 32) &&
-		self->client->ps.ammo[BG_FindAmmoForWeapon(WP_KNIFE)] > 1 ) {
+		self->client->ps.ammoclip[BG_FindClipForWeapon(WP_KNIFE)] > 1 ) {
 		G_DropWeapon( self, WP_KNIFE );
 	}
 }
@@ -493,8 +493,8 @@ void G_NITMOD_EndReviveSpree( gentity_t *victim, gentity_t *attacker ) {
 		}
 	}
 	victim->client->nitmodReviveSpree = 0;
-	victim->client->nitmodMultiReviveCount = 0;
-	victim->client->nitmodLastReviveTime = 0;
+	/* Original G_UpdateKillingSpree clears only the ordinary revive spree.
+	 * Multi-revive timing belongs to the syringe/revive paths. */
 }
 
 /* Original G_Damage: zero selects -75; a positive magnitude is negated.
@@ -534,7 +534,25 @@ void player_die( gentity_t *self, gentity_t *inflictor, gentity_t *attacker, int
 	//float			timeLived;
 	weapon_t	weap = BG_WeaponForMOD( meansOfDeath );
 
+	/* Original player_die updates shortcuts before assists, then consumes a
+	 * separate revenge target before fear/shove attribution is rewritten. */
+	if (self->client && attacker && attacker->client) {
+		self->client->pers.nitmodLastKillerClient = attacker->s.clientNum;
+		attacker->client->pers.nitmodLastKilledClient = self->s.clientNum;
+	}
 	G_NITMOD_AwardKillAssists(self, attacker, meansOfDeath);
+	if (self->client && attacker && attacker->client &&
+		G_NITMOD_LegacyCvarInteger("g_revenge", 0)) {
+		if (attacker != self) {
+			self->client->pers.nitmodRevengeTarget = attacker->s.clientNum;
+		}
+		if (attacker->client->pers.nitmodLastKilledClient ==
+			attacker->client->pers.nitmodRevengeTarget) {
+			trap_SendServerCommand(attacker->s.clientNum, "an -2 1");
+			G_AddSkillPoints(attacker, SK_BATTLE_SENSE, 1.f);
+			attacker->client->pers.nitmodRevengeTarget = -1;
+		}
+	}
 	if(self->client && meansOfDeath == MOD_FEAR)
 		weap = BG_WeaponForMOD(self->client->lasthurt_mod);
 	/* Original resolves pushed falls before death statistics and Lua obituary.
@@ -563,20 +581,7 @@ void player_die( gentity_t *self, gentity_t *inflictor, gentity_t *attacker, int
 	} else {
 		G_LogDeath( self,		weap );
 		G_LogKill(	attacker,	weap );
-		if( self->client && attacker && attacker->client ) {
-			int victimNum = (int)(self - g_entities);
-			int attackerNum = (int)(attacker - g_entities);
-			self->client->pers.nitmodLastKillerClient = attacker - g_entities;
-			attacker->client->pers.nitmodLastKilledClient = victimNum;
-			/* Original g_revenge consumer: killing the player who most recently
-			 * killed us grants one Battle Sense point and consumes the target. */
-			if( G_NITMOD_LegacyCvarInteger("g_revenge", 0) &&
-				attacker->client->pers.nitmodLastKillerClient == victimNum ) {
-				trap_SendServerCommand(attackerNum, "an -2 1");
-				G_AddSkillPoints(attacker, SK_BATTLE_SENSE, 1.f);
-				attacker->client->pers.nitmodLastKillerClient = -1;
-			}
-		}
+
 
 		if( g_gamestate.integer == GS_PLAYING ) {
 			if( attacker->client ) {
@@ -795,7 +800,13 @@ void player_die( gentity_t *self, gentity_t *inflictor, gentity_t *attacker, int
 			//G_AddExperience( attacker, 1 );
 
 			// JPW NERVE -- mostly added as conveneience so we can tweak from the #defines all in one place
-			AddScore(attacker, WOLF_FRAG_BONUS);
+			/* Original 0x67059 / 0x68476: this compares the absolute
+			 * inactivity deadline, not elapsed inactivity. It only controls
+			 * the game-points bonus; kill XP and spree bookkeeping continue. */
+			if( (G_NITMOD_LegacyCvarInteger("g_misc", 0) & 2) &&
+				self->client->inactivityTime <= 29999 ) {
+				AddScore(attacker, WOLF_FRAG_BONUS);
+			}
 
 			if( g_gametype.integer == GT_WOLF_LMS ) {
 				if( level.firstbloodTeam == -1 )
@@ -1646,13 +1657,11 @@ void G_Damage( gentity_t *targ, gentity_t *inflictor, gentity_t *attacker,  vec3
 	 * positive impulses; teammate pushing is independent of damage permission. */
 	if ( knockback > 0 && client && (!onSameTeam ||
 	     (g_friendlyFire.integer & 17) || g_gametype.integer == GT_WOLF_DM) ) {
-		vec3_t	kvel;
-		float	mass;
-
-		mass = 200;
-
-		VectorScale (dir, g_knockback.value * (float)knockback / mass, kvel);
-		VectorAdd (targ->client->ps.velocity, kvel, targ->client->ps.velocity);
+		double scale = (double)g_knockback.value * knockback / 200.0;
+		int axis;
+		/* Original x87 keeps the impulse unrounded until each velocity store. */
+		for(axis = 0; axis < 3; ++axis)
+			client->ps.velocity[axis] = (float)((double)client->ps.velocity[axis] + (double)dir[axis] * scale);
 		if(attacker && attacker->client &&
 		   (targ->client->ps.groundEntityNum != ENTITYNUM_NONE || G_WeaponIsExplosive(mod))) {
 			targ->client->nitmodPushed = qtrue;
@@ -1867,17 +1876,15 @@ void G_Damage( gentity_t *targ, gentity_t *inflictor, gentity_t *attacker,  vec3
 		}
 	}
 
-	/* Original 0x69adf..0x69b04 applies flag0x20 after hit classification.
-	 * Without that flag, GOOMBA uses strict force-limbo thresholds:
-	 * 0x6a518..0x6a546 for living targets, 0x6ae82..0x6ae96 for corpses.
-	 * Keep comparisons/sums defined for configurable INT_MAX health. */
+	/* Original G_Damage uses signed comparisons on wrapped 32-bit SUB/ADD.
+	 * Keep the exact strict threshold, including INT_MIN and large health. */
 	{
-		long long aliveHealth = targ->health > 0 ? targ->health : 0;
-		long long threshold = G_NITMOD_ForceLimboThreshold(g_forceLimboHealth.integer);
+		int aliveHealth = targ->health > 0 ? targ->health : 0;
+		int threshold = G_NITMOD_ForceLimboThreshold(g_forceLimboHealth.integer);
+		int damageLimit = (int)((unsigned int)aliveHealth - (unsigned int)threshold);
 		if((dflags & DAMAGE_NITMOD_INSTANT_KILL) ||
-		   (mod == MOD_GOOMBA && (long long)take > aliveHealth - threshold)) {
-			long long instantDamage = aliveHealth + 175;
-			take = instantDamage > INT_MAX ? INT_MAX : (int)instantDamage;
+		   (mod == MOD_GOOMBA && take > damageLimit)) {
+			take = (int)((unsigned int)aliveHealth + 175u);
 		}
 	}
 
@@ -1950,20 +1957,17 @@ void G_Damage( gentity_t *targ, gentity_t *inflictor, gentity_t *attacker,  vec3
 		targ->client->nitmodLastHurtTime = level.time;
 	}
 
+	/* Original 0x69c6a..0x69c91 records admitted client contacts before the
+	 * nonzero-take gate, including self/corpse contacts and integer wrap. */
+	if(targ->client && attacker && attacker->client &&
+		attacker->s.number >= 0 && attacker->s.number < MAX_CLIENTS) {
+		int *received = &targ->client->nitmodDamageReceived[attacker->s.number];
+		*received = (int)((unsigned int)*received + (unsigned int)take);
+	}
 	// do the damage
 	if( take ) {
-		if( wasAlive && targ->client && attacker && attacker->client &&
-			attacker != targ && attacker->s.number >= 0 &&
-			attacker->s.number < MAX_CLIENTS ) {
-			int *received = &targ->client->nitmodDamageReceived[attacker->s.number];
-			if( take <= 0x7fffffff - *received ) *received += take;
-			else *received = 0x7fffffff;
-		}
-		{
-			long long remaining = (long long)targ->health - take;
-			targ->health = remaining < INT_MIN ? INT_MIN :
-				remaining > INT_MAX ? INT_MAX : (int)remaining;
-		}
+		/* Original 0x69cae subtracts before the weapon-specific gib rules. */
+		targ->health = (int)((unsigned int)targ->health - (unsigned int)take);
 		if (targ->client && attacker && attacker != targ) {
 			Bot_Event_TakeDamage(targ - g_entities, attacker);
 		}

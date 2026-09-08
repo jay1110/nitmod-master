@@ -82,7 +82,7 @@ void G_SendScore( gentity_t *ent ) {
 			if ( cl->pers.connected == CON_CONNECTING ) {
 				ping = -1;
 			} else {
-				ping = cl->ps.ping < 999 ? cl->ps.ping : 999;
+				ping = cl->pers.nitmodRealPing < 999 ? cl->pers.nitmodRealPing : 999;
 			}
 
 			if( g_gametype.integer == GT_WOLF_LMS ) {
@@ -1855,18 +1855,18 @@ static qboolean G_NITMOD_CheckClientFlood(gentity_t *ent, qboolean queryOnly) {
 	if(!ent || !ent->client || !G_NITMOD_LegacyCvarInteger("g_floodprotect", 1))
 		return qfalse;
 	pers = &ent->client->pers;
-	if(!queryOnly && level.time - pers->nitmodFloodWindowTime > 30000)
+	if(!queryOnly && (int)((unsigned int)level.time - (unsigned int)pers->nitmodFloodWindowTime) > 30000)
 		pers->nitmodFloodWindowTime = level.time;
 	if(pers->nitmodFloodNextTime > level.time) return qtrue;
 	if(!G_NITMOD_AdminPrivilege((int)(ent - g_entities), "nocensorflood") &&
-		level.time - pers->nitmodFloodWindowTime <= 30000 &&
+		(int)((unsigned int)level.time - (unsigned int)pers->nitmodFloodWindowTime) <= 30000 &&
 		pers->nitmodFloodCount > G_NITMOD_LegacyCvarInteger("g_floodthreshold", 6)) {
-		if(!queryOnly) pers->nitmodFloodNextTime = level.time + 500;
+		if(!queryOnly) pers->nitmodFloodNextTime = (int)((unsigned int)level.time + 500u);
 		return qtrue;
 	}
 	if(!queryOnly) {
-		pers->nitmodFloodCount++;
-		pers->nitmodFloodNextTime = level.time + G_NITMOD_LegacyCvarInteger("g_floodWait", 1000);
+		pers->nitmodFloodCount = (int)((unsigned int)pers->nitmodFloodCount + 1u);
+		pers->nitmodFloodNextTime = (int)((unsigned int)level.time + (unsigned int)G_NITMOD_LegacyCvarInteger("g_floodWait", 1000));
 	}
 	return qfalse;
 }
@@ -1966,20 +1966,24 @@ static void G_VoiceWithText( gentity_t *ent, gentity_t *target, int mode, const 
 	float selection = random();
 
 	// DHM - Nerve :: Don't allow excessive spamming of voice chats
-	ent->voiceChatSquelch -= (level.time - ent->voiceChatPreviousTime);
+	/* Original G_Voice 0x588ac..0x588b4 wraps before the signed clamp. */
+	ent->voiceChatSquelch = (int)((unsigned int)ent->voiceChatSquelch +
+		(unsigned int)ent->voiceChatPreviousTime - (unsigned int)level.time);
 	ent->voiceChatPreviousTime = level.time;
 
 	if ( ent->voiceChatSquelch < 0 )
 		ent->voiceChatSquelch = 0;
 
 	// Only do the spam check for MP
-	if ( ent->voiceChatSquelch >= 30000 ) {
+	if ( ent->voiceChatSquelch >= 30000 &&
+		!G_NITMOD_AdminPrivilege((int)(ent - g_entities), "nocensorflood") ) {
 		trap_SendServerCommand( ent-g_entities, "cpm \"^1Spam Protection^7: VoiceChat ignored\n\"" );
 		return;
 	}
 
 	if ( g_voiceChatsAllowed.integer )
-		ent->voiceChatSquelch += (34000 / g_voiceChatsAllowed.integer);
+		ent->voiceChatSquelch = (int)((unsigned int)ent->voiceChatSquelch +
+			(unsigned int)(34000 / g_voiceChatsAllowed.integer));
 	else
 		return;
 	// dhm
@@ -2993,6 +2997,8 @@ qboolean Do_Activate2_f(gentity_t *ent, gentity_t *traceEnt) {
 						ent->client->disguiseRank = g_entities[traceEnt->s.clientNum].client ? g_entities[traceEnt->s.clientNum].client->sess.rank : 0;
 
 						ClientUserinfoChanged( ent->s.clientNum );
+						/* Original G_UniformSteal 0x5b115 shares the living-uniform counter. */
+						ent->client->pers.nitmodUniformsStolen = ent->client->pers.nitmodUniformsStolen == INT_MAX ? INT_MIN : ent->client->pers.nitmodUniformsStolen + 1;
 					} else {
 						BODY_VALUE( traceEnt ) += 5;
 					}
@@ -3295,35 +3301,37 @@ tryagain:
 }
 
 
-/* Original G_PushPlayer 0x5b660; see experimental-player-shove.md for
- * intentionally incomplete extended-state and wire mappings. */
+/* Original G_PushPlayer 0x5b660: keep integer wrap, admission and entity event. */
 qboolean G_PushPlayer(gentity_t *actor, gentity_t *target) {
-	vec3_t impulse;
-	float vertical;
-	int i;
-	if(!actor || !actor->client || !target || !target->client || actor == target ||
-	   !g_shove.integer || actor->health <= 0 || target->health <= 0 ||
+	vec3_t direction;
+	double impulse[3];
+	int axis, scale;
+	if(!actor || !actor->client || !target || !target->client ||
+	   !g_shove.integer || actor->health <= 0 ||
 	   actor->client->ps.powerups[PW_INVULNERABLE] ||
-	   (double)level.time - actor->client->nitmodLastShoveTime < 500.0) return qfalse;
+	   (int)((unsigned int)level.time - (unsigned int)actor->client->nitmodLastShoveTime) < 500)
+		return qfalse;
 	actor->client->nitmodLastShoveTime = level.time;
-	AngleVectors(actor->client->ps.viewangles, impulse, NULL, NULL);
-	VectorNormalizeFast(impulse);
-	VectorScale(impulse, (float)g_shove.integer * 5.0f, impulse);
-	vertical = impulse[2];
-	impulse[2] = !g_shoveNoZ.integer && vertical > fabs(impulse[0]) &&
-		vertical > fabs(impulse[1]) ? vertical * .8f : 64.0f;
-	VectorAdd(target->s.pos.trDelta, impulse, target->s.pos.trDelta);
-	VectorAdd(target->client->ps.velocity, impulse, target->client->ps.velocity);
+	AngleVectors(actor->client->ps.viewangles, direction, NULL, NULL);
+	VectorNormalizeFast(direction);
+	/* Original LEA multiplies in signed 32-bit before fild; do not multiply
+	 * a prematurely rounded float or introduce signed-overflow undefined behavior. */
+	scale = (int)((unsigned int)g_shove.integer * 5u);
+	for(axis = 0; axis < 3; ++axis)
+		impulse[axis] = (double)direction[axis] * scale;
+	impulse[2] = !g_shoveNoZ.integer && impulse[2] > fabs(impulse[0]) &&
+		impulse[2] > fabs(impulse[1]) ? (double)direction[2] * g_shove.integer * 4.0 : 64.0;
+	for(axis = 0; axis < 3; ++axis) {
+		target->s.pos.trDelta[axis] = (float)(target->s.pos.trDelta[axis] + impulse[axis]);
+		target->client->ps.velocity[axis] = (float)(target->client->ps.velocity[axis] + impulse[axis]);
+	}
 	target->client->nitmodPushed = qtrue;
 	target->client->nitmodPushedBy = (int)(actor - g_entities);
+	/* Use the existing original-event envelope so snapshot/PVS delivery and
+	 * repeat bits follow G_AddEvent, instead of a reliable global command. */
+	G_AddEvent(target, NITMOD_LuaEventEncode(96), 0);
 	target->client->ps.pm_time = 100;
 	target->client->ps.pm_flags |= PMF_TIME_KNOCKBACK;
-	/* Event 96 belongs to the original wire layout, not native ET. */
-	for(i = 0; i < level.maxclients && i < MAX_CLIENTS; ++i) {
-		if(level.clients[i].pers.connected == CON_CONNECTED &&
-		   G_NITMOD_ClientSupports(i, NITMOD_FEATURE_SHOVE_SOUND))
-			trap_SendServerCommand(i, va("nsh %i", target->s.number));
-	}
 	return qtrue;
 }
 
@@ -3347,6 +3355,38 @@ qboolean G_DragCorpse(gentity_t *actor, gentity_t *body) {
 	return qtrue;
 }
 
+/* Original G_UniformSteal_2 0x5ac80: the caller has checked the enemy,
+ * Covert reward, g_misc bit128, stripped state and strict facing angle. */
+static qboolean G_NITMOD_UniformStealLiving(gentity_t *actor, gentity_t *target) {
+ gclient_t *client, *identity;
+ int slot;
+ if(!actor || !actor->client || !target || !target->client ||
+    g_gametype.integer==GT_WOLF_DM || actor->health<=0) return qfalse;
+ client=actor->client;
+ if(client->ps.powerups[PW_OPS_DISGUISED] || client->ps.powerups[PW_BLUEFLAG] ||
+    client->ps.powerups[PW_REDFLAG]) return qfalse;
+ /* The original indexes the victim identity by entityState.clientNum. Bound
+  * invalid engine state before any mutation instead of reproducing its OOB. */
+ slot=target->s.clientNum;
+ if(slot<0 || slot>=MAX_CLIENTS || !(identity=g_entities[slot].client)) return qfalse;
+ client->ps.powerups[PW_OPS_DISGUISED]=1;
+ client->ps.powerups[PW_OPS_CLASS_1]=target->client->sess.playerType&1;
+ client->ps.powerups[PW_OPS_CLASS_2]=target->client->sess.playerType&2;
+ client->ps.powerups[PW_OPS_CLASS_3]=target->client->sess.playerType&4;
+ target->client->ps.eFlags|=NITMOD_EF_STRIPPED;
+ G_AddEvent(actor,EV_DISGUISE_SOUND,0);
+ G_AddSkillPoints(actor,SK_MILITARY_INTELLIGENCE_AND_SCOPED_WEAPONS,5.f);
+ if(g_debugSkills.integer)
+  G_DebugAddSkillPoints(actor,SK_MILITARY_INTELLIGENCE_AND_SCOPED_WEAPONS,5.f,"back stealing uniform");
+ Q_strncpyz(client->disguiseNetname,identity->pers.netname,sizeof(client->disguiseNetname));
+ client->disguiseRank=identity->sess.rank;
+ ClientUserinfoChanged(actor->s.clientNum);
+ /* Original INCL wraps signed32; use defined arithmetic for its boundary. */
+ client->pers.nitmodUniformsStolen=client->pers.nitmodUniformsStolen==INT_MAX ? INT_MIN : client->pers.nitmodUniformsStolen+1;
+ if(!(g_entities[slot].r.svFlags&SVF_BOT)) G_NITMOD_GlobalStatsEvent(actor->s.number,14);
+ return qtrue;
+}
+
 void Cmd_Activate2_f( gentity_t *ent ) {
 	trace_t		tr;
 	vec3_t		end;
@@ -3362,10 +3402,11 @@ void Cmd_Activate2_f( gentity_t *ent ) {
 		return;
 	}
 
+	if(g_canisterKick.integer) G_CanisterKick(ent);
+
 	AngleVectors (ent->client->ps.viewangles, forward, right, up);
 	CalcMuzzlePointForActivate (ent, forward, right, up, offset);
 	VectorMA (offset, 96, forward, end);
-	G_CanisterKick(ent);
 
 	/* Nitmod checks client-backed corpses before the class-specific action. */
 	trap_Trace(&tr, offset, NULL, NULL, end, ent->s.number, CONTENTS_CORPSE);
@@ -3374,13 +3415,30 @@ void Cmd_Activate2_f( gentity_t *ent ) {
 		G_DragCorpse(ent, &g_entities[tr.entityNum]);
 		return;
 	}
-	trap_Trace(&tr, offset, NULL, NULL, end, ent->s.number, CONTENTS_BODY);
-	if(tr.entityNum >= 0 && tr.entityNum < MAX_GENTITIES &&
-	   g_entities[tr.entityNum].client) {
-		if(g_entities[tr.entityNum].health <= 0)
-			G_DragCorpse(ent, &g_entities[tr.entityNum]);
-		else G_PushPlayer(ent, &g_entities[tr.entityNum]);
-		return;
+	/* Original 0x5d0f8: bot BODY activation requires OmniBot option64. */
+	if(!(ent->r.svFlags&SVF_BOT) || (g_OmniBotFlags.integer&64)) {
+		trap_Trace(&tr, offset, NULL, NULL, end, ent->s.number, CONTENTS_BODY);
+		if(tr.entityNum >= 0 && tr.entityNum < MAX_GENTITIES &&
+		   g_entities[tr.entityNum].client) {
+			traceEnt=&g_entities[tr.entityNum];
+			if(traceEnt->client->ps.eFlags&EF_SPARE0) {
+				G_DragCorpse(ent,traceEnt);
+				return;
+			}
+			if(!OnSameTeam(ent,traceEnt) && ent->client->sess.playerType==PC_COVERTOPS &&
+			   (ent->client->sess.nitmodSkillMasks[SK_MILITARY_INTELLIGENCE_AND_SCOPED_WEAPONS]&16u) &&
+			   (G_NITMOD_LegacyCvarInteger("g_misc",0)&128) &&
+			   !(traceEnt->client->ps.eFlags&NITMOD_EF_STRIPPED)) {
+				vec3_t angleDelta;
+				AnglesSubtract(traceEnt->client->ps.viewangles,ent->client->ps.viewangles,angleDelta);
+				if(fabs((double)angleDelta[YAW])<50.0) {
+					G_NITMOD_UniformStealLiving(ent,traceEnt);
+					return; /* Original does not push if this selected helper declines. */
+				}
+			}
+			G_PushPlayer(ent,traceEnt);
+			return;
+		}
 	}
 	trap_Trace (&tr, offset, NULL, NULL, end, ent->s.number, (CONTENTS_SOLID|CONTENTS_BODY|CONTENTS_CORPSE));
 
@@ -3902,11 +3960,14 @@ qboolean G_NITMOD_ClientMuted(gentity_t *ent) {
  * including duration zero, before its msec early return. */
 void G_NITMOD_UpdateCensorMute(gentity_t *ent) {
 	gclient_t *client;
-	long long duration;
+	int duration, elapsed;
 	if(!ent || !(client = ent->client) || !client->sess.muted ||
 		client->sess.nitmodCensorMuteTime == -1) return;
-	duration = (long long)G_NITMOD_LegacyCvarInteger("g_censorMuteTime", 0) * 1000;
-	if((long long)level.time - client->sess.nitmodCensorMuteTime <= duration) return;
+	/* Original ClientThink_real 0x403b2..0x403c3: wrapping SUB/IMUL,
+	 * followed by a signed, strictly-greater comparison. */
+	duration = (int)((unsigned int)G_NITMOD_LegacyCvarInteger("g_censorMuteTime", 0) * 1000u);
+	elapsed = (int)((unsigned int)level.time - (unsigned int)client->sess.nitmodCensorMuteTime);
+	if(elapsed <= duration) return;
 	trap_SendServerCommand(ent - g_entities,
 		"print \"^5You've been auto-unmuted. Language penalty lifted.\n\"");
 	client->sess.muted = qfalse;

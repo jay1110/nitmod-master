@@ -741,6 +741,7 @@ void CG_PredictPlayerState( void ) {
 	static pmoveExt_t backupPmext[MAX_BACKUP_STATES];
 	static int previousOptimize, previousFixed, previousMsec, previousClient = -1;
 	static int previousNitmodFixed, previousNitmodFps;
+	static int previousNitmodLean, previousLeanWeaponBit;
 	static int previousProneDelay, previousCrouchStandDelay, previousStandCrouchDelay;
 	static unsigned int previousDelayEpoch;
 	nitmodDelayState_t delayState;
@@ -781,7 +782,7 @@ void CG_PredictPlayerState( void ) {
 	cg_pmove.nitmodCrouchStandDelay = NITMOD_UsesNitmodHud() ? NITMOD_SimpleConfig()->crouchStandDelay : 0;
 	cg_pmove.nitmodStandCrouchDelay = NITMOD_UsesNitmodHud() ? NITMOD_SimpleConfig()->standCrouchDelay : 0;
 	cg_pmove.nitmodDoubleJump = NITMOD_SimpleConfig()->doubleJump;
-		cg_pmove.nitmodLeanEnabled = NITMOD_UsesOriginalProtocol();
+		cg_pmove.nitmodLeanEnabled = NITMOD_UsesNitmodHud();
 		cg_pmove.nitmodReloadEnabled = !Q_stricmp(Info_ValueForKey(CG_ConfigString(CS_SERVERINFO), "gamename"), "nitmod");
 		cg_pmove.nitmodAuthoritativeWeapons = NITMOD_UsesNitmodHud();
 		NITMOD_PackPredictionInputs(&cg_pmove,cg.snap->ps.clientNum);
@@ -838,7 +839,7 @@ void CG_PredictPlayerState( void ) {
 	cg_pmove.nitmodCrouchStandDelay = NITMOD_UsesNitmodHud() ? NITMOD_SimpleConfig()->crouchStandDelay : 0;
 	cg_pmove.nitmodStandCrouchDelay = NITMOD_UsesNitmodHud() ? NITMOD_SimpleConfig()->standCrouchDelay : 0;
 	cg_pmove.nitmodDoubleJump = NITMOD_SimpleConfig()->doubleJump;
-	cg_pmove.nitmodLeanEnabled = NITMOD_UsesOriginalProtocol();
+	cg_pmove.nitmodLeanEnabled = NITMOD_UsesNitmodHud();
 	cg_pmove.nitmodReloadEnabled = !Q_stricmp(Info_ValueForKey(CG_ConfigString(CS_SERVERINFO), "gamename"), "nitmod");
 	cg_pmove.nitmodAuthoritativeWeapons = NITMOD_UsesNitmodHud();
 	NITMOD_PackPredictionInputs(&cg_pmove,cg.snap->ps.clientNum);
@@ -965,6 +966,8 @@ void CG_PredictPlayerState( void ) {
 	if(!optimize || resetCache || !previousOptimize || previousDelayEpoch != nitmodDelayEpoch ||
 	   previousFixed != cg_pmove.pmove_fixed || previousMsec != cg_pmove.pmove_msec ||
 	   previousNitmodFixed != cg_pmove.nitmodFixedPhysics || previousNitmodFps != cg_pmove.nitmodFixedPhysicsFps ||
+	   previousNitmodLean != cg_pmove.nitmodLeanEnabled ||
+	   previousLeanWeaponBit != (cg_pmove.nitmodLeanEnabled ? cg_pmove.nitmodWeaponFlags & 256 : 0) ||
 	   previousProneDelay != cg_pmove.nitmodProneDelay ||
 	   previousCrouchStandDelay != cg_pmove.nitmodCrouchStandDelay ||
 	   previousStandCrouchDelay != cg_pmove.nitmodStandCrouchDelay ||
@@ -998,6 +1001,8 @@ void CG_PredictPlayerState( void ) {
 	previousFixed = cg_pmove.pmove_fixed;
 	previousNitmodFixed = cg_pmove.nitmodFixedPhysics;
 	previousNitmodFps = cg_pmove.nitmodFixedPhysicsFps;
+	previousNitmodLean = cg_pmove.nitmodLeanEnabled;
+	previousLeanWeaponBit = cg_pmove.nitmodLeanEnabled ? cg_pmove.nitmodWeaponFlags & 256 : 0;
 	previousProneDelay = cg_pmove.nitmodProneDelay;
 	previousCrouchStandDelay = cg_pmove.nitmodCrouchStandDelay;
 	previousStandCrouchDelay = cg_pmove.nitmodStandCrouchDelay;

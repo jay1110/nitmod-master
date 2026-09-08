@@ -790,6 +790,83 @@ void G_DebugAddSkillPoints( gentity_t *ent, skillType_t skill, float points, con
 	}																			\
 	Q_strcat( buffer, 1024, va( ";%s; %i ", best ? best->pers.netname : "", best ? best->sess.sessionTeam : -1 ) )
 
+/* Original jP_BuildEndgameStats 0xd0b00: sixteen Nitmod slots, separate
+ * from ET's fourteen awards. Original per-map counters keep their own
+ * slots; the stock ET selection/configstring remains available separately. */
+static int G_NITMOD_AwardSigned(unsigned int value) {
+ return value <= INT_MAX ? (int)value : -1 - (int)(UINT_MAX-value);
+}
+
+static double G_NITMOD_RoundAwardValue(const gclient_t *cl,int award) {
+ unsigned int shots=0,hits=0,heads=0;
+ int w;
+ switch(award) {
+ case 0:return cl->sess.kills;
+ case 1:return cl->ps.persistant[PERS_SCORE];
+ case 2:return cl->nitmodLuaPersistant[13]; /* BG_GetStatGoombas 0x344a0 */
+ case 3:return cl->nitmodLuaPersistant[14]; /* BG_GetStatBestSpree 0x344e0 */
+ case 4:case 7:
+  if(!g_entities[(int)(cl-level.clients)].inuse)return 0; /* Original 0x605b8 */
+  /* G_CalcClientAccuracies 0x60526..0x60584: 26 rows at +0xcac,
+   * 20 bytes each; attempts +0, headshots +8, hits +12. */
+  for(w=0;w<26 && w<WS_MAX;++w) {
+   shots+=cl->sess.aWeaponStats[w].atts;
+   hits+=cl->sess.aWeaponStats[w].hits;
+   heads+=cl->sess.aWeaponStats[w].headshots;
+  }
+  if(award==4)return G_NITMOD_AwardSigned(heads);
+  return shots ? (float)((double)G_NITMOD_AwardSigned(hits*100u)/G_NITMOD_AwardSigned(shots)) : 0;
+ case 5:return cl->sess.damage_given;
+ case 6:return cl->sess.nitmodNewton;
+ case 8:return cl->sess.aWeaponStats[WS_KNIFE].kills; /* +0xcbc */
+ case 9:return cl->sess.aWeaponStats[WS_SYRINGE].hits; /* +0xdd0 */
+ case 10:return cl->sess.nitmodHealthSupplied; /* +0xecc */
+ case 11:return cl->nitmodBestReviveSpree; /* +0xb98 */
+ case 12:return cl->sess.aWeaponStats[WS_PANZERFAUST].kills; /* +0xd48 */
+ case 13:return cl->pers.nitmodEngineerObjectives; /* +0xb9c */
+ case 14:return cl->pers.nitmodUniformsStolen; /* +0xba0 */
+ case 15:return cl->pers.nitmodAmmoSupplied; /* +0xba4 */
+ default:return 0;
+ }
+}
+
+static void G_NITMOD_BuildRoundAwards(void) {
+ char buffer[MAX_STRING_CHARS];
+ int award,i,count=level.numNonSpectatorClients;
+ /* Original level+0x9c: CalculateRanks increments it for each connected
+  * non-spectator, before its fully-connected (+0xa0) test. */
+ if(count<0)count=0;
+ if(count>MAX_CLIENTS)count=MAX_CLIENTS;
+ for(i=0;i<level.numConnectedClients && i<MAX_CLIENTS;++i)level.clients[i].hasaward=qfalse;
+ buffer[0]=0;
+ for(award=0;award<16;++award) {
+  gclient_t *best=NULL;
+  double value=0;
+  for(i=0;i<count;++i) {
+   int slot=level.sortedClients[i];
+   gclient_t *cl;
+   double candidate;
+   if(slot<0 || slot>=MAX_CLIENTS)continue; /* bound invalid engine state */
+   cl=&level.clients[slot];candidate=G_NITMOD_RoundAwardValue(cl,award);
+   if(!best || candidate>value || (award==0 && candidate==value && cl->sess.deaths<best->sess.deaths)) {
+    best=cl;value=candidate;
+   }
+  }
+  if(best && (award==1 || value>(award==3?4:award==5 || award==12?5:0))) {
+   if(value>0)best->hasaward=qtrue;
+   if(award==1)Q_strcat(buffer,sizeof(buffer),va(";%s; %i ",best->pers.netname,best->sess.sessionTeam));
+   else if(award==7)Q_strcat(buffer,sizeof(buffer),va(";%s ^7(%.1f); %i ",best->pers.netname,value,best->sess.sessionTeam));
+   else {
+    int displayed=(award==8 || award==9 || award==12)?G_NITMOD_AwardSigned((unsigned int)value):(int)value;
+    Q_strcat(buffer,sizeof(buffer),va(";%s ^7(%i); %i ",best->pers.netname,displayed,best->sess.sessionTeam));
+   }
+  } else Q_strcat(buffer,sizeof(buffer),award==1?";; 0 ":award==0 || award==2 || award==6?"; ; 0 ":"; ;0 ");
+ }
+ /* Original 0xd18ce appends one empty name/team-zero sentinel. */
+ Q_strcat(buffer,sizeof(buffer),";; 0 ");
+ trap_SetConfigstring(CS_NITMOD_ROUND_AWARDS,buffer);
+}
+
 void G_BuildEndgameStats( void ) {
 	char buffer[1024];
 	int i;
@@ -819,4 +896,5 @@ void G_BuildEndgameStats( void ) {
 	CHECKSTATTIME( ps.persistant[PERS_SCORE], pers.enterTime );
 
 	trap_SetConfigstring( CS_ENDGAME_STATS, buffer );
+	G_NITMOD_BuildRoundAwards();
 }

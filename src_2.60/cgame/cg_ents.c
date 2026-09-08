@@ -9,6 +9,7 @@
 #include "cg_local.h"
 #include "cg_nitmod_config.h"
 #include "cg_nitmod_hints.h"
+#include "cg_nitmod_debug.h"
 #include "cg_nitmod_names.h"
 #include "cg_nitmod_projectiles.h"
 #include "cg_nitmod_view.h"
@@ -279,7 +280,8 @@ static void CG_EntityEffects( centity_t *cent ) {
 	CG_EntityLoopSound( cent );
 	// constant light glow
 	if ( cent->currentState.constantLight &&
-		!(NITMOD_UsesOriginalProtocol() && cent->currentState.eType == ET_PLAYER) ) {
+		!(NITMOD_UsesNitmodHud() && (cent->currentState.eType == ET_PLAYER ||
+		 cent->currentState.eType == ET_CORPSE)) ) {
 		int		cl;
 		int		i, r, g, b;
 
@@ -1138,14 +1140,18 @@ void CG_Missile( centity_t *cent ) {
 					ent.customShader = cgs.media.genericConstructionShader;
 				} else if (!cent->currentState.modelindex2) {
 					// see if we have the skill to see them and are close enough
-					if( cgs.clientinfo[cg.snap->ps.clientNum].skill[SK_BATTLE_SENSE] >= 4 ) {
+					if( NITMOD_UsesNitmodHud() ? NITMOD_ClientSkillUnlocked(cg.clientNum, SK_BATTLE_SENSE, 4) :
+					    cgs.clientinfo[cg.snap->ps.clientNum].skill[SK_BATTLE_SENSE] >= 4 ) {
 						vec_t distSquared = DistanceSquared( cent->lerpOrigin, cg.predictedPlayerEntity.lerpOrigin );
 
 						if( distSquared > Square(256) )
 							return;
-						else
-							//ent.customShader = cgs.media.genericConstructionShaderModel;
-							ent.customShader = cgs.media.genericConstructionShader;
+						else {
+							qhandle_t colored = CG_NitmodMineTeamShader(cent->currentState.teamNum);
+							/* Original CG_Missile 0x56382: color only the already
+							 * visible, unspotted enemy mine within 256 units. */
+							ent.customShader = colored ? colored : cgs.media.genericConstructionShader;
+						}
 					} else {
 						return;
 					}
@@ -2711,7 +2717,7 @@ void CG_AddPacketEntities( void ) {
 	ps = &cg.predictedPlayerState;
 	BG_PlayerStateToEntityState( ps, &cg.predictedPlayerEntity.currentState, qfalse );
 	cg.predictedPlayerEntity.currentState.time2 = cg_entities[ps->clientNum].currentState.time2;
-	if(NITMOD_UsesOriginalProtocol())
+	if(NITMOD_UsesNitmodHud())
 		BG_NITMOD_CopyLeanState(ps, &cg.predictedPlayerEntity.currentState);
 	CG_AddCEntity( &cg.predictedPlayerEntity );
 

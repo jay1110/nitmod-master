@@ -1016,8 +1016,8 @@ static int DispatchAdminCommand(int n,const char *command,adminLogRequest_t *log
     if(!strcmp(cursor,"medpack") || !strcmp(cursor,"ammopack")) {
         vec3_t velocity;
         if(n<0) return 0;
-        velocity[0]=(((rand() & 32767)/32767.0f)-0.5f)*200.0f;
-        velocity[1]=(((rand() & 32767)/32767.0f)-0.5f)*200.0f;
+        velocity[0]=(float)(((double)(rand() & 32767)/32767.0-0.5)*2.0)*100.0f;
+        velocity[1]=(float)(((double)(rand() & 32767)/32767.0-0.5)*2.0)*100.0f;
         velocity[2]=G_NITMOD_LegacyCvarInteger("g_throwDistance",75);
         if(!strcmp(cursor,"medpack")) Weapon_MedicAdmin(&g_entities[n],g_entities[n].r.currentOrigin,velocity);
         else Weapon_MagicAmmoAdmin(&g_entities[n],g_entities[n].r.currentOrigin,velocity);
@@ -1334,8 +1334,8 @@ static int DispatchAdminCommand(int n,const char *command,adminLogRequest_t *log
         return 1;
     }
     if(!strcmp(cursor,"crazygravity")) {
-        if(argc!=2 || (strcmp(args[1],"0") && strcmp(args[1],"1"))) { Print(n,"usage: crazygravity [0|1]\n");return 1; }
-        trap_Cvar_Set("n_crazyGravity",args[1]);trap_SendServerCommand(-1,args[1][0]=='1'?"cpm \"^xcrazygravity: ^2Enabled !\"":"cpm \"^xcrazygravity: ^1Disabled!\"");return 1;
+        if(argc<2 || (args[1][0]!='0' && args[1][0]!='1')) { Print(n,"^9usage : ^g!crazygravity [0|1]^7\n");return 1; }
+        trap_Cvar_Set("n_crazyGravity",args[1][0]=='1'?"1":"0");trap_SendServerCommand(-1,args[1][0]=='1'?"cpm \"^xcrazygravity: ^2Enabled !\"":"cpm \"^xcrazygravity: ^1Disabled!\"");return 1;
     }
     if(!strcmp(cursor,"panzerwar") || !strcmp(cursor,"sniperwar")) {
         int mode=!strcmp(cursor,"panzerwar")?1:2,enable,current;

@@ -126,7 +126,8 @@ void G_NITMOD_PredictPmove(gentity_t *ent, float seconds) {
     ground = cl->ps.groundEntityNum; pmTime = cl->ps.pm_time;
     memset(&move, 0, sizeof(move));
     move.ps = &cl->ps; move.pmext = &cl->pmext; move.character = cl->pers.character;
-    move.tracemask = CONTENTS_SOLID | CONTENTS_PLAYERCLIP;
+    /* Original G_PredictPmove 0x46e2f: 0x02010001. */
+    move.tracemask = CONTENTS_SOLID | CONTENTS_PLAYERCLIP | CONTENTS_BODY;
     move.trace = trap_TraceCapsuleNoEnts; move.pointcontents = trap_PointContents;
     move.noFootsteps = qtrue;
     VectorCopy(ent->r.mins, move.mins); VectorCopy(ent->r.maxs, move.maxs);

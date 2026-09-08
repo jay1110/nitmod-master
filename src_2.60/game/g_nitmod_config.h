@@ -58,6 +58,7 @@ void G_NITMOD_AdvanceMapCycle( void );
 void nitmod_SimpleCS( int clientNum );
 void nitmod_SendNCS( int clientNum );
 void nitmod_SendTeamScores( int clientNum );
+void nitmod_SendTDMScoreLimit( int clientNum );
 void nitmod_SendSkillLevels( int clientNum );
 void nitmod_SendClassHealth( int clientNum );
 void nitmod_TeamScores( void );

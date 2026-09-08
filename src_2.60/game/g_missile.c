@@ -1707,9 +1707,11 @@ gentity_t *fire_grenade (gentity_t *self, vec3_t start, vec3_t dir, int grenadeW
 		bolt->free = G_FreeSatchel;
 	}
 
-	if( grenadeWPID == WP_MORTAR_SET ) {	// only on impact
+	if( grenadeWPID == WP_MORTAR_SET ) {
+		/* Original player mortar: impact explosion, otherwise free after 10s. */
 		noExplode = qtrue;
-		bolt->nextthink = 0;
+		bolt->nextthink = level.time + 10000;
+		bolt->think = G_FreeEntity;
 	}
 
 	// no self->client for shooter_grenade's
@@ -1724,7 +1726,10 @@ gentity_t *fire_grenade (gentity_t *self, vec3_t start, vec3_t dir, int grenadeW
 	bolt->s.weapon		= grenadeWPID;
 	bolt->r.ownerNum	= self->s.number;
 	bolt->parent		= self;
-	bolt->s.teamNum		= self->client->sess.sessionTeam;
+	if(self->client) {
+		bolt->s.teamNum = self->client->sess.sessionTeam;
+		bolt->s.clientNum = self->client->ps.clientNum;
+	}
 
 // JPW NERVE -- commented out bolt->damage and bolt->splashdamage, override with G_GetWeaponDamage()
 // so it works with different netgame balance.  didn't uncomment bolt->damage on dynamite 'cause its so *special*
@@ -2149,6 +2154,9 @@ gentity_t *fire_rocket (gentity_t *self, vec3_t start, vec3_t dir) {
 	else
 		bolt->s.pos.trType = TR_LINEAR;
 	bolt->s.pos.trTime = level.time - MISSILE_PRESTEP_TIME;		// move a bit on the very first frame
+	/* Original fire_rocket 0x8f4e0..0x8f4f4 records the player-state
+	 * shooter slot, or -1 for map emitters without a client. */
+	bolt->s.clientNum = self->client ? self->client->ps.clientNum : -1;
 	VectorCopy( start, bolt->s.pos.trBase );
 // JPW NERVE
 	missileSpeed = G_NITMOD_LegacyCvarInteger("g_missileSpeed", 0);
@@ -2177,6 +2185,10 @@ gentity_t *fire_rocket (gentity_t *self, vec3_t start, vec3_t dir) {
 		bolt->r.contents = CONTENTS_BODY;
 		VectorSet(bolt->r.mins, -10, -3, 0);
 		VectorSet(bolt->r.maxs, 10, 3, 6);
+		/* Initial absolute bounds are also populated before the first link
+		 * in Original fire_rocket 0x8f551..0x8f5a1. */
+		VectorCopy(bolt->r.mins, bolt->r.absmin);
+		VectorCopy(bolt->r.maxs, bolt->r.absmax);
 	}
 
 	if(self->client) {
@@ -2355,11 +2367,13 @@ gentity_t *fire_mortar(gentity_t *self, vec3_t start, vec3_t dir) {
 	bolt->s.eType = ET_MISSILE;
 
 	bolt->r.svFlags = SVF_BROADCAST;	// broadcast sound.  not multiplayer friendly, but for mortars it should be okay
-	bolt->s.weapon = WP_MAPMORTAR;
+	/* Original fire_mortar uses the deployed-mortar identity but point bounds. */
+	bolt->s.weapon = WP_MORTAR_SET;
+	bolt->s.clientNum = self->client ? self->client->ps.clientNum : -1;
 	bolt->r.ownerNum = self->s.number;
 	bolt->parent = self;
-	bolt->damage = G_GetWeaponDamage(WP_MAPMORTAR); // JPW NERVE
-	bolt->splashDamage = G_GetWeaponDamage(WP_MAPMORTAR); // JPW NERVE
+	bolt->damage = 250;
+	bolt->splashDamage = 250;
 	bolt->splashRadius = 120;
 	bolt->methodOfDeath = MOD_MAPMORTAR;
 	bolt->splashMethodOfDeath = MOD_MAPMORTAR_SPLASH;

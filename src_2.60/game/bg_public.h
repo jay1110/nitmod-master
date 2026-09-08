@@ -365,6 +365,8 @@ extern const unsigned int aReinfSeeds[MAX_REINFSEEDS];
 #define CS_NITMOD_INFO                   40
 /* Original Nitmod CS38 client Cvar restrictions in the native layout. */
 #define CS_NITMOD_SVCVARS                41
+// Native Nitmod sixteen round awards; stock ET endgame stats remain separate.
+#define CS_NITMOD_ROUND_AWARDS           42
 
 #define	CS_MODELS						64
 #define	CS_SOUNDS						( CS_MODELS +				MAX_MODELS					)

@@ -12,6 +12,7 @@
 
 #include "g_local.h"
 #include "nitmod_ammo_rewards.h"
+#include "nitmod_weapon_ids.h"
 #include "g_nitmod_restrictions.h"
 #include "g_nitmod_weapon_definition.h"
 #include "g_nitmod_etbot_lifecycle.h"
@@ -440,6 +441,8 @@ void G_DropWeapon( gentity_t *ent, weapon_t weapon )
 	/* Original G_DropWeapon returns for WP_NONE/no item (ELF 0x72c75). */
 	if(!item) return;
 	VectorCopy( client->ps.viewangles, angles );
+	/* Original knife drop has a five-degree yaw offset. */
+	if(weapon == WP_KNIFE) angles[YAW] += 5.f;
 
 	// clamp pitch
 	if ( angles[PITCH] < -30 )
@@ -580,6 +583,9 @@ int Pickup_Weapon( gentity_t *ent, gentity_t *other ) {
 					G_DebugAddSkillPoints( ent->parent, SK_SIGNALS, 1.f, "ammo pack picked up" );
 				}
 
+				/* Original 0x734d1: supply award counts even when g_misc8 blocks XP. */
+				ent->parent->client->pers.nitmodAmmoSupplied = ent->parent->client->pers.nitmodAmmoSupplied == INT_MAX ? INT_MIN : ent->parent->client->pers.nitmodAmmoSupplied + 1;
+
 				// extracted code originally here into AddMagicAmmo -xkan, 9/18/2002
 				// add 1 clip of magic ammo for any two-handed weapon
 			}
@@ -632,7 +638,7 @@ int Pickup_Weapon( gentity_t *ent, gentity_t *other ) {
 		 * returns zero so Touch_Item leaves the entity in the world; because
 		 * that suppresses Touch_Item's normal feedback, emit it here first. */
 		if( (options & 8) && ent->item->giTag != WP_BINOCULARS ) {
-			if( quantity || reserveQuantity || ent->delay ) {
+			if( quantity || ent->nitmodDropAmmo || ent->delay ) {
 				int pickupEvent = EV_ITEM_PICKUP;
 				if( ent->noise_index ) {
 					G_AddEvent( other, EV_GENERAL_SOUND, ent->noise_index );
@@ -658,14 +664,15 @@ int Pickup_Weapon( gentity_t *ent, gentity_t *other ) {
 		if( G_CanPickupWeapon( ent->item->giTag, other ) ) {
 			weapon_t primaryWeapon = G_GetPrimaryWeaponForClient( other->client );
 
-			// rain - added parens around ambiguous &&
-			if( primaryWeapon || 
-				(other->client->sess.playerType == PC_SOLDIER && other->client->sess.skill[SK_HEAVY_WEAPONS] >= 4) ) {
-
-				if( primaryWeapon ) {
+			/* Original acquisition also works with an empty primary inventory. */
+			{
+				if( primaryWeapon && ent->item->giTag != WP_BINOCULARS ) {
 					// drop our primary weapon
 					G_DropWeapon( other, primaryWeapon );
 				}
+
+				if(other->client->ps.weapon == WP_GPG40 || other->client->ps.weapon == WP_M7)
+					other->client->ps.weapon = WP_NONE;
 
 				// now pickup the other one
 				other->client->dropWeaponTime = level.time;
@@ -750,6 +757,8 @@ int Pickup_Health (gentity_t *ent, gentity_t *other) {
 				G_AddSkillPoints( ent->parent, SK_FIRST_AID, 1.f );
 				G_DebugAddSkillPoints( ent->parent, SK_FIRST_AID, 1.f, "health pack picked up" );
 			}
+			/* Original 0x725e3: separate award counter, outside the XP gate. */
+			ent->parent->client->sess.nitmodHealthSupplied = ent->parent->client->sess.nitmodHealthSupplied == INT_MAX ? INT_MIN : ent->parent->client->sess.nitmodHealthSupplied + 1;
 		}
 	}	
 	
@@ -874,9 +883,12 @@ void Touch_Item( gentity_t *ent, gentity_t *other, trace_t *trace ) {
 		return;
 	}
 
-	if(g_gamestate.integer == GS_PLAYING) {
-		G_LogPrintf( "Item: %i %s\n", other->s.number, ent->item->classname );
-	} else {
+	/* Original 0x73f8d: damaging flying items cannot be caught in air. */
+	if(ent->damage && ent->s.pos.trType != TR_STATIONARY &&
+	   ent->s.pos.trType != TR_GRAVITY_FLOAT && ent->s.pos.trType != TR_GRAVITY_PAUSED)
+		return;
+
+	if(g_gamestate.integer != GS_PLAYING) {
 		// OSP - Don't let them pickup winning stuff in warmup
 		if(ent->item->giType != IT_WEAPON &&
 		   ent->item->giType != IT_AMMO &&
@@ -906,6 +918,8 @@ void Touch_Item( gentity_t *ent, gentity_t *other, trace_t *trace ) {
 	if ( !respawn ) {
 		return;
 	}
+
+	G_LogPrintf( "Item: %i %s\n", other->s.number, ent->item->classname );
 
 	// play sounds 
 	if( ent->noise_index ) {
@@ -1017,6 +1031,10 @@ gentity_t *LaunchItem( gitem_t *item, vec3_t origin, vec3_t velocity, int ownerN
 	G_SetAngle( dropped, temp );
 
 	dropped->s.eFlags |= EF_BOUNCE_HALF;
+	/* Original LaunchItem: drops slide and align independently of item type. */
+	dropped->physicsBounce = 0.25f;
+	dropped->nitmodItemSlide = qtrue;
+	dropped->nitmodItemAlign = qtrue;
 
 	if (item->giType == IT_TEAM) { // Special case for CTF flags
 		gentity_t* flag = &g_entities[ g_entities[ownerNum].client->flagParent ];
@@ -1228,6 +1246,8 @@ void G_SpawnItem (gentity_t *ent, gitem_t *item) {
 	if(G_SpawnString("noise", 0, &noise))
 		ent->noise_index = G_SoundIndex(noise);
 
+	ent->nitmodItemSlide = qtrue;
+	ent->nitmodItemAlign = qtrue;
 	ent->physicsBounce = 0.50;		// items are bouncy
 
 	if(ent->model) {
@@ -1250,19 +1270,16 @@ G_BounceItem
 
 ================
 */
-static void G_NITMOD_FlushItem( gentity_t *ent, trace_t *trace, qboolean orientToGround ) {
-	vec3_t settled;
+static void G_NITMOD_FlushItem( gentity_t *ent, trace_t *trace ) {
 	int enabled = G_NITMOD_LegacyCvarInteger("g_flushItems", 1);
 
-	VectorCopy(ent->r.currentAngles, ent->s.angles);
-	VectorCopy(trace->endpos, settled);
-	if( !enabled || !ent->item || !orientToGround || trace->plane.normal[2] <= 0.7f ||
+	if( !enabled || !ent->nitmodItemAlign || trace->plane.normal[2] <= 0.7f ||
 		(trace->plane.normal[0] == 0.f && trace->plane.normal[1] == 0.f &&
 		 trace->plane.normal[2] == 1.f) ) {
-		settled[2] += 1.f;
-		if( ent->item && orientToGround ) {
-			ent->s.angles[0] = 0.f;
-			ent->s.angles[2] = 0.f;
+		trace->endpos[2] += 1.f;
+		if( ent->nitmodItemAlign ) {
+			ent->r.currentAngles[0] = 0.f;
+			ent->r.currentAngles[2] = 0.f;
 		}
 	} else {
 		vec3_t axis[3];
@@ -1271,29 +1288,29 @@ static void G_NITMOD_FlushItem( gentity_t *ent, trace_t *trace, qboolean orientT
 		vec3_t end;
 		trace_t backtrace;
 
-		AngleVectors(ent->s.angles, forward, NULL, NULL);
+		AngleVectors(ent->r.currentAngles, forward, NULL, NULL);
 		VectorCopy(trace->plane.normal, axis[2]);
 		ProjectPointOnPlane(axis[0], forward, axis[2]);
 		if( VectorNormalize(axis[0]) == 0.f ) {
-			AngleVectors(ent->s.angles, NULL, NULL, axis[0]);
+			AngleVectors(ent->r.currentAngles, NULL, NULL, axis[0]);
 			ProjectPointOnPlane(axis[0], axis[0], axis[2]);
 			VectorNormalize(axis[0]);
 		}
 		CrossProduct(axis[0], axis[2], axis[1]);
 		VectorNegate(axis[1], axis[1]);
-		AxisToAngles(axis, ent->s.angles);
+		AxisToAngles(axis, ent->r.currentAngles);
 
 		VectorAdd(trace->endpos, axis[2], start);
 		VectorMA(trace->endpos, -64.f, axis[2], end);
 		trap_Trace(&backtrace, start, NULL, NULL, end, ent->s.number, CONTENTS_SOLID);
 		if( !backtrace.startsolid )
-			VectorMA(trace->endpos, -64.f * backtrace.fraction, axis[2], settled);
-		VectorAdd(settled, axis[2], settled);
+			VectorMA(trace->endpos, -64.f * backtrace.fraction, axis[2], trace->endpos);
+		VectorAdd(trace->endpos, axis[2], trace->endpos);
 	}
 
-	G_SetAngle(ent, ent->s.angles);
-	SnapVector(settled);
-	G_SetOrigin(ent, settled);
+	G_SetAngle(ent, ent->r.currentAngles);
+	SnapVector(trace->endpos);
+	G_SetOrigin(ent, trace->endpos);
 	ent->s.groundEntityNum = trace->entityNum;
 	if( trace->entityNum != ENTITYNUM_WORLD ) ent->s.pos.trType = TR_GRAVITY_PAUSED;
 }
@@ -1309,31 +1326,44 @@ void G_BounceItem( gentity_t *ent, trace_t *trace ) {
 	dot = DotProduct( velocity, trace->plane.normal );
 	VectorMA( velocity, -2*dot, trace->plane.normal, ent->s.pos.trDelta );
 
+	/* Original 0x751d8: steep surfaces slide before bounce damping. */
+	if(trace->plane.normal[2] < 0.7 &&
+	   VectorLength(ent->s.pos.trDelta) >= 16.f && ent->nitmodItemSlide) {
+		PM_ClipVelocity(ent->s.pos.trDelta, trace->plane.normal, ent->s.pos.trDelta, 1.001f);
+		goto continueMoving;
+	}
+
 	// cut the velocity to keep from bouncing forever
 	VectorScale( ent->s.pos.trDelta, ent->physicsBounce, ent->s.pos.trDelta );
 
 	if(ent->item && ent->item->giTag == WP_KNIFE)
 		G_AddEvent(ent, EV_GRENADE_BOUNCE, BG_FootstepForSurface(trace->surfaceFlags));
+	else if(ent->item && (ent->item->giType == IT_WEAPON || ent->item->giType == IT_AMMO) &&
+	        NITMOD_OriginalWeaponId(ent->item->giTag) > 0)
+		ent->s.weapon = ent->item->giTag;
 
 	/* Original 0x75270: a knife sticks tip-first into soft surfaces. Keep
 	 * that impact angle instead of flattening the item onto the floor. */
 	if(ent->damage && ent->s.weapon == WP_KNIFE) {
+		ent->nitmodItemAlign = qtrue;
 		VectorNormalize(velocity);
 		if(DotProduct(velocity, trace->plane.normal) <= -.75f &&
 		   (trace->surfaceFlags & (SURF_WOOD|SURF_GRASS|SURF_GRAVEL|SURF_SNOW))) {
 			vectoangles(velocity, ent->r.currentAngles);
-			G_NITMOD_FlushItem(ent, trace, qfalse);
+			ent->nitmodItemAlign = qfalse;
+			G_NITMOD_FlushItem(ent, trace);
 			return;
 		}
 	}
 	if(trace->plane.normal[2] > 0 && VectorLength(ent->s.pos.trDelta) < 40.f) {
-		G_NITMOD_FlushItem(ent, trace, qtrue);
+		G_NITMOD_FlushItem(ent, trace);
 		return;
 	}
 	if(ent->s.apos.trType != TR_STATIONARY) {
 		VectorScale(ent->s.apos.trDelta, ent->physicsBounce, ent->s.apos.trDelta);
 		ent->s.apos.trTime = level.time;
 	}
+continueMoving:
 	VectorCopy(ent->r.currentOrigin, ent->s.pos.trBase);
 	ent->s.pos.trTime = level.time;
 	VectorAdd(ent->r.currentOrigin, trace->plane.normal, ent->r.currentOrigin);
@@ -1388,6 +1418,36 @@ void G_RunItemProp (gentity_t *ent, vec3_t origin)
 	}
 }
 
+/* Original 0x755d0: supplied packs refill a finite cabinet before bouncing. */
+static qboolean G_NITMOD_CheckForCabinetResupply(gentity_t *item, gentity_t *cabinet) {
+	int i, amount;
+	if(!cabinet || !item->item || !item->parent || !item->parent->client)
+		return qfalse;
+	if(item->item->giType == IT_HEALTH) {
+		if(cabinet->s.eType != ET_CABINET_H) return qfalse;
+		amount = item->item->quantity;
+	} else if(item->item->giTag == WP_AMMO) {
+		if(cabinet->s.eType != ET_CABINET_A) return qfalse;
+		amount = item->count;
+	} else return qfalse;
+	for(i = 0; i < level.num_entities; ++i) {
+		gentity_t *trigger = &g_entities[i];
+		if(!trigger->target_ent || trigger->target_ent->s.number != cabinet->s.number)
+			continue;
+		if(trigger->count == -9999 || trigger->count <= trigger->health)
+			return qfalse;
+		/* Original signed32 addition followed by a signed upper clamp. */
+		{
+			unsigned int sum = (unsigned int)trigger->health + (unsigned int)amount;
+			int health = sum <= INT_MAX ? (int)sum : -1 - (int)(UINT_MAX - sum);
+			trigger->health = health < trigger->count ? health : trigger->count;
+		}
+		G_FreeEntity(item);
+		return qtrue;
+	}
+	return qfalse;
+}
+
 /*
 ================
 G_RunItem
@@ -1435,9 +1495,9 @@ void G_RunItem( gentity_t *ent ) {
 	// get current position
 	BG_EvaluateTrajectory( &ent->s.pos, level.time, origin, qfalse, ent->s.effect2Time );
 
-	/* Original G_RunItem (ELF 0x75730): a thrown knife slows on entering
-	 * water and resumes ordinary gravity in air. Apply each transition once. */
-	if(ent->s.weapon == WP_KNIFE && ent->damage) {
+	/* Original G_RunItem (ELF 0x75810): all moving items transition
+	 * between water and air; the damage/knife checks occur afterwards. */
+	{
 		trace_t liquid;
 		trap_Trace(&liquid, ent->r.currentOrigin, ent->r.mins, ent->r.maxs,
 			origin, ent->r.ownerNum, MASK_WATER);
@@ -1493,6 +1553,10 @@ void G_RunItem( gentity_t *ent ) {
 	if ( tr.fraction == 1 ) {
 		return;
 	}
+
+	if(tr.entityNum >= 0 && tr.entityNum < MAX_GENTITIES &&
+	   G_NITMOD_CheckForCabinetResupply(ent, &g_entities[tr.entityNum]))
+		return;
 
 	// if it is in a nodrop volume, remove it
 	contents = trap_PointContents( ent->r.currentOrigin, -1 );

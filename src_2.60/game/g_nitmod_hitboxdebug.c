@@ -16,7 +16,7 @@ static int FreeDebugSlots(void) {
 /* Original G_RailBox 0x6b300. The event encodes two corners and 0..255
  * RGB, not ET's clientinfo color index. Its stable group is entityId+1.
  * Float-to-int color conversion is truncation, including .5*255 -> 127. */
-static void DebugRailBox(const vec3_t origin, const vec3_t mins,
+void G_NITMOD_DebugRailBox(const vec3_t origin, const vec3_t mins,
     const vec3_t maxs, const vec3_t color, int group) {
     vec3_t start;
     gentity_t *event;
@@ -61,7 +61,7 @@ void G_NITMOD_DrawEntityHitbox(gentity_t *ent) {
         }
         if(mode != category) return;
     }
-    DebugRailBox(ent->r.currentOrigin, ent->r.mins, ent->r.maxs, color, ent->s.number);
+    G_NITMOD_DebugRailBox(ent->r.currentOrigin, ent->r.mins, ent->r.maxs, color, ent->s.number);
 }
 
 static void DebugPlayerBounds(gentity_t *ent, qboolean endFrame) {
@@ -80,19 +80,19 @@ static void DebugPlayerBounds(gentity_t *ent, qboolean endFrame) {
         maxs[2] = G_NITMOD_HitboxHeight(ent, NULL);
     }
     if(endFrame) { VectorSet(headColor, 1,0,0);VectorSet(legColor, 1,0,1); }
-    DebugRailBox(ent->r.currentOrigin, mins, maxs, bodyColor, ent->s.number);
+    G_NITMOD_DebugRailBox(ent->r.currentOrigin, mins, maxs, bodyColor, ent->s.number);
     part = G_BuildHead(ent);
     if(part) {
         /* EndFrame uses the player key for the head; Think uses the
          * temporary head entity number. This asymmetry is in the ELF. */
-        DebugRailBox(part->r.currentOrigin, part->r.mins, part->r.maxs,
+        G_NITMOD_DebugRailBox(part->r.currentOrigin, part->r.mins, part->r.maxs,
             headColor, (endFrame ? ent->s.number : part->s.number) | 0x400);
         G_FreeEntity(part);
     }
     if(!endFrame || (ent->client->ps.eFlags & (EF_PRONE | EF_DEAD))) {
         part = G_BuildLeg(ent);
         if(part) {
-            DebugRailBox(part->r.currentOrigin, part->r.mins, part->r.maxs,
+            G_NITMOD_DebugRailBox(part->r.currentOrigin, part->r.mins, part->r.maxs,
                 legColor, part->s.number | 0x800);
             G_FreeEntity(part);
         }
@@ -123,12 +123,12 @@ void G_NITMOD_DrawShotHitboxes(gentity_t *attacker) {
    if(G_NITMOD_LegacyCvarInteger("g_realBody",0)&1) {mins[0]+=3;mins[1]+=3;maxs[0]-=3;maxs[1]-=3;}
    maxs[2]=G_NITMOD_HitboxHeight(target,attacker);
   }
-  DebugRailBox(target->r.currentOrigin,mins,maxs,white,-1);
+  G_NITMOD_DebugRailBox(target->r.currentOrigin,mins,maxs,white,-1);
  }
 }
 void G_NITMOD_DrawHistoricalHitbox(gentity_t *target) {
  int color=target->client->ps.clientNum;
  if(color>31) {color>>=1;if(color==32) color=31;}
  if(color<0) color=0;if(color>31) color=31;
- DebugRailBox(target->r.currentOrigin,target->r.mins,target->r.maxs,g_color_table[color],target->s.number|0x1000);
+ G_NITMOD_DebugRailBox(target->r.currentOrigin,target->r.mins,target->r.maxs,g_color_table[color],target->s.number|0x1000);
 }

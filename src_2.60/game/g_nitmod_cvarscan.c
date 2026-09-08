@@ -9,7 +9,7 @@
 typedef struct { char name[64], first[32], second[32]; int rule; } nitmodCvarRule_t;
 typedef struct {
     int next, waiting, warnings;
-    long long scanAt, nextAt;
+    int scanAt, nextAt;
     qboolean started;
 } nitmodCvarScan_t;
 static nitmodCvarRule_t cvarRules[NITMOD_MAX_CVAR_RULES];
@@ -102,7 +102,7 @@ void G_NITMOD_CvarScanStart(int clientNum) {
     scan=&cvarScans[clientNum];
     if(scan->started || !G_NITMOD_LegacyCvarInteger("n_NxAC_CvarScan",0)) return;
     scan->started=qtrue; scan->next=0; scan->waiting=-1; scan->nextAt=0;
-    scan->scanAt=(long long)level.time+G_NITMOD_LegacyCvarInteger("n_NxAC_CvarScanWait",10000);
+    scan->scanAt=(int)((unsigned int)level.time+(unsigned int)G_NITMOD_LegacyCvarInteger("n_NxAC_CvarScanWait",10000));
 }
 void G_NITMOD_CvarScanThink(int clientNum) {
     nitmodCvarScan_t *scan;
@@ -199,8 +199,8 @@ int G_NITMOD_CvarScanCommand(int clientNum,const char *command) {
     if(!CvarRulePasses(rule,value) && CvarViolation(clientNum,rule,value)) return 1;
     ++scan->next;
     if(scan->next<cvarRuleCount)
-        scan->nextAt=(long long)level.time+G_NITMOD_LegacyCvarInteger("n_NxAC_CvarScanDelay",750);
-    else scan->scanAt=(long long)level.time+G_NITMOD_LegacyCvarInteger("n_NxAC_CvarScanInterval",300000);
+        scan->nextAt=(int)((unsigned int)level.time+(unsigned int)G_NITMOD_LegacyCvarInteger("n_NxAC_CvarScanDelay",750));
+    else scan->scanAt=(int)((unsigned int)level.time+(unsigned int)G_NITMOD_LegacyCvarInteger("n_NxAC_CvarScanInterval",300000));
     return 1;
 }
 
@@ -211,5 +211,5 @@ void G_NITMOD_CvarScanRequest(int clientNum) {
     if(!CvarScanClient(clientNum) || !G_NITMOD_LegacyCvarInteger("n_NxAC_CvarScan",0)) return;
     scan=&cvarScans[clientNum];
     scan->started=qtrue;
-    scan->scanAt=(long long)level.time+G_NITMOD_LegacyCvarInteger("n_NxAC_CvarScanWait",10000);
+    scan->scanAt=(int)((unsigned int)level.time+(unsigned int)G_NITMOD_LegacyCvarInteger("n_NxAC_CvarScanWait",10000));
 }

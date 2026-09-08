@@ -7,4 +7,6 @@ void G_NITMOD_DrawClientThinkHitboxes(gentity_t *ent);
 void G_NITMOD_DrawClientEndHitboxes(gentity_t *ent);
 void G_NITMOD_DrawShotHitboxes(gentity_t *attacker);
 void G_NITMOD_DrawHistoricalHitbox(gentity_t *target);
+void G_NITMOD_DebugRailBox(const vec3_t origin, const vec3_t mins,
+    const vec3_t maxs, const vec3_t color, int group);
 #endif

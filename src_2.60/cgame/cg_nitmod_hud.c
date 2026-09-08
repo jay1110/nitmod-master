@@ -372,10 +372,13 @@ qboolean CG_NitmodAdjustHud(float *x, float *y, float *w, float *h) {
 }
 
 void CG_NitmodResetTimer(void) {
-    float elapsed = (float)((double)cg.time - cgs.levelStartTime);
-    float msec = cgs.timelimit * 60.f * 1000.f - elapsed;
-    if(!(msec >= -2147483648.0 && msec < 2147483648.0)) return;
-    trap_Cvar_Set("cg_spawnTimer_set", va("%d", (int)msec / 1000));
+    /* CG_ResetTimer_f: wrapping SUB followed by x87 arithmetic and FISTP.
+     * Do not round the elapsed milliseconds to float before subtraction. */
+    int elapsed = (int)((unsigned int)cg.time - (unsigned int)cgs.levelStartTime);
+    double remaining = (double)cgs.timelimit * 60.0 * 1000.0 - elapsed;
+    int msec = remaining >= -2147483648.0 && remaining < 2147483648.0 ?
+        (int)remaining : INT_MIN;
+    trap_Cvar_Set("cg_spawnTimer_set", va("%d", msec / 1000));
 }
 
 void CG_NitmodTimerSet(void) {
@@ -403,7 +406,12 @@ void CG_NitmodSpawnTimerText(char *out, int size, int seconds, int start, int pe
     if(!out || size <= 0) return;
     if(!timer) timer = "";
     if(start == -1 || period <= 0) Q_strncpyz(out, timer, size);
-    else Com_sprintf(out, size, "^1%.0f %s", fmod((double)seconds - start, period) + period, timer);
+    else {
+        /* Original SUB/IDIV/ADD at 0x451e9..0x45203. */
+        int delta = (int)((unsigned int)seconds - (unsigned int)start);
+        int value = (int)((unsigned int)(delta % period) + (unsigned int)period);
+        Com_sprintf(out, size, "^1%d %s", value, timer);
+    }
 }
 
 void CG_NitmodMatchTimerText(char *out, int size, int msec, qboolean limited, qboolean playing, const char *reinforcement) {
@@ -888,11 +896,12 @@ void CG_NitmodHudColors(vec4_t background, vec4_t border) {
 }
 static float speed, highestSpeed;
 static int lastSample;
+static qboolean resetMaxSpeed;
 static int fpsTimes[500], fpsPrevious, fpsSamples, fpsCursor, fpsCount;
 static int tdmAxisScore, tdmAlliesScore;
 static int tdmAxisChanged, tdmAlliesChanged;
 static qboolean tdmAxisIncreased, tdmAlliesIncreased;
-void CG_NitmodResetMaxSpeed(void) { highestSpeed = 0; }
+void CG_NitmodResetMaxSpeed(void) { resetMaxSpeed = qtrue; }
 
 void CG_NitmodHudReset(void) {
 	CG_NitmodSnapshotRateReset();
@@ -914,17 +923,24 @@ void CG_NitmodHudReset(void) {
     killPrintEnd = 0;
     speed = highestSpeed = 0;
     lastSample = 0;
+    resetMaxSpeed = qfalse;
     fpsPrevious = fpsSamples = fpsCursor = fpsCount = 0;
 	tdmAxisScore = tdmAlliesScore = 0;
 	tdmAxisChanged = tdmAlliesChanged = 0;
 	tdmAxisIncreased = tdmAlliesIncreased = qfalse;
 }
 
-float CG_NitmodTDMProgress(int score, int limit) {
+/* Original fild/fdiv keeps signed values through the quotient, then the
+ * bar renderer clips to 0..1. Keep zero/zero from producing NaN geometry. */
+static float CG_NitmodTDMFraction(double amount, double total) {
 	float fraction;
-	if(limit <= 0 || score <= 0) return 0;
-	fraction = (float)score / (float)limit;
+	if(total == 0) return amount > 0 ? 1.f : 0.f;
+	fraction = (float)(amount / total);
+	if(!(fraction >= 0)) return 0;
 	return fraction > 1 ? 1 : fraction;
+}
+float CG_NitmodTDMProgress(int score, int limit) {
+	return CG_NitmodTDMFraction(score, limit);
 }
 
 void CG_NitmodTDMScoreChanged(int axis, int allies, int now) {
@@ -953,8 +969,8 @@ float CG_NitmodDrawTDMScore(float y) {
 	float x;
 	int width;
 	nitmodHudAnchor_t previous;
-	if(!NITMOD_UsesOriginalProtocol() || cgs.gametype != 7 ||
-	   cgs.gamestate != GS_PLAYING || state->tdmScoreLimit <= 0) return y;
+	if(!NITMOD_UsesNitmodHud() || !cg.snap || cgs.gametype != 7 ||
+	   cgs.gamestate != GS_PLAYING) return y;
 	CG_NitmodHudColors(background, border);
 	if(cg_TDMScorePos.integer == 1) {
 		previous = CG_NitmodHudAnchor(NITMOD_HUD_RIGHT);
@@ -973,11 +989,13 @@ float CG_NitmodDrawTDMScore(float y) {
 		CG_NitmodHudAnchor(previous);
 		return y + 32;
 	}
-	if(cg.showScores) return y;
+	if(CG_DrawScoreboard()) return y;
 	previous = CG_NitmodHudAnchor(NITMOD_HUD_CENTER);
 	Com_sprintf(axis, sizeof(axis), "%d", state->teamScoreAxis);
 	Com_sprintf(allies, sizeof(allies), "%d", state->teamScoreAllies);
 	Com_sprintf(limit, sizeof(limit), "%d", state->tdmScoreLimit);
+	/* Nit_TDMScore_C uses fixed RGBA .5 for its central background. */
+	Vector4Set(background, .5f, .5f, .5f, .5f);
 	CG_FillRect(240, 35, 160, 30, background);
 	CG_DrawRect_FixedBorder(240, 35, 160, 35, 1, border);
 	CG_Text_Paint_Ext(255, 45, .2f, .2f, colorMdRed, "Axis", 0, 0, 3, &cgs.media.limboFont1);
@@ -995,31 +1013,41 @@ float CG_NitmodDrawTDMScore(float y) {
 		CG_NitmodTDMProgress(state->teamScoreAllies, state->tdmScoreLimit), 0x50);
 	CG_Text_Paint_Ext(320 - CG_Text_Width_Ext(limit, .2f, 0, &cgs.media.limboFont1) * .5f,
 		60, .2f, .2f, colorWhite, limit, 0, 0, 3, &cgs.media.limboFont1);
+	if(state->tdmOptions & 16) {
+		double elapsed = (double)cg.time - cgs.levelStartTime;
+		/* The original sub instruction wraps the signed millisecond delta. */
+		if(elapsed > INT_MAX) elapsed -= 4294967296.0;
+		else if(elapsed < INT_MIN) elapsed += 4294967296.0;
+		CG_FilledBar(240, 70, 160, 4, colorRed, NULL, NULL,
+			CG_NitmodTDMFraction(elapsed, (double)cgs.timelimit * 60000.0), 0x50);
+	}
 	CG_NitmodHudAnchor(previous);
 	return y;
 }
 
 void CG_NitmodFPSText(char *out, int size, int now, int samples) {
     int i;
-    double delta, total = 0;
+    int delta, total = 0;
     if(!out || size <= 0) return;
     out[0] = 0;
     if(!samples) return;
     samples = samples < 4 ? 4 : samples > 500 ? 500 : samples;
-    delta = (double)now - fpsPrevious;
-    if(samples != fpsSamples || delta < 0 || delta > 2147483647.0) {
+    /* Original CG_DrawUpperRight uses wrapping SUB/ADD and signed IDIV. */
+    delta = (int)((unsigned int)now - (unsigned int)fpsPrevious);
+    if(samples != fpsSamples) {
         fpsCursor = fpsCount = 0;
         fpsSamples = samples;
     }
     fpsPrevious = now;
-    fpsTimes[fpsCursor] = delta < 0 || delta > 2147483647.0 ? 0 : (int)delta;
+    fpsTimes[fpsCursor] = delta;
     fpsCursor = (fpsCursor + 1) % samples;
     if(fpsCount <= samples) ++fpsCount;
     if(fpsCount <= samples) {
         Q_strncpyz(out, "estimating", size);
         return;
     }
-    for(i = 0; i < samples; ++i) total += fpsTimes[i];
+    for(i = 0; i < samples; ++i)
+        total = (int)((unsigned int)total + (unsigned int)fpsTimes[i]);
     if(!total) total = 1;
     Com_sprintf(out, size, "%i FPS", (int)(samples * 1000 / total));
 }
@@ -1059,22 +1087,28 @@ void CG_NitmodSpeedText(char *out, int size, const vec3_t velocity, int now, int
     if(!out || size <= 0) return;
     out[0] = 0;
     if(!mode || !velocity) return;
-    if(now < lastSample || (double)now - lastSample > interval) {
+    if(resetMaxSpeed) {
+        highestSpeed = 0;
+        resetMaxSpeed = qfalse;
+    }
+    /* Original CG_DrawUpperRight: signed comparison after a 32-bit ADD. */
+    if(now > (int)((unsigned int)lastSample + (unsigned int)interval)) {
         speed = VectorLength(velocity);
         if(speed > highestSpeed) highestSpeed = speed;
         lastSample = now;
     }
     if(unit < 0 || unit > 2 || (mode != 1 && mode != 2)) return;
-    divisor = unit == 1 ? 15.58 : unit == 2 ? 23.44 : 1;
+    /* Original FLDS divisors, promoted before division and varargs storage. */
+    divisor = unit == 1 ? (double)15.58f : unit == 2 ? (double)23.44f : 1.0;
     if(mode == 2) Com_sprintf(out, size, "%.1f %s (%.1f MAX)", speed / divisor, units[unit], highestSpeed / divisor);
     else Com_sprintf(out, size, "%.1f %s", speed / divisor, units[unit]);
 }
 
-static float DrawLine(float y, const char *text) {
+static float DrawLine(float y, const char *text, qboolean keepEmpty) {
     vec4_t background = { .16f, .2f, .17f, .8f }, border = { .5f, .5f, .5f, .5f };
     vec4_t color = { .625f, .625f, .6f, 1 };
     int width;
-    if(!*text) return y;
+    if(!*text && !keepEmpty) return y;
     CG_NitmodHudColors(background, border);
     width = CG_Text_Width_Ext(text, .19f, 0, &cgs.media.limboFont1);
     CG_FillRect(632 - width, y, width + 5, 14, background);
@@ -1091,19 +1125,20 @@ float CG_NitmodHud(float y) {
     previous = CG_NitmodHudAnchor(NITMOD_HUD_RIGHT);
     if(cg_drawPing.integer) {
         CG_NitmodHudPingText(text, sizeof(text), cg.snap->ping, cg_drawPing.integer);
-        y = DrawLine(y, text);
+        y = DrawLine(y, text, qfalse);
     }
 	y = CG_NitmodDrawTDMScore(y);
     if(cg_drawTime.integer) {
         memset(&time, 0, sizeof(time));
         trap_RealTime(&time);
         CG_NitmodClockText(text, sizeof(text), &time, cg_drawTime.integer, cg_drawTimeSeconds.integer);
-        y = DrawLine(y, text);
+        y = DrawLine(y, text, qfalse);
     }
     if(cg_drawspeed.integer) {
         CG_NitmodSpeedText(text, sizeof(text), cg.predictedPlayerState.velocity, trap_Milliseconds(),
             cg_drawspeed.integer, cg_speedunit.integer, cg_speedinterval.integer);
-        y = DrawLine(y, text);
+        /* Original draws the empty panel for unsupported nonzero modes/units. */
+        y = DrawLine(y, text, qtrue);
     }
     CG_NitmodHudAnchor(previous);
     return y;

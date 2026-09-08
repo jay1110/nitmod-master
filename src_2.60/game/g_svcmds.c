@@ -1212,20 +1212,19 @@ static void Svcmd_KickNum_f( void ) {
 
 char	*ConcatArgs( int start );
 
-/* Recovered nitrox_CrazyGravityCmd (qagame 0x000c98d0).  Keep the
- * authoritative state transition independent of the still-missing shrubbot
- * dispatcher and expose it through the game console in the meantime. */
+/* Original nitrox_CrazyGravityCmd 0xb9880 reads one character with
+ * Q_SayArgv(..., 2); trailing characters and further arguments are ignored. */
 static qboolean Svcmd_CrazyGravity_f( void ) {
-	char value[3];
+	char value[2];
 
-	if ( trap_Argc() != 2 ) {
-		G_Printf( "usage: crazygravity [0|1]\n" );
+	if ( trap_Argc() < 2 ) {
+		G_Printf( "^9usage : ^g!crazygravity [0|1]^7\n" );
 		return qtrue;
 	}
 
 	trap_Argv( 1, value, sizeof( value ) );
 	if ( value[1] || ( value[0] != '0' && value[0] != '1' ) ) {
-		G_Printf( "usage: crazygravity [0|1]\n" );
+		G_Printf( "^9usage : ^g!crazygravity [0|1]^7\n" );
 		return qtrue;
 	}
 

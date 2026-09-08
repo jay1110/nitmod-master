@@ -471,7 +471,7 @@ static float CG_DrawTimer( float y ) {
 	vec4_t		timerBorder     =	{ 0.5f,		0.5f,	0.5f,	0.5f	};
 
 	CG_NitmodHudColors(timerBackground, timerBorder);
-	if(NITMOD_UsesOriginalProtocol()) {
+	if(NITMOD_UsesNitmodHud()) {
 		CG_NitmodRoundTimerText(spawnTimer, sizeof(spawnTimer), &color[3]);
 		s = spawnTimer;
 	} else {
@@ -4601,6 +4601,7 @@ static void CG_Draw2D( void ) {
 
 		if (!cg_paused.integer) {
 			CG_DrawUpperRight();
+			CG_NitmodDrawSpecial();
 		}
 
 		CG_DrawCenterString();
@@ -4610,7 +4611,6 @@ static void CG_Draw2D( void ) {
 		CG_NitmodDrawGlobalAward();
 		CG_NitmodDrawKillPrint();
 		CG_NitmodDrawSpree();
-		CG_NitmodDrawSpecial();
 		CG_NitmodDrawAnnouncer();
 		CG_NitmodDrawArtilleryHint();
 		CG_NitmodDrawWoundedNames();

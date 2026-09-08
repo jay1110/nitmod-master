@@ -978,6 +978,8 @@ void Props_Activated (gentity_t *self)
 
 		self->physicsObject = qtrue;
 		self->physicsBounce = 0.2;
+		self->nitmodItemSlide = qfalse;
+		self->nitmodItemAlign = qfalse;
 
 		self->s.groundEntityNum = -1;
 		
@@ -1015,6 +1017,8 @@ void Props_Activated (gentity_t *self)
 
 		prop->physicsObject = qtrue;
 		prop->physicsBounce = 0.2;
+		prop->nitmodItemSlide = qfalse;
+		prop->nitmodItemAlign = qfalse;
 
 		VectorCopy (owner->client->ps.origin, prop->s.pos.trBase);
 		
@@ -1142,6 +1146,8 @@ void Props_Chair_Think (gentity_t *self)
 
 		self->physicsObject = qtrue;
 		self->physicsBounce = 0.2;
+		self->nitmodItemSlide = qfalse;
+		self->nitmodItemAlign = qfalse;
 
 		self->s.pos.trDelta[2] -= 200;
 

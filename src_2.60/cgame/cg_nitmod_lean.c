@@ -65,7 +65,7 @@ void CG_NitmodPredictLean(centity_t *cent, vec3_t torso, vec3_t head,
 void CG_NitmodPlayerLean(centity_t *cent, vec3_t torso, vec3_t head) {
     int height;
     float remoteHeight;
-    if(!cent || !cg.snap || !NITMOD_UsesOriginalProtocol()) return;
+    if(!cent || !cg.snap || !NITMOD_UsesNitmodHud()) return;
     if(cent->currentState.clientNum == cg.snap->ps.clientNum) height = cg.snap->ps.viewheight;
     else {
         /* Original +0x5d4 is headRefEnt.origin[2], not an invented stance
