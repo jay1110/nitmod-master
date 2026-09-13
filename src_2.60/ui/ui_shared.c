@@ -2,6 +2,7 @@
 // string allocation/managment
 
 #include "ui_shared.h"
+#include "../game/nitmod_protocol.h"
 #include <float.h>
 #include "ui_local.h"	// For CS settings/retrieval
 
@@ -1773,17 +1774,20 @@ qboolean FileExists( char *filename ) {
 
 qboolean Script_CheckProfile( char *profile_path ) {
 	fileHandle_t    f;
-	char f_data[32];
+	char f_data[32] = { 0 };
+	int length;
 	int f_pid;
 	char com_pid[256];
 	int pid;
 
-	if( trap_FS_FOpenFile( profile_path, &f, FS_READ ) < 0 ) {
+	length = trap_FS_FOpenFile( profile_path, &f, FS_READ );
+	if( length < 0 ) {
 		//no profile found, we're ok
 		return qtrue;
 	}
 
-	trap_FS_Read( &f_data, sizeof(f_data)-1, f );
+	if( length > (int)sizeof(f_data)-1 ) length = sizeof(f_data)-1;
+	trap_FS_Read( f_data, length, f );
 
 	DC->getCVarString( "com_pid", com_pid, sizeof(com_pid) );
 	pid = atoi( com_pid );
@@ -1826,31 +1830,41 @@ qboolean Script_WriteProfile( char *profile_path ) {
 	return qtrue;
 }
 
+/* Original Script_ExecWolfConfig 0x2aa40: recover the backup before checking
+ * profile ownership, then submit the profile path exactly as stored. */
 void Script_ExecWolfConfig(itemDef_t *item, qboolean *bAbort, char **args) {
-	char cl_profileStr[256];
-	int useprofile = 1;
+	char cl_profileStr[256], configPath[256], backupPath[256], byte;
+	fileHandle_t source = 0, target = 0;
+	int useprofile = 1, length, i;
 
-	if( Int_Parse(args, &useprofile) ) {
-
-		DC->getCVarString( "cl_profile", cl_profileStr, sizeof(cl_profileStr) );
-
-		if( useprofile && cl_profileStr[0] ) {
-			if( !Script_CheckProfile( va( "profiles/%s/profile.pid", cl_profileStr ) ) ) {
-#ifndef _DEBUG
-				Com_Printf( "^3WARNING: profile.pid found for profile '%s' - not executing %s\n", cl_profileStr, CONFIG_NAME);
-#else
-				DC->executeText(EXEC_NOW, va( "exec profiles/%s/%s\n", cl_profileStr, CONFIG_NAME ) );
-#endif // _DEBUG
-			} else {
-				DC->executeText(EXEC_NOW, va( "exec profiles/%s/%s\n", cl_profileStr, CONFIG_NAME ) );
-
-				if( !Script_WriteProfile( va( "profiles/%s/profile.pid", cl_profileStr ) ) ) {
-					Com_Printf( "^3WARNING: couldn't write profiles/%s/profile.pid\n", cl_profileStr );
-				}
-			}
-		} else {
-			DC->executeText( EXEC_NOW, va( "exec %s\n", CONFIG_NAME ) );
+	if(!Int_Parse(args, &useprofile)) return;
+	DC->getCVarString("cl_profile", cl_profileStr, sizeof(cl_profileStr));
+	if(!useprofile || !cl_profileStr[0]) {
+		DC->executeText(EXEC_NOW, va("exec %s\n", CONFIG_NAME));
+		return;
+	}
+	Com_sprintf(configPath, sizeof(configPath), "profiles/%s/%s", cl_profileStr, CONFIG_NAME);
+	Com_sprintf(backupPath, sizeof(backupPath), "profiles/%s/%s.bak", cl_profileStr, CONFIG_NAME);
+	length = trap_FS_FOpenFile(backupPath, &source, FS_READ);
+	trap_FS_FCloseFile(source);
+	if(length > 0 && trap_FS_FOpenFile(configPath, &target, FS_WRITE) == 0) {
+		trap_FS_FOpenFile(backupPath, &source, FS_READ);
+		for(i = 0; i < length; ++i) {
+			trap_FS_Read(&byte, 1, source);
+			trap_FS_Write(&byte, 1, target);
 		}
+		trap_FS_FCloseFile(target);
+		trap_FS_FCloseFile(source);
+		Com_Printf("Delete %s %d\n", backupPath, trap_FS_Delete(backupPath));
+	}
+	if(!Script_CheckProfile(va("profiles/%s/profile.pid", cl_profileStr))) {
+		Com_Printf("^3WARNING: profile.pid found for profile '%s' - not executing %s\n", cl_profileStr, CONFIG_NAME);
+		return;
+	}
+	/* 0x2ad8d uses configPath directly, without an exec prefix or newline. */
+	DC->executeText(EXEC_NOW, configPath);
+	if(!Script_WriteProfile(va("profiles/%s/profile.pid", cl_profileStr))) {
+		Com_Printf("^3WARNING: couldn't write profiles/%s/profile.pid\n", cl_profileStr);
 	}
 }
 
@@ -2038,13 +2052,14 @@ qboolean Item_SettingShow(itemDef_t *item, qboolean fVoteTest)
 
 	if(fVoteTest) {
 		trap_Cvar_VariableStringBuffer("cg_ui_voteFlags", info, sizeof(info));
-		return((atoi(info) & item->voteFlag) != item->voteFlag);
+		return((NITMOD_ParseOriginalDecimal32(info) & item->voteFlag) != item->voteFlag);
 	}
 
 	DC->getConfigString( CS_SERVERTOGGLES, info, sizeof( info ) );
 
-	if(item->settingFlags & SVS_ENABLED_SHOW) return(atoi(info) & item->settingTest);
-	if(item->settingFlags & SVS_DISABLED_SHOW) return(!(atoi(info) & item->settingTest));
+	/* Original UI uses signed 32-bit strtol for both setting masks. */
+	if(item->settingFlags & SVS_ENABLED_SHOW) return(NITMOD_ParseOriginalDecimal32(info) & item->settingTest);
+	if(item->settingFlags & SVS_DISABLED_SHOW) return(!(NITMOD_ParseOriginalDecimal32(info) & item->settingTest));
 
 	return(qtrue);
 }
@@ -4718,15 +4733,20 @@ qboolean Item_Bind_HandleKey(itemDef_t *item, int key, qboolean down) {
 
 void AdjustFrom640(float *x, float *y, float *w, float *h) {
 	//*x = *x * DC->scale + DC->bias;
-#ifdef UIDLL
-	*x *= UI_NitmodXScale(DC);
-	*w *= UI_NitmodXScale(DC);
-#else
 	*x *= DC->xscale;
 	*w *= DC->xscale;
-#endif
 	*y *= DC->yscale;
 	*h *= DC->yscale;
+#ifdef UIDLL
+	/* Original 0x38699..0x38707 stores scaled floats before correction. */
+	{
+		float width = UI_NitmodWideWidth(DC);
+		if(width > 640.f) {
+			*x = (float)((double)*x * (640.0 / width));
+			*w = (float)((double)*w * (640.0 / width));
+		}
+	}
+#endif
 }
 
 void Item_Model_Paint(itemDef_t *item) {

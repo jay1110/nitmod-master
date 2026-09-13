@@ -1220,6 +1220,13 @@ static void CG_PlayerAngles( centity_t *cent, vec3_t legs[3], vec3_t torso[3], v
 	AnglesToAxis( legsAngles, legs );
 	AnglesToAxis( torsoAngles, torso );
 	AnglesToAxis( headAngles, head );
+
+	/* Original CG_PlayerAngles 0x91d50/0x91ff0: align only the local
+	 * ladder player's torso forward axis after the hierarchy conversion. */
+	if( cg.snap && cent == &cg_entities[cg.snap->ps.clientNum] &&
+		(cg.snap->ps.pm_flags & PMF_LADDER) ) {
+		VectorCopy( legs[0], torso[0] );
+	}
 }
 
 /*
@@ -1798,14 +1805,16 @@ void CG_AnimPlayerConditions( bg_character_t *character, centity_t *cent ) {
 	// MOUNTED
 	if( (es->eFlags & EF_MG42_ACTIVE) || (es->eFlags & EF_MOUNTEDTANK) ) {
 		BG_UpdateConditionValue( es->clientNum, ANIM_COND_MOUNTED, MOUNTED_MG42, qtrue );
-	} else if (es->eFlags & EF_AAGUN_ACTIVE) {
-		BG_UpdateConditionValue( es->clientNum, ANIM_COND_MOUNTED, MOUNTED_AAGUN, qtrue );
+
 	} else {
 		BG_UpdateConditionValue( es->clientNum, ANIM_COND_MOUNTED, MOUNTED_UNUSED, qtrue );
 	}
 
-	// UNDERHAND
-	BG_UpdateConditionValue( es->clientNum, ANIM_COND_UNDERHAND, cent->lerpAngles[0] > 0, qtrue );
+    /* Original remote-player class and health conditions (0x931b3..0x93227). */
+    BG_UpdateConditionValue(es->clientNum, ANIM_COND_PLAYERCLASS,
+        cgs.clientinfo[es->clientNum].cls, qtrue);
+    BG_UpdateConditionValue(es->clientNum, ANIM_COND_HEALTH_LEVEL,
+        es->dl_intensity > 65 ? 3 : es->dl_intensity > 32 ? 2 : 1, qtrue);
 
 	if( es->eFlags & EF_CROUCHING ) {
 		BG_UpdateConditionValue( es->clientNum, ANIM_COND_CROUCHING, qtrue, qtrue );

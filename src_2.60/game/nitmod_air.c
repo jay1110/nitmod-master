@@ -1,24 +1,17 @@
-#include <limits.h>
+#include "nitmod_support_time.h"
 #include "nitmod_air.h"
 
 int NITMOD_BreathDuration( unsigned int battleSenseUnlocked ) {
 	return battleSenseUnlocked & (1u << 5) ? 15000 : 12000;
 }
 
-static int NITMOD_ClampAirTime( double value ) {
-	if( value > INT_MAX ) return INT_MAX;
-	if( value < INT_MIN ) return INT_MIN;
-	return (int)value;
-}
-
+/* Original deadlines and movement remainder use wrapping ADD/SUB. */
 int NITMOD_ShiftAirDeadline( int deadline, int delta ) {
-	/* Double exactly represents sums of two signed 32-bit engine clocks. */
-	return NITMOD_ClampAirTime((double)deadline + delta);
+	return NITMOD_SupportSignedTime((uint32_t)deadline + (uint32_t)delta);
 }
 
 int NITMOD_AirRemaining( int deadline, int now ) {
-	/* Negative values mean expired air and must reach movement unchanged. */
-	return NITMOD_ClampAirTime((double)deadline - now);
+	return NITMOD_SupportSignedTime((uint32_t)deadline - (uint32_t)now);
 }
 
 int NITMOD_AirDeadline( int now, unsigned int battleSenseUnlocked ) {

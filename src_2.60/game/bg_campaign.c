@@ -36,22 +36,30 @@ qboolean BG_LoadCampaignSave(const char *filename, cpsFile_t *file, const char *
 	int remaining, i, j;
 	unsigned int hash = 0, index;
 	unsigned char version;
+	const char *error = "^1WARNING: BG_LoadCampaignSave: invalid, truncated or incompatible campaignsave\n";
 	if(!file) return qfalse;
 	memset(file, 0, sizeof(*file));
 	if(!filename || !profile) return qfalse;
 	remaining = trap_FS_FOpenFile(filename, &handle, FS_READ);
 	if(remaining < 0 || !handle) return qfalse;
-	if(!BG_CampaignReadInt(handle, &remaining, &file->header.ident) ||
-	   file->header.ident != CPS_IDENT || remaining < 1) goto invalid;
+	if(!BG_CampaignReadInt(handle, &remaining, &file->header.ident)) goto invalid;
+	if(file->header.ident != CPS_IDENT) {
+		error = "^1ERROR: BG_LoadCampaignSave: not a campaignsave\n";
+		goto invalid;
+	}
+	if(remaining < 1) goto invalid;
 	trap_FS_Read(&version, 1, handle); --remaining;
 	file->header.version = version;
-	if(version != CPS_VERSION ||
-	   !BG_CampaignReadInt(handle, &remaining, &file->header.numCampaigns) ||
+	/* Original reads but does not reject the version byte (UI 0x4297). */
+	if(!BG_CampaignReadInt(handle, &remaining, &file->header.numCampaigns) ||
 	   !BG_CampaignReadInt(handle, &remaining, &file->header.profileHash) ||
 	   file->header.numCampaigns < 0 || file->header.numCampaigns > MAX_CAMPAIGNS) goto invalid;
 	for(index = 0; profile[index]; ++index)
 		hash += (unsigned int)tolower((unsigned char)profile[index]) * (index + 119u);
-	if((unsigned int)file->header.profileHash != hash) goto invalid;
+	if((unsigned int)file->header.profileHash != hash) {
+		error = "^1WARNING: BG_LoadCampaignSave: campaignsave is for another profile\n";
+		goto invalid;
+	}
 	for(i = 0; i < file->header.numCampaigns; ++i) {
 		cpsCampaign_t *campaign = &file->campaigns[i];
 		if(!BG_CampaignReadInt(handle, &remaining, &campaign->shortnameHash) ||
@@ -65,7 +73,7 @@ qboolean BG_LoadCampaignSave(const char *filename, cpsFile_t *file, const char *
 invalid:
 	trap_FS_FCloseFile(handle);
 	memset(file, 0, sizeof(*file));
-	Com_Printf("^1WARNING: BG_LoadCampaignSave: invalid, truncated or incompatible campaignsave\n");
+	Com_Printf("%s", error);
 	return qfalse;
 }
 

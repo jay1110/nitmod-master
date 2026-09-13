@@ -6,10 +6,12 @@
 // Tab Size:		4 (real tabs)
 //===========================================================================
 
-#include "../game/g_local.h"
+#include "g_nitmod_etbot_interface.h" /* includes g_local.h */
 #include "g_nitmod_config.h"
 #include "g_nitmod_legacy_cvars.h"
+#include "g_nitmod_entities.h"
 #include "nitmod_script_bits.h"
+#include "nitmod_protocol.h"
 #include "../game/q_shared.h"
 
 /*
@@ -47,6 +49,19 @@ qboolean G_ScriptAction_SetModelFromBrushmodel( gentity_t *ent, char *params ) {
 		}
 
 		token = COM_ParseExt( &pString, qfalse );
+	}
+
+	/* Original qagame 0xad504 tests the second byte, not modelname[0].
+	 * Preserve that direct-model path and pass the entire token to the engine. */
+	if (modelname[1] == '*') {
+		trap_SetBrushModel(ent, modelname);
+		if (!solid) {
+			ent->s.eFlags |= EF_NONSOLID_BMODEL;
+			ent->clipmask = 0;
+			ent->r.contents = 0;
+			trap_LinkEntity(ent);
+		}
+		return qtrue;
 	}
 
 	for(i = 0; i < level.numBrushModels; i++) {
@@ -845,7 +860,7 @@ qboolean G_ScriptAction_SpawnRubble( gentity_t *ent, char *params ) {
 
 	for( i = 0; i < MAX_DEBRISCHUNKS; i++ ) {
 		if(!Q_stricmp( level.debrisChunks[i].targetname, params )) {
-			gentity_t* temp = G_TempEntity( level.debrisChunks[i].origin, EV_DEBRIS );
+			gentity_t* temp = G_NITMOD_TempEvent( level.debrisChunks[i].origin, EV_DEBRIS );
 			VectorCopy( level.debrisChunks[i].velocity, temp->s.origin2 );
 			temp->s.modelindex = level.debrisChunks[i].model;
 		}
@@ -1189,6 +1204,16 @@ qboolean G_ScriptAction_GotoMarker( gentity_t *ent, char *params )
 				ent->s.pos.trType = trType;
 			}
 			ent->reached = NULL;
+			/* Original 0xb03bf..0xb041e: only movers emit this notification,
+			 * before turntotarget setup and non-wait duration rounding. */
+			{
+				const char *name = _GetEntityName(ent);
+				char velocity[128];
+				Com_sprintf( velocity, sizeof(velocity), "%.2f %.2f %.2f",
+					ent->s.pos.trDelta[0], ent->s.pos.trDelta[1], ent->s.pos.trDelta[2] );
+				Bot_Util_SendTrigger( ent, NULL,
+					va("%s_goto", name ? name : "<unknown>"), velocity );
+			}
 
 			if (turntotarget && !pPathCorner) {
 				duration = ent->s.pos.trDuration;
@@ -1551,7 +1576,7 @@ qboolean G_ScriptAction_MusicStart( gentity_t *ent, char *params) {
 
 	token = COM_ParseExt( &pString, qfalse );
 	if (token[0]) {
-		fadeupTime = atoi(token);
+		fadeupTime = NITMOD_ParseOriginalDecimal32(token);
 	}
 
 	trap_SendServerCommand(-1, va("mu_start %s %d", cvarName, fadeupTime));
@@ -1595,7 +1620,7 @@ qboolean G_ScriptAction_MusicStop( gentity_t *ent, char *params) {
 	pString = params;
 	token = COM_ParseExt( &pString, qfalse );
 	if (token[0]) {
-		fadeoutTime = atoi(token);
+		fadeoutTime = NITMOD_ParseOriginalDecimal32(token);
 	}
 
 	trap_SendServerCommand(-1, va("mu_stop %i\n", fadeoutTime));
@@ -1647,7 +1672,7 @@ qboolean G_ScriptAction_MusicFade( gentity_t *ent, char *params) {
 	if (!token[0] || token[0] < '0' || token[0] > '9') {
 		G_Error("G_Scripting: syntax: mu_fade <target volume 0.0-1.0> <fadeout time>");
 	}
-	fadeoutTime = atoi(token);
+	fadeoutTime = NITMOD_ParseOriginalDecimal32(token);
 
 	trap_SendServerCommand(-1, va("mu_fade %f %i\n", targetVol, fadeoutTime));
 
@@ -1829,7 +1854,7 @@ qboolean G_ScriptAction_ToggleSpeaker( gentity_t *ent, char *params )
 			continue;
 		}
 
-		tent = G_TempEntity( speaker->origin, EV_ALERT_SPEAKER );
+		tent = G_NITMOD_TempEvent( speaker->origin, EV_ALERT_SPEAKER );
 		tent->r.svFlags = SVF_BROADCAST;
 		tent->s.otherEntityNum = i;
 		tent->s.otherEntityNum2 = 0;
@@ -1866,7 +1891,7 @@ qboolean G_ScriptAction_DisableSpeaker( gentity_t *ent, char *params )
 			continue;
 		}
 
-		tent = G_TempEntity( speaker->origin, EV_ALERT_SPEAKER );
+		tent = G_NITMOD_TempEvent( speaker->origin, EV_ALERT_SPEAKER );
 		tent->r.svFlags = SVF_BROADCAST;
 		tent->s.otherEntityNum = i;
 		tent->s.otherEntityNum2 = 1;
@@ -1903,7 +1928,7 @@ qboolean G_ScriptAction_EnableSpeaker( gentity_t *ent, char *params )
 			continue;
 		}
 
-		tent = G_TempEntity( speaker->origin, EV_ALERT_SPEAKER );
+		tent = G_NITMOD_TempEvent( speaker->origin, EV_ALERT_SPEAKER );
 		tent->r.svFlags = SVF_BROADCAST;
 		tent->s.otherEntityNum = i;
 		tent->s.otherEntityNum2 = 2;
@@ -2365,6 +2390,15 @@ G_ScriptAction_FaceAngles
   last gotomarker command will be used instead.
 =================
 */
+/* Original FaceAngles publishes angular velocity at start and zero at stop. */
+static void G_ScriptFaceAnglesNotify( gentity_t *ent, const char *phase ) {
+	const char *name = _GetEntityName(ent);
+	char velocity[128];
+	Com_sprintf( velocity, sizeof(velocity), "%.2f %.2f %.2f",
+		ent->s.apos.trDelta[0], ent->s.apos.trDelta[1], ent->s.apos.trDelta[2] );
+	Bot_Util_SendTrigger( ent, NULL, va("%s_%s", name ? name : "<unknown>", phase), velocity );
+}
+
 qboolean G_ScriptAction_FaceAngles( gentity_t *ent, char *params )
 {
 	char *pString, *token;
@@ -2430,6 +2464,7 @@ qboolean G_ScriptAction_FaceAngles( gentity_t *ent, char *params )
 			ent->s.apos.trType = trType;
 		}
 
+		G_ScriptFaceAnglesNotify( ent, "start" );
 	} else if (ent->s.apos.trTime + ent->s.apos.trDuration <= level.time) {
 		// finished turning
 		BG_EvaluateTrajectory( &ent->s.apos, ent->s.apos.trTime + ent->s.apos.trDuration, ent->s.angles, qtrue, ent->s.effect2Time  );
@@ -2440,6 +2475,7 @@ qboolean G_ScriptAction_FaceAngles( gentity_t *ent, char *params )
 		ent->s.apos.trType = TR_STATIONARY;
 		VectorClear( ent->s.apos.trDelta );
 
+		G_ScriptFaceAnglesNotify( ent, "stop" );
 		script_linkentity( ent );
 
 		return qtrue;
@@ -2725,6 +2761,10 @@ G_ScriptAction_ObjectiveStatus
 ===================
 */
 qboolean G_ScriptAction_ObjectiveStatus( gentity_t *ent, char *params ) {
+	static const char *actions[2][3] = {
+		{ "axis_default", "axis_complete", "axis_failed" },
+		{ "allied_default", "allied_complete", "allied_failed" }
+	};
 	char *pString, *token;
 	char	cs[MAX_STRING_CHARS];
 	char*	parm;
@@ -2760,6 +2800,8 @@ qboolean G_ScriptAction_ObjectiveStatus( gentity_t *ent, char *params ) {
 	trap_GetConfigstring( CS_MULTI_OBJECTIVE, cs, sizeof(cs) );
 	Info_SetValueForKey( cs, va( "%s%i", parm, num ), token );
 	trap_SetConfigstring( CS_MULTI_OBJECTIVE, cs );
+	/* Original 0xb369f..0xb3866: notify bots after publishing the status. */
+	Bot_Util_SendTrigger( ent, NULL, _GetEntityName(ent), actions[parm[0] != 'x'][atoi(token)] );
 
 	return qtrue;
 }
@@ -3030,10 +3072,11 @@ qboolean G_ScriptAction_TeamVoiceAnnounce( gentity_t *ent, char *params ) {
 		G_Error( "G_ScriptAction_TeamVoiceAnnounce: sound parameter required\n" );
 	}
 
-	tent = G_TempEntity( vec3_origin, EV_GLOBAL_TEAM_SOUND );
+	tent = G_NITMOD_TempEvent( NULL, EV_GLOBAL_TEAM_SOUND );
 	tent->s.teamNum = team;
 	tent->s.eventParm = G_SoundIndex( token );
 	tent->r.svFlags = SVF_BROADCAST;
+	Bot_Util_SendTrigger( ent, NULL, token, "team_announce" );
 	
 	return qtrue;
 }
@@ -3070,6 +3113,8 @@ qboolean G_ScriptAction_Announce_Icon( gentity_t *ent, char *params ) {
 	}
 
 	trap_SendServerCommand( -1, va("cpmi %i \"%s\"", iconnumber, token ));
+	Bot_Util_SendTrigger( ent, NULL, token, "announce_icon" );
+	G_LogPrintf( "nitmod announce: \"%s\"\n", token );
 
 	return qtrue;
 }
@@ -3095,8 +3140,9 @@ qboolean G_ScriptAction_Announce( gentity_t *ent, char *params )
 		G_Error( "G_ScriptAction_Announce: statement parameter required\n" );
 	}
 				
-	trap_SendServerCommand( -1, va("cpm \"%s\"", token ));
-//	trap_SendServerCommand( -1, va("cp \"%s\" 2", token ));
+	trap_SendServerCommand( -1, va("cpm_map \"%s\"", token ));
+	Bot_Util_SendTrigger( ent, NULL, token, "announce" );
+	G_LogPrintf( "nitmod announce: \"%s\"\n", token );
 
 	return qtrue;
 }
@@ -3380,6 +3426,7 @@ G_ScriptAction_RepairMG42
 */
 qboolean G_ScriptAction_RepairMG42( gentity_t *ent, char *params ) {
 	gentity_t *target;
+	int index;
 	char *pString, name[MAX_QPATH], *token;
 
 	pString = params;
@@ -3389,14 +3436,10 @@ qboolean G_ScriptAction_RepairMG42( gentity_t *ent, char *params ) {
 		G_Error( "G_Scripting: repairmg42 must have a target\n" );
 	}
 
-	// look for entities
-	target = &g_entities[MAX_CLIENTS-1];
-	while ((target = G_FindByTargetname( target, name ))) {
+	/* Original 0xb4b63..0xb4c24 repairs the registered guns; the parsed
+	 * target is the bot-event tag, not an entity-name filter. */
+	for( index = 0; (target = G_NITMOD_MG42At(index)) != NULL; index++ ) {
 		if( target->takedamage ) {
-			continue;
-		}
-
-		if( target->s.eType != ET_MG42_BARREL ) {
 			continue;
 		}
 
@@ -3412,6 +3455,7 @@ qboolean G_ScriptAction_RepairMG42( gentity_t *ent, char *params ) {
 
 		target->takedamage = qtrue;
 		target->s.eFlags &= ~EF_SMOKING;
+		Bot_Util_SendTrigger( ent, NULL, name, "repair_mg42" );
 	}
 
 	return qtrue;
@@ -4254,6 +4298,95 @@ set
 available fields can be found in field_t of g_spawn.c, it is quite simple to add new ones
 ===================
 */
+/* Original G_ScriptAction_Create 0xb6560..0xb66de. */
+qboolean G_ScriptAction_Create( gentity_t *ent, char *params ) {
+	char *p = params, *token;
+	char key[MAX_TOKEN_CHARS], value[MAX_TOKEN_CHARS];
+	gentity_t *created;
+	level.numSpawnVars = 0;
+	level.numSpawnVarChars = 0;
+	while( 1 ) {
+		token = COM_ParseExt(&p, qfalse);
+		if( !token[0] ) break;
+		Q_strncpyz(key, token, sizeof(key));
+		token = COM_ParseExt(&p, qfalse);
+		if( !token[0] ) { G_Error("key \"%s\" has no value", key); return qfalse; }
+		Q_strncpyz(value, token, sizeof(value));
+		if( g_scriptDebug.integer )
+			G_Printf("%d : (%s): set [%s] [%s] [%s]\n", level.time,
+				ent->scriptName, ent->scriptName, key, value);
+		if( level.numSpawnVars >= MAX_SPAWN_VARS ) {
+			G_Error("G_ScriptAction_Create: MAX_SPAWN_VARS");
+			return qfalse;
+		}
+		level.spawnVars[level.numSpawnVars][0] = G_AddSpawnVarToken(key);
+		level.spawnVars[level.numSpawnVars][1] = G_AddSpawnVarToken(value);
+		level.numSpawnVars++;
+	}
+	created = G_SpawnGEntityFromSpawnVars();
+	if( created && created->inuse ) trap_LinkEntity(created);
+	return qtrue;
+}
+
+void Think_SetupObjectiveInfo( gentity_t *ent );
+
+/* Original G_ModifyTOI (0xb5b70): publish the current objective after each
+ * set pair, using the spawn variables collected so far. */
+static void G_ModifyTOI( gentity_t *ent ) {
+	char info[MAX_INFO_STRING], track[4];
+	char *image, *score;
+	int axis = 0, allies = 0, flags, i;
+	vec3_t origin;
+	if (ent->s.teamNum < 0 || ent->s.teamNum >= MAX_OID_TRIGGERS) {
+		G_Error("G_ModifyTOI: invalid objective index %i", ent->s.teamNum);
+		return;
+	}
+	trap_GetConfigstring(CS_OID_DATA + ent->s.teamNum, info, sizeof(info));
+	if (G_SpawnString("customimage", "", &image)) {
+		axis = allies = G_ShaderIndex(image);
+	} else {
+		if (G_SpawnString("customaxisimage", "", &image)) axis = G_ShaderIndex(image);
+		if (G_SpawnString("customalliesimage", "", &image) ||
+			G_SpawnString("customalliedimage", "", &image)) allies = G_ShaderIndex(image);
+	}
+	Info_SetValueForKey(info, "e", va("%i", (int)(ent - g_entities)));
+	if (G_SpawnInt("objflags", "0", &flags)) Info_SetValueForKey(info, "o", va("%i", flags));
+	if (axis) {
+		Info_SetValueForKey(info, "r", va("%i", axis));
+		Info_SetValueForKey(info, "cix", va("%i", axis));
+	}
+	if (allies) {
+		Info_SetValueForKey(info, "b", va("%i", allies));
+		Info_SetValueForKey(info, "cia", va("%i", allies));
+	}
+	Info_SetValueForKey(info, "s", va("%i", ent->spawnflags));
+	Info_SetValueForKey(info, "n", ent->message ? ent->message : "");
+	if (G_SpawnString("score", "0", &score)) ent->accuracy = (float)atof(score);
+	/* The original copies with size 4 before trying to remove "the ".
+	 * That four-character word cannot occur in the resulting three bytes. */
+	Q_strncpyz(track, ent->track ? ent->track : "", sizeof(track));
+	if (g_gametype.integer != GT_WOLF_DM) Info_SetValueForKey(info, "t", track);
+	if (VectorCompare(ent->s.origin, vec3_origin)) {
+		VectorAdd(ent->r.absmin, ent->r.absmax, origin);
+		VectorScale(origin, 0.5f, origin);
+	} else {
+		VectorCopy(ent->s.origin, origin);
+	}
+	for (i = 0; i < 3; ++i) {
+		const char *keys[] = {"x", "y", "z"};
+		Info_SetValueForKey(info, keys[i], va("%i", (int)origin[i]));
+	}
+	if (!ent->target) {
+		trap_LinkEntity(ent);
+	} else {
+		ent->nextthink = level.time + 300;
+		ent->think = Think_SetupObjectiveInfo;
+	}
+	Info_SetValueForKey(info, "i", va("%i", ent->s.teamNum));
+	trap_SetConfigstring(CS_OID_DATA + ent->s.teamNum, info);
+	G_NITMOD_MirrorEngineConfigString(CS_OID_DATA + ent->s.teamNum, info);
+}
+
 qboolean etpro_ScriptAction_SetValues( gentity_t *ent, char *params ) {
 	char	*token;
 	char	*p;
@@ -4285,7 +4418,7 @@ qboolean etpro_ScriptAction_SetValues( gentity_t *ent, char *params ) {
 		strcpy(value, token);
 
 		if( g_scriptDebug.integer )
-			G_Printf( "%d : (%s) %s: set [%s] [%s] [%s]\n", level.time, ent->scriptName, GAMEVERSION, ent->scriptName, key, value );
+			G_Printf( "%d : (%s) nitmod: set [%s] [%s] [%s]\n", level.time, ent->scriptName, ent->scriptName, key, value );
 
 		if (!Q_stricmp(key, "classname_nospawn")) {
 			Q_strncpyz(key, "classname", sizeof(key));
@@ -4316,6 +4449,9 @@ qboolean etpro_ScriptAction_SetValues( gentity_t *ent, char *params ) {
 		if( !Q_stricmp( key, "scriptname" ) ) {
 			/* Unlike map spawn, no script_multiplayer alias here. */
 			ent->nitmodScriptNameHash = (int)BG_StringHashValue( ent->scriptName );
+		}
+		if (ent->nitmodClassnameHash == 0x499c5 && !classchanged) {
+			G_ModifyTOI(ent);
 		}
 	}
 

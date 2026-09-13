@@ -1,7 +1,8 @@
+#include "nitmod_support_time.h"
 
 #include <limits.h>
 
-#include "g_local.h"
+#include "g_nitmod_etbot_interface.h" /* includes g_local.h once */
 #include "g_nitmod_legacy_cvars.h"
 #include "g_nitmod_config.h"
 #include "nitmod_clamp.h"
@@ -154,7 +155,7 @@ order.
 */
 void Team_FragBonuses(gentity_t *targ, gentity_t *inflictor, gentity_t *attacker)
 {
-	int i;
+	int i, spawnCursor = 0;
 	gentity_t *ent;
 	int flag_pw, enemy_flag_pw;
 	int otherteam;
@@ -276,7 +277,7 @@ void Team_FragBonuses(gentity_t *targ, gentity_t *inflictor, gentity_t *attacker
 
 // JPW NERVE -- look for nearby checkpoints and spawnpoints
 	flag = NULL;
-	while ((flag = G_Find (flag, FOFS(classname), "team_WOLF_checkpoint")) != NULL) {
+	while ((flag = G_NITMOD_NextSpawnEntity(&spawnCursor, 0x42729)) != NULL) {
 		VectorSubtract(targ->client->ps.origin, flag->s.origin, v1);
 		if ((flag->s.frame != WCP_ANIM_NOFLAG) && (flag->count == attacker->client->sess.sessionTeam))
 			if (VectorLengthSquared(v1) < SQR(WOLF_CP_PROTECT_RADIUS)) {
@@ -360,6 +361,8 @@ void Team_ResetFlag( gentity_t *ent )
 		// do we need to respawn?
 		if( ent->s.density == 1 )
 			RespawnItem(ent);
+		/* Original0xdb44f/0xdb4cc: notify after the base is restored. */
+		Bot_Util_SendTrigger(ent,NULL,va("Flag returned %s!",_GetEntityName(ent)),"returned");
 	}
 }
 
@@ -408,7 +411,7 @@ void Team_ResetFlags(void)
 	}
 }
 
-void Team_ReturnFlagSound(gentity_t *ent, int team)
+void Team_ReturnFlagSound(gentity_t *ent, int team, gentity_t *returner)
 {
 	// play powerup spawn sound to all clients
 	//gentity_t	*te;
@@ -422,6 +425,7 @@ void Team_ReturnFlagSound(gentity_t *ent, int team)
 	pm = G_PopupMessage( PM_OBJECTIVE );
 	pm->s.effect3Time = G_StringIndex( ent->message );
 	pm->s.effect2Time = team;
+	pm->s.clientNum = returner ? returner->client->ps.clientNum : -1;
 	pm->s.density = 1; // 1 = returned
 
 	/*te = G_TempEntity( ent->s.pos.trBase, EV_GLOBAL_SOUND );
@@ -431,12 +435,22 @@ void Team_ReturnFlagSound(gentity_t *ent, int team)
 	te->r.svFlags |= SVF_BROADCAST;*/
 }
 
-void Team_ReturnFlag(gentity_t *ent)
+void Team_ReturnFlag(gentity_t *ent, gentity_t *returner)
 {
-	int team = ent->item->giTag == PW_REDFLAG ? TEAM_AXIS : TEAM_ALLIES;
-	Team_ReturnFlagSound(ent, team);
-	Team_ResetFlag(ent);
-	PrintMsg(NULL, "The %s flag has returned!\n", TeamName(team));
+ int team=ent->item->giTag==PW_REDFLAG ? TEAM_AXIS : TEAM_ALLIES;
+ gentity_t *pm=G_PopupMessage(PM_OBJECTIVE);
+ /* Original 0xdba50..0xdbbcd attributes manual returns to the activator. */
+ pm->s.effect3Time=G_StringIndex(ent->message);
+ pm->s.effect2Time=team;
+ pm->s.clientNum=returner ? returner->client->ps.clientNum : -1;
+ pm->s.density=1;
+ if(ent->flags & FL_DROPPED_ITEM) {
+  Team_ResetFlag(&g_entities[ent->s.otherEntityNum]);
+  G_FreeEntity(ent);
+ } else {
+  Team_ResetFlag(ent);
+ }
+ PrintMsg(NULL,"The %s flag has returned!\n",team==TEAM_AXIS ? "RED" : "BLUE");
 }
 
 /*
@@ -452,18 +466,18 @@ void Team_DroppedFlagThink(gentity_t *ent) {
 	if( ent->item->giTag == PW_REDFLAG ) {
 		G_Script_ScriptEvent( &g_entities[ent->s.otherEntityNum], "trigger", "returned" );
 
-		Team_ReturnFlagSound( ent, TEAM_AXIS );
+		Team_ReturnFlagSound( ent, TEAM_AXIS, NULL );
 		Team_ResetFlag( ent );
 
 		if( level.gameManager ) {
 			G_Script_ScriptEvent( level.gameManager, "trigger", "axis_object_returned" );
 		}
 
-		trap_SendServerCommand(-1, "cp \"Axis have returned the objective!\" 2");
+
 	} else if( ent->item->giTag == PW_BLUEFLAG ) {
 		G_Script_ScriptEvent( &g_entities[ent->s.otherEntityNum], "trigger", "returned" );
 
-		Team_ReturnFlagSound( ent, TEAM_ALLIES );
+		Team_ReturnFlagSound( ent, TEAM_ALLIES, NULL );
 		Team_ResetFlag( ent );
 
 		if( level.gameManager ) {
@@ -517,10 +531,14 @@ int Team_TouchOurFlag( gentity_t *ent, gentity_t *other, int team ) {
 		}
 		// dhm
 // jpw 800 672 2420
-		other->client->pers.teamState.flagrecovery++;
-		other->client->pers.teamState.lastreturnedflag = level.time;
+		/* Original0xdb646..db677: message, entity-name fallback, then popup/reset. */
+        {
+            const char *name=ent->message ? ent->message : _GetEntityName(ent);
+            Bot_Util_SendTrigger(ent,NULL,va("%s have returned %s!",
+                cl->sess.sessionTeam==TEAM_AXIS ? "Axis" : "Allies",name ? name : ""),"returned");
+        }
 		//ResetFlag will remove this entity!  We must return zero
-		Team_ReturnFlagSound(ent, team);
+		Team_ReturnFlagSound(ent, team, other);
 		Team_ResetFlag(ent);
 		return 0;
 	}
@@ -551,6 +569,7 @@ int Team_TouchEnemyFlag( gentity_t *ent, gentity_t *other, int team ) {
 		gentity_t* pm = G_PopupMessage( PM_OBJECTIVE );
 		pm->s.effect3Time = G_StringIndex( ent->message );
 		pm->s.effect2Time = TEAM_AXIS;
+		pm->s.clientNum = cl->ps.clientNum;
 		pm->s.density = 0; // 0 = stolen
 
 //		te->s.eventParm = G_SoundIndex( "sound/chat/axis/g-objective_taken.wav" );
@@ -561,11 +580,12 @@ int Team_TouchEnemyFlag( gentity_t *ent, gentity_t *other, int team ) {
 			G_Script_ScriptEvent( level.gameManager, "trigger", "allied_object_stolen" );
 		}
 		G_Script_ScriptEvent( ent, "trigger", "stolen" );
-		Bot_TeamScriptEvent( TEAM_ALLIES, "objective", "stolen" );
+		Bot_Util_SendTrigger(ent,NULL,va("Axis have stolen %s!",ent->message),"stolen");
 	} else {
 		gentity_t* pm = G_PopupMessage( PM_OBJECTIVE );
 		pm->s.effect3Time = G_StringIndex( ent->message );
 		pm->s.effect2Time = TEAM_ALLIES;
+		pm->s.clientNum = cl->ps.clientNum;
 		pm->s.density = 0; // 0 = stolen
 
 //		te->s.eventParm = G_SoundIndex( "sound/chat/allies/a-objective_taken.wav" );
@@ -576,7 +596,7 @@ int Team_TouchEnemyFlag( gentity_t *ent, gentity_t *other, int team ) {
 			G_Script_ScriptEvent( level.gameManager, "trigger", "axis_object_stolen" );
 		}
 		G_Script_ScriptEvent( ent, "trigger", "stolen" );
-		Bot_TeamScriptEvent( TEAM_AXIS, "objective", "stolen" );
+		Bot_Util_SendTrigger(ent,NULL,va("Allies have stolen %s!",ent->message),"stolen");
 	}
 	// dhm
 // jpw
@@ -599,7 +619,7 @@ int Team_TouchEnemyFlag( gentity_t *ent, gentity_t *other, int team ) {
 	else
 		cl->flagParent = ent->s.number;
 
-	cl->pers.teamState.flagsince = level.time;
+	/* Original pickup leaves the legacy flagsince field unchanged. */
 	
 	other->client->speedScale = ent->splashDamage; // Alter player speed
 
@@ -722,14 +742,21 @@ go to a random point that doesn't telefrag
 ================
 */
 #define	MAX_TEAM_SPAWN_POINTS	256
-gentity_t *SelectRandomTeamSpawnPoint( int teamstate, team_t team, int spawnObjective ) {
+static int nitmodDMSpawnSeconds[MAX_TEAM_SPAWN_POINTS];
+void G_NITMOD_ResetDMSpawnTimes(void) {
+ int i;
+ /* Original G_InitGame 0x7fe7e/0x80530 initializes 64 entries in DM only. */
+ if(g_gametype.integer!=8) return;
+ for(i=0;i<64;i++) nitmodDMSpawnSeconds[i]=-10000;
+}
+static gentity_t *SelectTeamSpawnContext( int teamstate, team_t team, int spawnObjective, qboolean teamChange ) {
 	gentity_t	*spot;
 	gentity_t	*spots[MAX_TEAM_SPAWN_POINTS];
 
 	int			count, closest, defendingTeam;
 	int			i = 0;
 
-	char		*classname;
+	int spawnHash, cursor = 0;
 	float		shortest, tmp;
 
 	vec3_t		target;
@@ -738,18 +765,19 @@ gentity_t *SelectRandomTeamSpawnPoint( int teamstate, team_t team, int spawnObje
 	defendingTeam = -1;
 
 	if (team == TEAM_AXIS) {
-		classname = "team_CTF_redspawn";
+		spawnHash = 0x37c98;
 	} else if (team == TEAM_ALLIES) {
-		classname = "team_CTF_bluespawn";
+		spawnHash = 0x3b699;
 	} else {
 		return NULL;
 	}
 
+	if(g_gametype.integer==8) spawnHash=0x3eee0;
 	count = 0;
 
 	spot = NULL;
 
-	while ((spot = G_Find (spot, FOFS(classname), classname)) != NULL) {
+	while ((spot = G_NITMOD_NextSpawnEntity(&cursor, spawnHash)) != NULL) {
 		if ( SpotWouldTelefrag( spot ) ) {
 			continue;
 		}
@@ -772,7 +800,8 @@ gentity_t *SelectRandomTeamSpawnPoint( int teamstate, team_t team, int spawnObje
 
 	if ( !count ) {	// no spots that won't telefrag
 		spot = NULL;
-		while( (spot = G_Find( spot, FOFS(classname), classname) ) != NULL ) {
+        cursor = 0;
+		while( (spot = G_NITMOD_NextSpawnEntity(&cursor, spawnHash) ) != NULL ) {
 			// Arnout - modified to allow initial spawnpoints to be disabled at gamestart
 			if( !(spot->spawnflags & 2) ) {
 				continue;
@@ -786,13 +815,26 @@ gentity_t *SelectRandomTeamSpawnPoint( int teamstate, team_t team, int spawnObje
 			return spot;
 		}
 
-		return G_Find( NULL, FOFS(classname), classname);
+		cursor = 0;
+        return G_NITMOD_NextSpawnEntity(&cursor, spawnHash);
 	}
 
 	if((!level.numspawntargets)) {
 		G_Error( "No spawnpoints found\n" );
 		return NULL;
 	} else {
+        if(g_gametype.integer==8) {
+            int attempt;
+            for(attempt=0;attempt<50;attempt++) {
+                int index=rand()%count;
+                if(teamChange) return spots[index];
+                if(NITMOD_SupportSignedTime((uint32_t)level.time-(uint32_t)nitmodDMSpawnSeconds[index]*1000u)>10000) {
+                    nitmodDMSpawnSeconds[index]=level.time/1000;
+                    return spots[index];
+                }
+            }
+            return NULL;
+        }
 		// Gordon: adding ability to set autospawn
 		if (!spawnObjective) {
 			switch(team) {
@@ -830,18 +872,23 @@ gentity_t *SelectRandomTeamSpawnPoint( int teamstate, team_t team, int spawnObje
 
 
 
+gentity_t *SelectRandomTeamSpawnPoint(int state,team_t team,int objective) {
+ return SelectTeamSpawnContext(state,team,objective,qfalse);
+}
+
 /*
 ===========
 SelectCTFSpawnPoint
 
 ============
 */
-gentity_t *SelectCTFSpawnPoint ( team_t team, int teamstate, vec3_t origin, vec3_t angles, int spawnObjective ) {
+gentity_t *SelectCTFSpawnPoint ( team_t team, int teamstate, vec3_t origin, vec3_t angles, int spawnObjective, qboolean teamChange ) {
 	gentity_t	*spot;
 
-	spot = SelectRandomTeamSpawnPoint( teamstate, team, spawnObjective );
+	spot = SelectTeamSpawnContext( teamstate, team, spawnObjective, teamChange );
 
 	if (!spot) {
+        if(g_gametype.integer==8 && !teamChange) return NULL;
 		return SelectSpawnPoint( vec3_origin, origin, angles );
 	}
 
@@ -1031,6 +1078,28 @@ void SP_team_CTF_redspawn(gentity_t *ent) {
 // JPW NERVE
 	vec3_t	dir;
 
+	if(g_gametype.integer==8) { G_FreeEntity(ent); return; }
+	ent->enemy = G_PickTarget( ent->target );
+	if(ent->enemy)
+	{
+		VectorSubtract( ent->enemy->s.origin, ent->s.origin, dir );
+		vectoangles( dir, ent->s.angles );
+	}
+
+	ent->use = Use_Team_Spawnpoint;
+// jpw
+
+	VectorSet (ent->r.mins, -16, -16, -24);
+	VectorSet (ent->r.maxs, 16, 16, 32);
+
+	ent->think = DropToFloor;
+}
+
+void SP_team_CTF_greenspawn(gentity_t *ent) {
+// JPW NERVE
+	vec3_t	dir;
+    if(g_gametype.integer!=8) { G_FreeEntity(ent); return; }
+
 	ent->enemy = G_PickTarget( ent->target );
 	if(ent->enemy)
 	{
@@ -1066,6 +1135,7 @@ void SP_team_CTF_bluespawn(gentity_t *ent) {
 // JPW NERVE
 	vec3_t dir;
 
+	if(g_gametype.integer==8) { G_FreeEntity(ent); return; }
 	ent->enemy = G_PickTarget( ent->target );
 	if(ent->enemy)
 	{
@@ -1462,6 +1532,18 @@ void checkpoint_spawntouch (gentity_t *self, gentity_t *other, trace_t *trace) {
 	else
 		G_Script_ScriptEvent( self, "trigger", "allied_capture" );
 
+	/* Original0xdad18..dad4c classifies the animation transition for bots. */
+    {
+        const char *action="touch";
+        switch(self->s.frame) {
+        case WCP_ANIM_RAISE_AXIS: case WCP_ANIM_RAISE_AMERICAN: action="capture"; break;
+        case WCP_ANIM_AMERICAN_TO_AXIS: case WCP_ANIM_AXIS_TO_AMERICAN: action="reclaims"; break;
+        case WCP_ANIM_AMERICAN_FALLING: case WCP_ANIM_AXIS_FALLING: action="neutralized"; break;
+        }
+        Bot_Util_SendTrigger(self,NULL,va("%s_%s_%s",
+            self->count==TEAM_AXIS ? "axis" : "allies",action,_GetEntityName(self)),action);
+    }
+
 	/* Spawnpoint checkpoints use the same original client notification. */
 	nitmod_ObjectiveEvent( self->count == TEAM_AXIS ? 9 : 10, 0,
 		self->s.teamNum, other->s.number, MOD_UNKNOWN );
@@ -1640,7 +1722,8 @@ void G_swapTeams(void)
 		ClientBegin(level.sortedClients[i]);
 	}
 
-	AP("cp \"^1Teams have been swapped!\n\"");
+	/* Original G_swapTeams 0xdcfc8 sends center-message reason 36. */
+	AP("ncp 36");
 }
 
 
@@ -1659,8 +1742,38 @@ int QDECL G_SortPlayersByXP( const void *a, const void *b ) {
 }
 
 
+/* Original nitrox_SortByKDRatio, ELF 0xd9e50..0xda059. */
+static int QDECL G_SortPlayersByKDRatio(const void *a,const void *b) {
+    int an=*(const int *)a,bn=*(const int *)b;
+    gclient_t *ca=&level.clients[an],*cb=&level.clients[bn];
+    int ak,ad,bk,bd;
+    long long left,right;
+    if(ca->sess.spectatorClient<0) return 1;
+    if(cb->sess.spectatorClient<0) return -1;
+    if(ca->pers.connected==CON_CONNECTING) return 1;
+    if(cb->pers.connected==CON_CONNECTING) return -1;
+    if(ca->sess.sessionTeam==TEAM_SPECTATOR) {
+        if(cb->sess.sessionTeam!=TEAM_SPECTATOR) return 1;
+        return ca->sess.spectatorTime<cb->sess.spectatorTime ? -1 :
+            ca->sess.spectatorTime>cb->sess.spectatorTime;
+    }
+    if(cb->sess.sessionTeam==TEAM_SPECTATOR) return -1;
+    if(!G_NITMOD_GlobalStatsKillDeath(an,&ak,&ad)) {
+        ak=ca->sess.kills; ad=ca->sess.deaths;
+    }
+    if(!G_NITMOD_GlobalStatsKillDeath(bn,&bk,&bd)) {
+        bk=cb->sess.kills; bd=cb->sess.deaths;
+    }
+    /* Original defines nonpositive death totals as ratio zero. Cross products
+     * retain the ordering without platform-dependent floating precision. */
+    if(ad<=0) { ak=0; ad=1; }
+    if(bd<=0) { bk=0; bd=1; }
+    left=(long long)ak*bd; right=(long long)bk*ad;
+    return left>right ? -1 : left<right;
+}
+
 // Shuffle active players onto teams
-void G_shuffleTeams(void)
+static void G_ShuffleTeamsBy(int (QDECL *compare)(const void *, const void *))
 {
 	int i, cTeam; //, cMedian = level.numNonSpectatorClients / 2;
 	int aTeamCount[TEAM_NUM_TEAMS];
@@ -1679,14 +1792,15 @@ void G_shuffleTeams(void)
 	for( i = 0; i < level.numConnectedClients; i++ ) {
 		cl = level.clients + level.sortedClients[ i ];
 
-		if( cl->sess.sessionTeam != TEAM_AXIS && cl->sess.sessionTeam != TEAM_ALLIES ) {
+		/* Original 0xdd0c8 excludes spectators only, including TEAM_FREE. */
+		if( cl->sess.sessionTeam == TEAM_SPECTATOR ) {
 			continue;
 		}
 
 		sortClients[ cnt++ ] = level.sortedClients[ i ];
 	}
 
-	qsort( sortClients, cnt, sizeof( int ), G_SortPlayersByXP );
+	qsort( sortClients, cnt, sizeof( int ), compare );
 
 	for( i = 0; i < cnt; i++ ) {
 		cl = level.clients + sortClients[i];
@@ -1714,8 +1828,19 @@ void G_shuffleTeams(void)
 		ClientBegin(sortClients[i]);
 	}
 
-	AP("cp \"^1Teams have been shuffled!\n\"");
+	/* Original G_shuffleTeams 0xdd280 sends center-message reason 37. */
+	AP("ncp 37");
 }
+
+void G_shuffleTeams(void) {
+    G_ShuffleTeamsBy(G_SortPlayersByKDRatio);
+}
+
+/* Keep the separately advertised legacy XP command independent of Nitmod K/D. */
+void G_shuffleTeamsXP(void) {
+    G_ShuffleTeamsBy(G_SortPlayersByXP);
+}
+
 
 
 // Returns player's "real" team.
@@ -1766,7 +1891,8 @@ qboolean G_readyMatchState(void)
 		 level.warmupTime > (level.time + 10*1000) ) &&
 		g_gamestate.integer == GS_WARMUP && G_checkReady()) {
 		level.ref_allready = qfalse;
-		if( g_doWarmup.integer > 0 || (g_gametype.integer == GT_WOLF_LMS && g_lms_lockTeams.integer) ) {
+		/* Original G_readyMatchState 0xdd5c6..0xdd5f1 locks only LMS. */
+		if( g_gametype.integer == GT_WOLF_LMS && g_lms_lockTeams.integer ) {
 			teamInfo[TEAM_AXIS].team_lock = qtrue;
 			teamInfo[TEAM_ALLIES].team_lock = qtrue;
 		}

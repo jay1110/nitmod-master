@@ -20,3 +20,5 @@ void CG_NitmodDrawCrosshairLabel(const char *text, const vec4_t color);
 void CG_NitmodDrawCrosshairHealth(int health, int maxHealth, const vec4_t color);
 const char *CG_NitmodCrosshairEntityName(int entity, qboolean construction);
 #endif
+
+void CG_NitmodResetArtilleryHint(void);

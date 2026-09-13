@@ -8,9 +8,13 @@ void G_NITMOD_GeoIPLoad(void) {
     G_NITMOD_GeoIPClose();
     if(!trap_Cvar_VariableIntegerValue("g_countryflags")) return;
     size=trap_FS_FOpenFile("GeoIP.dat",&file,FS_READ);
-    if(size<=0 || !file || size>64*1024*1024) {
+    if(size<0 || !file) {
         if(file) trap_FS_FCloseFile(file);
-        G_LogPrintf("GeoIP: unavailable or invalid database file\n"); return;
+        G_LogPrintf("GeoIP: Error opening database\n"); return;
+    }
+    if(size==0) {
+        G_LogPrintf("GeoIP: Error zero-sized database file\n");
+        trap_FS_FCloseFile(file); return;
     }
     database=calloc((size_t)size+1,1);
     if(database) { trap_FS_Read(database,size,file); databaseSize=size; }
@@ -25,10 +29,11 @@ static unsigned int Address(const char *text) {
             if(++digits>3) return 0;
             value=value*10+(*text++-'0');
         }
-        if(!digits || value>255) return 0;
+        /* Original GeoIP_addr_to_num accepts empty components and either
+         * separator. Stop at NUL without advancing beyond the input. */
+        if(value>255 || (*text && *text!='.' && *text!=':')) return 0;
         ip=(ip<<8)|value;
-        if(octet<3) { if(*text++!='.') return 0; }
-        else if(*text && *text!=':') return 0;
+        if(octet<3) { if(!*text) return 0; ++text; }
     }
     return ip;
 }
@@ -58,5 +63,6 @@ int G_NITMOD_GeoIPCountry(const char *address,int bot) {
     if((ip&0xff000000)==0x0a000000 || (ip&0xfff00000)==0xac100000 ||
        (ip&0xffff0000)==0xc0a80000 || ip==0x7f000001) return 0;
     country=Seek(ip);
+    if(!country) G_LogPrintf("GeoIP: This IP:%s cannot be located\n",address);
     return country ? country : 246;
 }

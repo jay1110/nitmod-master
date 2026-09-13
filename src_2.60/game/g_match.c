@@ -79,7 +79,7 @@ void G_printFull(char *str, gentity_t *ent)
 // Plays specified sound globally.
 void G_globalSound(char *sound)
 {
-	gentity_t *te = G_TempEntity(level.intermission_origin, EV_GLOBAL_SOUND);
+	gentity_t *te = G_NITMOD_TempEvent(level.intermission_origin, EV_GLOBAL_SOUND);
 	te->s.eventParm = G_SoundIndex(sound);
 	te->r.svFlags |= SVF_BROADCAST;
 }
@@ -202,7 +202,7 @@ static void G_NITMOD_CheckTeamDamage(gentity_t *attacker) {
 	int timeout,n=(int)(attacker-g_entities);
 	if((attacker->r.svFlags&SVF_BOT) || restriction<=0 ||
 	   G_NITMOD_AdminPrivilege(n,"immunity") || g_gametype.integer==GT_WOLF_DM ||
-	   (double)total<G_NITMOD_LegacyCvarInteger("g_minHits",6) || percent<=restriction) return;
+	   (double)total<G_NITMOD_LegacyCvarInteger("g_minHits",6) || !(percent>restriction)) return;
 	timeout=G_NITMOD_LegacyCvarInteger("g_autoTempBan",0) ?
 		G_NITMOD_LegacyCvarInteger("g_autoTempBanTime",1800) : 0;
 	trap_DropClient(n,va("Kicked for %d seconds for excessive team damage",timeout),timeout);

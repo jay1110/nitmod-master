@@ -45,7 +45,7 @@ void UI_ParseServerStatus(serverStatusInfo_t *info, const char *address) {
         *ping++ = 0;
         name = strchr(ping, ' '); if(!name) break;
         *name++ = 0;
-        if(!*score || !*ping || !*name) break;
+        /* Original 0x15668 accepts empty fields once both spaces exist. */
         length = count < 10 ? 2 : 3;
         if(length > (int)sizeof(info->pings)-used) break;
         Com_sprintf(info->pings+used, sizeof(info->pings)-used, "%d", count);

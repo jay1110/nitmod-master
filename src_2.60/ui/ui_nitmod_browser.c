@@ -3,12 +3,27 @@
 #include <limits.h>
 
 static int browserHumans[MAX_GLOBAL_SERVERS];
+static int browserPlayers[MAX_GLOBAL_SERVERS];
+static qboolean browserDropped[MAX_GLOBAL_SERVERS];
+int UI_BrowserDroppedCount(void) {
+    int i,total=0;
+    for(i=0;i<MAX_GLOBAL_SERVERS;++i) total+=browserDropped[i]!=0;
+    return total;
+}
 static qboolean browserHumanKnown[MAX_GLOBAL_SERVERS];
 static int browserHumanStarted[MAX_GLOBAL_SERVERS];
+static int browserAttempts[MAX_GLOBAL_SERVERS];
 static qboolean browserHumanPending[MAX_GLOBAL_SERVERS];
 /* Retain the requested address: engine indices may belong to another source
  * or change during a master refresh before its pending request is released. */
 static char browserStatusAddress[MAX_GLOBAL_SERVERS][MAX_ADDRESSLENGTH];
+
+int UI_BrowserHumanTotal(void) {
+    int i,total=0;
+    for(i=0;i<MAX_GLOBAL_SERVERS;++i)
+        if(browserHumanKnown[i] && !browserDropped[i]) total+=browserHumans[i];
+    return total;
+}
 
 static int UI_ServerGametype( const char *info ) {
 	int gametype;
@@ -40,7 +55,7 @@ int UI_ServerHumanCount(const char *status, const char *master) {
     UI_ParseServerStatus(&parsed,"");
     for(row=0;row<parsed.numLines;++row)
         if(parsed.lines[row][0][0]>='0' && parsed.lines[row][0][0]<='9' &&
-           parsed.lines[row][1][0] && atoi(parsed.lines[row][2])>0) ++humans;
+           atoi(parsed.lines[row][2])>0) ++humans;
     return humans;
 }
 
@@ -167,6 +182,8 @@ void UI_ServerPopulationText(int server, const char *master, char *out, int size
     humans = clients;
     if(nitmodNxacStatusSource == ui_netSource.integer && server >= 0 &&
        server < MAX_GLOBAL_SERVERS && browserHumanKnown[server]) {
+        /* Original UI feeder 0x168b4 loads both status counters. */
+        clients = browserPlayers[server];
         humans = browserHumans[server];
     } else if(strstr(Info_ValueForKey(master, "version"), "ET Legacy") &&
               *Info_ValueForKey(master, "humans")) {
@@ -212,9 +229,12 @@ static void UI_ResetBrowserStatusCache(int source) {
     memset(nitmodNxacStatus,0xff,sizeof(nitmodNxacStatus));
     memset(nitmodBrowserPlayers,0,sizeof(nitmodBrowserPlayers));
     memset(browserHumans,0,sizeof(browserHumans));
+    memset(browserPlayers,0,sizeof(browserPlayers));
+    memset(browserDropped,0,sizeof(browserDropped));
     memset(browserHumanKnown,0,sizeof(browserHumanKnown));
     memset(browserHumanPending,0,sizeof(browserHumanPending));
     memset(browserHumanStarted,0,sizeof(browserHumanStarted));
+    memset(browserAttempts,0,sizeof(browserAttempts));
     nitmodNxacStatusSource=source;
 }
 
@@ -241,7 +261,23 @@ static int UI_NitmodNxacStatus( int serverNum, const char *master ) {
 		return -1;
 	}
 	status[sizeof(status)-1]=0;
-	nitmodNxacStatus[serverNum] = atoi( Info_ValueForKey( status, "sv_NxAC" ) ) ? 1 : 0;
+	/* Original 0x147e2: tolerate at most five missing player records. */
+    {
+        serverStatusInfo_t parsed;
+        int row,players=0;
+        memset(&parsed,0,sizeof(parsed));
+        Q_strncpyz(parsed.text,status,sizeof(parsed.text));
+        UI_ParseServerStatus(&parsed,"");
+        for(row=0;row<parsed.numLines;++row)
+            if(parsed.lines[row][0][0]>='0' && parsed.lines[row][0][0]<='9') ++players;
+        browserPlayers[serverNum]=players;
+        if(atoi(Info_ValueForKey(master,"clients"))-players>5) {
+            browserDropped[serverNum]=qtrue;
+            UI_ReleaseBrowserStatus(serverNum);
+            return -2;
+        }
+    }
+    nitmodNxacStatus[serverNum] = atoi( Info_ValueForKey( status, "sv_NxAC" ) ) ? 1 : 0;
 	browserHumans[serverNum]=UI_ServerHumanCount(status,master);
 	browserHumanKnown[serverNum]=qtrue;
 	/* The value is cached locally; release the engine's finite request slot. */
@@ -330,10 +366,53 @@ void UI_BuildServerDisplayList(qboolean force) {
 			trap_LAN_GetServerInfo( ui_netSource.integer, i, info, MAX_STRING_CHARS );
 
 			clients = atoi(Info_ValueForKey(info, "clients"));
-			clients = clients < 0 ? 0 : clients > MAX_CLIENTS ? MAX_CLIENTS : clients;
-			uiInfo.serverStatus.numPlayersOnServers += clients - nitmodBrowserPlayers[i];
-			nitmodBrowserPlayers[i] = clients;
+			maxClients = atoi(Info_ValueForKey(info, "sv_maxclients"));
+            if(browserDropped[i] || clients>maxClients || maxClients>MAX_CLIENTS) {
+                browserDropped[i]=qtrue;
+                uiInfo.serverStatus.numPlayersOnServers-=nitmodBrowserPlayers[i];
+                nitmodBrowserPlayers[i]=0;
+                UI_ReleaseBrowserStatus(i);
+                UI_RemoveServerFromDisplayList(i);
+                trap_LAN_MarkServerVisible(ui_netSource.integer,i,qfalse);
+                continue;
+            }
+            clients = clients < 0 ? 0 : clients;
 
+
+            /* Original validates status before every display filter. */
+            /* Original 0x144ed..0x1459d: retry at randomized 500..2480 ms
+             * intervals, at most 21 status polls. Never invent a population. */
+            if(!browserHumanKnown[i]) {
+                double elapsed=(double)uiInfo.uiDC.realTime-browserHumanStarted[i];
+                if(elapsed<0) browserHumanStarted[i]=uiInfo.uiDC.realTime;
+                nxacStatus=-1;
+                if(!browserAttempts[i] || browserHumanStarted[i]<=0 ||
+                   elapsed>=500+(rand()%100)*20) {
+                    if(browserAttempts[i]>20) {
+                        browserDropped[i]=qtrue;
+                        UI_ReleaseBrowserStatus(i);
+                        nxacStatus=-2;
+                    } else {
+                        ++browserAttempts[i];
+                        browserHumanPending[i]=qtrue;
+                        browserHumanStarted[i]=uiInfo.uiDC.realTime;
+                        nxacStatus=UI_NitmodNxacStatus(i,info);
+                    }
+                }
+                if(nxacStatus<0) {
+                    uiInfo.serverStatus.numPlayersOnServers-=nitmodBrowserPlayers[i];
+                    nitmodBrowserPlayers[i]=0;
+                    if(nxacStatus==-2) {
+                        UI_RemoveServerFromDisplayList(i);
+                        trap_LAN_MarkServerVisible(ui_netSource.integer,i,qfalse);
+                    }
+                    continue;
+                }
+            }
+            /* Original 0x14809 counts validated player records, including
+             * servers subsequently hidden by display filters. */
+            uiInfo.serverStatus.numPlayersOnServers+=browserPlayers[i]-nitmodBrowserPlayers[i];
+            nitmodBrowserPlayers[i]=browserPlayers[i];
 			trap_Cvar_Update( &ui_browserShowEmptyOrFull );
 			if( ui_browserShowEmptyOrFull.integer ) {
 				maxClients = atoi(Info_ValueForKey(info, "sv_maxclients"));
@@ -449,29 +528,6 @@ void UI_BuildServerDisplayList(qboolean force) {
 				}
 			}
 
-			/* Resolve status before applying either NxAC filter, so every request
-			 * shares the bounded lifetime. Original refresh waits for status work
-			 * independently of pings and eventually drops unanswered requests.
-			 * Retain this port's documented 5-second master-population fallback
-			 * for unfiltered rows; an unknown NxAC status never passes a filter. */
-			if(!browserHumanKnown[i]) {
-				if(!browserHumanPending[i]) {
-					browserHumanPending[i]=qtrue;
-					browserHumanStarted[i]=uiInfo.uiDC.realTime;
-				}
-				if(UI_NitmodNxacStatus(i,info)<0) {
-					double elapsed=(double)uiInfo.uiDC.realTime-browserHumanStarted[i];
-					if(elapsed<0) browserHumanStarted[i]=uiInfo.uiDC.realTime;
-					if(elapsed<5000) {
-						uiInfo.serverStatus.numPlayersOnServers-=clients;
-						nitmodBrowserPlayers[i]=0;
-						continue;
-					}
-					UI_ReleaseBrowserStatus(i);
-					browserHumans[i]=clients;
-					browserHumanKnown[i]=qtrue;
-				}
-			}
 			trap_Cvar_Update( &ui_browserNxAConly );
 			if( ui_browserNitmodonly.integer == 1 &&
 				(ui_browserNxAConly.integer == 1 || ui_browserNxAConly.integer == 2) ) {

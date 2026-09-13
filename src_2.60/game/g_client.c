@@ -1,5 +1,6 @@
 #include "g_nitmod_lua.h"
 #include "g_local.h"
+#include "nitmod_support_time.h"
 #include "g_nitmod_db_lifecycle.h"
 #include "g_nitmod_server_cvars.h"
 #include "g_nitmod_nxac.h"
@@ -48,17 +49,7 @@ Targets will be fired when someone spawns in on them.
 If the start position is targeting an entity, the players camera will start out facing that ent (like an info_notnull)
 */
 void SP_info_player_deathmatch( gentity_t *ent ) {
-	int		i;
 	vec3_t	dir;
-
-	G_SpawnInt( "nobots", "0", &i);
-	if ( i ) {
-		ent->flags |= FL_NO_BOTS;
-	}
-	G_SpawnInt( "nohumans", "0", &i );
-	if ( i ) {
-		ent->flags |= FL_NO_HUMANS;
-	}
 
 	ent->enemy = G_PickTarget( ent->target );
 	if(ent->enemy)
@@ -114,6 +105,33 @@ SpotWouldTelefrag
 
 ================
 */
+static gentity_t *nitmodSpawnEntities[MAX_GENTITIES];
+static int nitmodSpawnCount;
+gentity_t *G_NITMOD_NextSpawnEntity(int *cursor, int hash) {
+ while(*cursor < nitmodSpawnCount) {
+  gentity_t *ent=nitmodSpawnEntities[(*cursor)++];
+  if(ent->nitmodClassnameHash==hash) return ent;
+ }
+ return NULL;
+}
+void G_NITMOD_ResetSpawnEntities(void) { nitmodSpawnCount = 0; }
+static qboolean IsSpawnHash(int h) {
+ return h==0x3eee0 || h==0x3b699 || h==0x3ec15 || h==0x49240 || h==0x527df || h==0x42729 || h==0x37c98;
+}
+void G_NITMOD_RegisterSpawnEntity(gentity_t *ent) {
+ int i; if(!IsSpawnHash(ent->nitmodClassnameHash)) return;
+ for(i=0;i<nitmodSpawnCount;i++) if(nitmodSpawnEntities[i]==ent) return;
+ if(nitmodSpawnCount==MAX_GENTITIES) { G_Error("Spawn entity array full"); return; }
+ nitmodSpawnEntities[nitmodSpawnCount++]=ent;
+}
+void G_NITMOD_UnregisterSpawnEntity(gentity_t *ent) {
+ int i; if(!IsSpawnHash(ent->nitmodClassnameHash)) return;
+ for(i=0;i<nitmodSpawnCount;i++) if(nitmodSpawnEntities[i]==ent) {
+  memmove(&nitmodSpawnEntities[i],&nitmodSpawnEntities[i+1],(nitmodSpawnCount-i-1)*sizeof(nitmodSpawnEntities[0]));
+  --nitmodSpawnCount;return;
+ }
+}
+
 qboolean SpotWouldTelefrag( gentity_t *spot ) {
 	int			i, num;
 	int			touch[MAX_GENTITIES];
@@ -145,6 +163,7 @@ Find the spot that we DON'T want to use
 #define	MAX_SPAWN_POINTS	128
 gentity_t *SelectNearestDeathmatchSpawnPoint( vec3_t from ) {
 	gentity_t	*spot;
+ int spawnIndex;
 	vec3_t		delta;
 	float		dist, nearestDist;
 	gentity_t	*nearestSpot;
@@ -153,7 +172,9 @@ gentity_t *SelectNearestDeathmatchSpawnPoint( vec3_t from ) {
 	nearestSpot = NULL;
 	spot = NULL;
 
-	while ((spot = G_Find (spot, FOFS(classname), "info_player_deathmatch")) != NULL) {
+	for(spawnIndex=0;spawnIndex<nitmodSpawnCount;spawnIndex++) {
+  spot=nitmodSpawnEntities[spawnIndex];
+  if(spot->nitmodClassnameHash!=0x49240) continue;
 
 		VectorSubtract( spot->r.currentOrigin, from, delta );
 		dist = VectorLength( delta );
@@ -177,14 +198,17 @@ go to a random point that doesn't telefrag
 #define	MAX_SPAWN_POINTS	128
 gentity_t *SelectRandomDeathmatchSpawnPoint( void ) {
 	gentity_t	*spot;
+ int spawnIndex;
 	int			count;
 	int			selection;
-	gentity_t	*spots[MAX_SPAWN_POINTS];
+	gentity_t	*spots[MAX_GENTITIES];
 
 	count = 0;
 	spot = NULL;
 
-	while ((spot = G_Find (spot, FOFS(classname), "info_player_deathmatch")) != NULL) {
+	for(spawnIndex=0;spawnIndex<nitmodSpawnCount;spawnIndex++) {
+  spot=nitmodSpawnEntities[spawnIndex];
+  if(spot->nitmodClassnameHash!=0x49240) continue;
 		if ( SpotWouldTelefrag( spot ) ) {
 			continue;
 		}
@@ -193,7 +217,9 @@ gentity_t *SelectRandomDeathmatchSpawnPoint( void ) {
 	}
 
 	if ( !count ) {	// no spots that won't telefrag
-		return G_Find( NULL, FOFS(classname), "info_player_deathmatch");
+		for(spawnIndex=0;spawnIndex<nitmodSpawnCount;spawnIndex++)
+   if(nitmodSpawnEntities[spawnIndex]->nitmodClassnameHash==0x49240) return nitmodSpawnEntities[spawnIndex];
+  return NULL;
 	}
 
 	selection = rand() % count;
@@ -314,6 +340,11 @@ Called by BodySink
 =============
 */
 void BodyUnlink( gentity_t *ent ) {
+	/* Original BodyUnlink 0x47690: invalidate the client's corpse cache
+	 * before hiding this reusable body entity. */
+	gentity_t *event = G_NITMOD_TempEventOriginal(ent->r.currentOrigin, 94);
+	event->s.otherEntityNum = ent->s.number;
+	event->r.svFlags = SVF_BROADCAST;
 	trap_UnlinkEntity( ent );
 	ent->physicsObject = qfalse;
 }
@@ -327,7 +358,8 @@ After sitting around for five seconds, fall into the ground and dissapear
 */ 
 void BodySink2( gentity_t *ent ) {
 	ent->physicsObject = qfalse;
-    ent->nextthink = level.time + BODY_TIME(BODY_TEAM(ent))+1500;
+    /* Original BodySink2 0x4910e: sink for exactly 1800 ms. */
+    ent->nextthink = NITMOD_SupportSignedTime((uint32_t)level.time + UINT32_C(1800));
     ent->think = BodyUnlink;
     ent->s.pos.trType = TR_LINEAR;
     ent->s.pos.trTime = level.time;
@@ -447,14 +479,16 @@ void CopyToBodyQue( gentity_t *ent ) {
 
 	body->activator = NULL;
 
-	body->nextthink = level.time + BODY_TIME(ent->client->sess.sessionTeam);
+	/* Original CopyToBodyQue 0x49461, independent of team/game type. */
+	body->nextthink = level.time + 20000;
 
 	body->think = BodySink;
 
 	body->die = body_die;
 
 	// don't take more damage if already gibbed
-	if ( ent->health <= GIB_HEALTH ) {
+	/* Original CopyToBodyQue 0x49491 retains damage at the boundary. */
+	if ( ent->health < GIB_HEALTH ) {
 		body->takedamage = qfalse;
 	} else {
 		body->takedamage = qtrue;
@@ -2077,11 +2111,12 @@ void ClientBegin( int clientNum )
 {
 	gentity_t	*ent;
 	gclient_t	*client;
-	qboolean restoreHealth,notifyLuaBegin;
+	qboolean restoreHealth,notifyLuaBegin,isBot;
 	int			flags;
 	int			spawn_count, lives_left;		// DHM - Nerve
 
 	ent = g_entities + clientNum;
+	isBot = (ent->r.svFlags & SVF_BOT) != 0;
 	G_NITMOD_MDXReset(ent);
 	restoreHealth = ent->health <= 0 || G_NITMOD_LegacyCvarInteger("g_teamChangeKills", 1);
 
@@ -2135,6 +2170,9 @@ void ClientBegin( int clientNum )
 
 	client->pers.complaintClient = -1;
 	client->pers.complaintEndTime = -1;
+
+	/* Original ClientBegin 0x4e6dd resets push permission from SVF_BOT. */
+	client->sess.botPush = isBot;
 
 	// locate ent at a spawn point
 	ClientSpawnContext( ent, qfalse, qtrue, restoreHealth );
@@ -2248,7 +2286,7 @@ gentity_t *SelectSpawnPointFromList( char *list, vec3_t spawn_origin, vec3_t spa
 	numValid = 0;
 
 	pStr = list;
-	while((token = COM_Parse( &pStr )) != NULL && token[0]) {
+	while(numValid < MAX_SPAWNPOINTFROMLIST_POINTS && (token = COM_Parse( &pStr )) != NULL && token[0]) {
 		trav = g_entities + level.maxclients;
 		while((trav = G_FindByTargetname(trav, token)) != NULL) {
 			if (!spawnPoint) spawnPoint = trav;
@@ -2370,7 +2408,8 @@ static void ClientSpawnContext( gentity_t *ent, qboolean revived, qboolean teamC
 			}
 			//
 			if( !spawnPoint ) {*/
-				spawnPoint = SelectCTFSpawnPoint( client->sess.sessionTeam, client->pers.teamState.state, spawn_origin, spawn_angles, client->sess.spawnObjectiveIndex );
+				spawnPoint = SelectCTFSpawnPoint( client->sess.sessionTeam, client->pers.teamState.state, spawn_origin, spawn_angles, client->sess.spawnObjectiveIndex, teamChange );
+                if(!spawnPoint && g_gametype.integer==8 && !teamChange) return;
 //			}
 		}
 	}
@@ -2438,8 +2477,9 @@ static void ClientSpawnContext( gentity_t *ent, qboolean revived, qboolean teamC
 	client->ps.persistant[PERS_TEAM] = client->sess.sessionTeam;
 	client->ps.persistant[PERS_HWEAPON_USE] = 0;
 
-	/* Skill unlock storage remains inactive, matching the world-effects adapter. */
-	client->airOutTime = NITMOD_AirDeadline( level.time, 0u );
+	/* Original ClientSpawn uses the same Battle Sense reward as resurfacing. */
+	client->airOutTime = NITMOD_AirDeadline( level.time,
+		client->sess.nitmodSkillMasks[SK_BATTLE_SENSE] );
 
 	// clear entity values
 	client->ps.stats[STAT_MAX_HEALTH] = client->pers.maxHealth;

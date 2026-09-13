@@ -7,6 +7,7 @@
 
 
 #include "cg_local.h"
+#include "cg_nitmod.h"
 #include "cg_nitmod_hud.h"
 #include "cg_nitmod_config.h"
 #include "cg_nitmod_stats.h"
@@ -107,10 +108,11 @@ void CG_LimboMenu_f( void ) {
 
 static void CG_StatsDown_f(void)
 {
-	if(!cg.demoPlayback) {
-		int i = (cg.mvTotalClients > 0) ? (cg.mvCurrentActive->mvInfo & MV_PID) : cg.snap->ps.clientNum;
+	if(cg.snap && !cg.demoPlayback) {
+		int i = (!NITMOD_UsesNitmodHud() && cg.mvTotalClients > 0) ? (cg.mvCurrentActive->mvInfo & MV_PID) : cg.snap->ps.clientNum;
 
-		if(cg.mvTotalClients < 1 && cg.snap->ps.persistant[PERS_TEAM] == TEAM_SPECTATOR) {
+		// Original Nitmod permits +stats for spectators as well.
+		if(!NITMOD_UsesNitmodHud() && cg.mvTotalClients < 1 && cg.snap->ps.persistant[PERS_TEAM] == TEAM_SPECTATOR) {
 			Pri("You must be a player or following a player to use +stats\n");
 			return;
 		}
@@ -443,7 +445,13 @@ static void CG_FTSayPlayerClass_f( void ) {
 	int playerType;
 	const char *s;
 
-	playerType = cgs.clientinfo[ cg.clientNum ].cls;
+	if ( !cg.snap ) {
+		return;
+	}
+	// Original Nitmod announces the selected next class while in limbo.
+	playerType = (cg.snap->ps.pm_flags & PMF_LIMBO)
+		? cgs.clientinfo[cg.clientNum].latchedClass
+		: cgs.clientinfo[cg.clientNum].cls;
 
 	if ( playerType == PC_MEDIC )
 		s = "IamMedic";
@@ -453,12 +461,14 @@ static void CG_FTSayPlayerClass_f( void ) {
 		s = "IamFieldOps";
 	else if ( playerType == PC_COVERTOPS )
 		s = "IamCovertOps";
-	else
+	else if ( playerType == PC_SOLDIER )
 		s = "IamSoldier";
+	else
+		return;
 
 	if ( cg.snap && ( cg.snap->ps.pm_type != PM_INTERMISSION ) ) {
 		if ( cgs.clientinfo[cg.clientNum].team == TEAM_SPECTATOR || cgs.clientinfo[cg.clientNum].team == TEAM_FREE ) {
-			CG_Printf ( CG_TranslateString( "Can't team voice chat as a spectator.\n" ) );
+			CG_Printf ( "Can't say class when spectator.\n" );
 			return;
 		}
 	}
@@ -471,7 +481,13 @@ static void CG_SayPlayerClass_f( void )
 	int playerType;
 	const char *s;
 
-	playerType = cgs.clientinfo[ cg.clientNum ].cls;
+	if ( !cg.snap ) {
+		return;
+	}
+	// Original Nitmod announces the selected next class while in limbo.
+	playerType = (cg.snap->ps.pm_flags & PMF_LIMBO)
+		? cgs.clientinfo[cg.clientNum].latchedClass
+		: cgs.clientinfo[cg.clientNum].cls;
 
 	if ( playerType == PC_MEDIC )
 		s = "IamMedic";
@@ -481,12 +497,14 @@ static void CG_SayPlayerClass_f( void )
 		s = "IamFieldOps";
 	else if ( playerType == PC_COVERTOPS )
 		s = "IamCovertOps";
-	else
+	else if ( playerType == PC_SOLDIER )
 		s = "IamSoldier";
+	else
+		return;
 
 	if ( cg.snap && ( cg.snap->ps.pm_type != PM_INTERMISSION ) ) {
 		if ( cgs.clientinfo[cg.clientNum].team == TEAM_SPECTATOR || cgs.clientinfo[cg.clientNum].team == TEAM_FREE ) {
-			CG_Printf ( CG_TranslateString( "Can't team voice chat as a spectator.\n" ) );
+			CG_Printf ( "Can't say class when spectator.\n" );
 			return;
 		}
 	}
@@ -656,9 +674,15 @@ static void CG_MessageSend_f( void )
 
 static void CG_SetWeaponCrosshair_f( void ) {
 	char crosshair[64];
+	long long parsed;
+	int value;
 
 	trap_Argv( 1, crosshair, 64 );
-	cg.newCrosshairIndex = atoi( crosshair ) + 1;
+	/* Original 0x32275/0x32280: 32-bit strtol followed by wrapping INC. */
+	parsed = strtoll( crosshair, NULL, 10 );
+	value = parsed > 2147483647LL ? 2147483647 :
+		parsed < (-2147483647LL - 1) ? (-2147483647 - 1) : (int)parsed;
+	cg.newCrosshairIndex = value == 2147483647 ? (-2147483647 - 1) : value + 1;
 }
 // -NERVE - SMF
 
@@ -1067,6 +1091,8 @@ static consoleCommand_t	commands[] =
 	{ "timerSet", CG_NitmodTimerSet },
 	{ "tdminfo", NITMOD_TDMInfo_f },
 	{ "globalstats", CG_NitmodGlobalStats_f },
+	{ "dumpgs", nitmod_PrintConfigStringStats },
+	{ "minimize", nitrox_MinimizeET_f },
 	{ "nitmod_skilldebug", CG_NitmodSkillDebug_f },
 	{ "nitmod_weapondebug", CG_NitmodWeaponDebug_f },
 	{ "testmodel", CG_TestModel_f },

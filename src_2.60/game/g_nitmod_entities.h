@@ -3,9 +3,13 @@
 
 struct gentity_s;
 void G_NITMOD_ResetEntityLists( void );
+void G_NITMOD_RegisterMG42( struct gentity_s *entity );
+void G_NITMOD_UnregisterMG42( struct gentity_s *entity );
+struct gentity_s *G_NITMOD_MG42At( int index );
 void G_NITMOD_RegisterSatchel( struct gentity_s *entity );
 void G_NITMOD_UnregisterSatchel( struct gentity_s *entity );
 void G_NITMOD_RegisterLandmine( struct gentity_s *entity );
+struct gentity_s *G_NITMOD_LandmineAt( int index );
 void G_NITMOD_RegisterAirstrike( struct gentity_s *entity );
 void G_NITMOD_UnregisterAirstrike( struct gentity_s *entity );
 void G_NITMOD_UnregisterLandmine( struct gentity_s *entity );

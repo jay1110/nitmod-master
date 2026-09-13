@@ -112,10 +112,11 @@ qboolean UI_NitmodMenuAction(const char *name) {
 		return qtrue;
 	}
 	if(!Q_stricmp(name, "voteMap") || !Q_stricmp(name, "refMap")) {
-		int game, index = ui_currentNetMap.integer;
+		int index = ui_currentNetMap.integer;
 		const char *verb = !Q_stricmp(name, "voteMap") ? "callvote" : "ref";
-		if(!UI_SelectedNetGameType(&game)) return qtrue;
-		if(game == GT_WOLF_CAMPAIGN) {
+		/* Original 0x22ff3/0x23d8e tests the cvar itself, not the
+		 * corresponding gameTypes row, before selecting campaign storage. */
+		if(ui_netGameType.integer == GT_WOLF_CAMPAIGN) {
 			if(index >= 0 && index < uiInfo.campaignCount &&
 				index < (int)(sizeof(uiInfo.campaignList) / sizeof(uiInfo.campaignList[0])) &&
 				UI_ActionMapToken(uiInfo.campaignList[index].campaignShortName))
@@ -145,18 +146,21 @@ qboolean UI_NitmodMenuAction(const char *name) {
 	}
 	if(!Q_stricmp(name, "voteGame") || !Q_stricmp(name, "refGame")) {
 		float raw = trap_Cvar_VariableValue("ui_voteGameType");
-		int game;
+		/* Original UI_RunMenuScript 0x2333c/0x233dd sends the selected
+		 * integer directly, including campaign (4). The vote cvar is not
+		 * a catalog lookup: remapping it changes the requested game type. */
 		if((double)raw >= INT_MIN && (double)raw <= INT_MAX &&
-			UI_GameTypeForCatalogRow((int)raw, &game) && game != GT_WOLF_CAMPAIGN) {
+			(int)raw >= 0 && (int)raw < uiInfo.numGameTypes) {
 			Com_sprintf(command, sizeof(command), "%s gametype %i\n",
-				!Q_stricmp(name, "voteGame") ? "callvote" : "ref", game);
+				!Q_stricmp(name, "voteGame") ? "callvote" : "ref", (int)raw);
 			trap_Cmd_ExecuteText(EXEC_APPEND, command);
 		}
 		return qtrue;
 	}
 	if(!Q_stricmp(name, "rconGame")) {
-		int game;
-		if(UI_SelectedNetGameType(&game)) {
+		/* Original 0x23cc8-0x23cff likewise emits the stored index. */
+		int game = ui_netGameType.integer;
+		if(game >= 0 && game < uiInfo.numGameTypes) {
 			Com_sprintf(command, sizeof(command), "rcon g_gametype %i\n", game);
 			trap_Cmd_ExecuteText(EXEC_APPEND, command);
 		}
@@ -228,7 +232,9 @@ qboolean UI_NitmodMenuAction(const char *name) {
 		player = uiInfo.playerNames[uiInfo.playerIndex];
 		if(!UI_ActionText(player, sizeof(uiInfo.playerNames[0]))) return qtrue;
 		trap_Cvar_VariableStringBuffer("ui_warnreason", value, 128);
-		if(!UI_ActionText(value, 128)) return qtrue;
+		/* Original 0x24432-0x24466 forwards an empty reason as well;
+		 * the server supplies its warning behavior instead of a silent UI no-op. */
+		if(value[0] && !UI_ActionText(value, 128)) return qtrue;
 		Com_sprintf(command, sizeof(command), "ref warn \"%s\" \"%s\"\n", player, value);
 	} else if(!Q_stricmp(name, "refWarmup")) {
 		trap_Cvar_VariableStringBuffer("ui_warmup", value, 128);

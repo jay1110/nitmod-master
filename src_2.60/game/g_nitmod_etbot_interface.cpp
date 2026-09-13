@@ -10,8 +10,10 @@ extern "C"
 {
 #include "g_nitmod_etbot_interface.h"
 #include "nitmod_xp_snapshot.h"
+#include "nitmod_support_time.h"
 #include "g_nitmod_legacy_cvars.h"
 #include "g_nitmod_etbot_lifecycle.h"
+#include "g_nitmod_entities.h"
 	qboolean G_IsOnFireteam(int entityNum, fireteamData_t** teamNum);
 };
 
@@ -50,7 +52,8 @@ BotEntity		m_EntityHandles[MAX_GENTITIES];
 //////////////////////////////////////////////////////////////////////////
 
 // utils partly taken from id code
-#define WC_WEAPON_TIME_LEFT level.time - ps->classWeaponTime
+/* Original i386 sub wraps before signed comparison/conversion to float. */
+#define WC_WEAPON_TIME_LEFT NITMOD_SupportSignedTime((uint32_t)level.time - (uint32_t)ps->classWeaponTime)
 #define WC_SOLDIER_TIME		level.soldierChargeTime		[team-TEAM_AXIS]
 #define WC_ENGINEER_TIME	level.engineerChargeTime	[team-TEAM_AXIS]
 #define WC_FIELDOPS_TIME	level.lieutenantChargeTime	[team-TEAM_AXIS]
@@ -183,7 +186,7 @@ void GetMG42s()
 		gentity_t *trav = NULL;
 		char *name;
 
-		while ((trav = G_Find(trav, FOFS(classname), "misc_mg42")))
+		for ( int index = 0; (trav = G_NITMOD_MG42At(index)) != NULL; ++index )
 		{
 			name = (char *)_GetEntityName( trav );
 			mg42s[ numofmg42s ].ent = trav;
@@ -311,6 +314,7 @@ static qboolean weaponCharged(playerState_t* ps, team_t team, int weapon, int* s
 		}
 		break;
 	case WP_LANDMINE:
+	case WP_POISON_MINE:
 #ifdef NOQUARTER
 		// IRATA NQ: see bg_misc charge cost
 		// { 0.5f, 0.5f, 0.5f, .33f, .33f, .33f, .33f, .25f, .25f, .25f}; <--
@@ -420,12 +424,14 @@ static qboolean weaponCharged(playerState_t* ps, team_t team, int weapon, int* s
 				return qfalse;
 			}
 		}
-		else if ( WC_WEAPON_TIME_LEFT < WC_ENGINEER_TIME * 0.5f )
+		else if ( WC_WEAPON_TIME_LEFT < WC_ENGINEER_TIME *
+             (skill[SK_EXPLOSIVES_AND_CONSTRUCTION] == 5 ? 0.4f : 0.5f) )
 		{
 			return qfalse;
 		}
 #else
-		if ( WC_WEAPON_TIME_LEFT < WC_ENGINEER_TIME * 0.5f )
+		if ( WC_WEAPON_TIME_LEFT < WC_ENGINEER_TIME *
+             (skill[SK_EXPLOSIVES_AND_CONSTRUCTION] == 5 ? 0.4f : 0.5f) )
 		{
 			return qfalse;
 		}
@@ -512,10 +518,16 @@ int Bot_PlayerClassGameToBot(int playerClass)
 	}
 }
 
+/* Nitmod reuses standard ET ABI slot 44 for its poison syringe.
+ * Original Bot_WeaponGameToBot table and _weaponBotToGame agree on 44 <-> 47. */
+static const int NITMOD_BOT_POISON_SYRINGE = 44;
+
 static int _weaponBotToGame(int weapon)
 {
 	switch (weapon)
 	{
+	case NITMOD_BOT_POISON_SYRINGE:
+		return WP_POISON_SYRINGE;
 	case ET_WP_ADRENALINE:
 		return WP_MEDIC_ADRENALINE;
 	case ET_WP_AKIMBO_COLT:
@@ -561,7 +573,9 @@ static int _weaponBotToGame(int weapon)
 	case ET_WP_KNIFE:
 		return WP_KNIFE;
 	case ET_WP_LANDMINE:
-		return WP_LANDMINE;
+		/* Original _weaponBotToGame 0x21dcb0: gas mines require both bits. */
+		return (G_NITMOD_LegacyCvarInteger("g_weapons", 0) & 0x4000) &&
+		       (g_OmniBotFlags.integer & 0x10000) ? WP_POISON_MINE : WP_LANDMINE;
 	case ET_WP_LUGER:
 		return WP_LUGER;
 	case ET_WP_M7:
@@ -739,18 +753,16 @@ int Bot_WeaponGameToBot(int weapon)
 		return ET_WP_SYRINGE;
 	case WP_THOMPSON:
 		return ET_WP_THOMPSON;
-	/* Omni-bot 0.8's ET ABI has no dedicated Nitmod weapon ids.  Preserve
-	 * usable bot semantics by mapping Nitmod extensions to their base ET
-	 * interaction class. */
+	/* Nitmod extension mappings recovered from the original return table. */
 	case WP_POISON_SYRINGE:
-		return ET_WP_SYRINGE;
+		return NITMOD_BOT_POISON_SYRINGE;
 	case WP_BOMB:
-		return ET_WP_DYNAMITE;
 	case WP_TRIPMINE:
+	case WP_POISON_BOMB:
+		/* Original return table: wire weapons 48..50 are unsupported. */
+		return ET_WP_NONE;
 	case WP_POISON_MINE:
 		return ET_WP_LANDMINE;
-	case WP_POISON_BOMB:
-		return ET_WP_SMOKE_GRENADE;
 #ifdef JAYMOD_name
 	case WP_ADRENALINE_SHARE:
 		return 76;
@@ -1924,7 +1936,8 @@ public:
 		char userinfo[MAX_INFO_STRING] = {0};
 
 		std::stringstream guid;
-		guid << "OMNIBOT" << std::setw(2) << std::setfill('0') << num << std::right << std::setw(23) << "";
+		/* Original AddBot: 27-column zero-padded BOT plus 5-column slot. */
+		guid << std::setfill('0') << std::setw(27) << "BOT" << std::setw(5) << num;
 
 		gentity_t* bot = &g_entities[num];
 
@@ -1932,7 +1945,7 @@ public:
 		Info_SetValueForKey(userinfo, "rate", "25000");
 		Info_SetValueForKey(userinfo, "snaps", "20");
 		Info_SetValueForKey(userinfo, "ip", "localhost");
-		Info_SetValueForKey(userinfo, "cl_guid", guid.str().c_str());
+		Info_SetValueForKey(userinfo, "n_guid", guid.str().c_str());
 
 		trap_SetUserinfo(num, userinfo);
 
@@ -3744,6 +3757,8 @@ public:
 			case WP_SMOKE_BOMB:
 			case WP_SMOKE_MARKER:
 			case WP_MEDIC_SYRINGE:
+			case WP_POISON_SYRINGE:
+			case WP_POISON_MINE:
 				_maxclip = 0;
 				break;
 			default:
@@ -3837,6 +3852,8 @@ public:
 			case WP_SMOKE_BOMB:
 			case WP_SMOKE_MARKER:
 			case WP_MEDIC_SYRINGE:
+			case WP_POISON_SYRINGE:
+			case WP_POISON_MINE:
 				maxclip = 0;
 				break;
 			default:
@@ -5769,14 +5786,11 @@ void Bot_Interface_Update()
 			}
 		}
 
-		if(!(g_OmniBotFlags.integer & OBF_DONT_SHOW_BOTCOUNT))
-		{
-			trap_Cvar_Set("omnibot_playing", va("%i", iNumBots));
-		}
-		else
-		{
-			trap_Cvar_Set("omnibot_playing", "-1");
-		}
+		/* Original Bot_Interface_Update publishes only changes, including -1
+		 * when OBF_DONT_SHOW_BOTCOUNT is enabled. */
+		const int visibleBotCount = (g_OmniBotFlags.integer & OBF_DONT_SHOW_BOTCOUNT) ? -1 : iNumBots;
+		if(G_NITMOD_LegacyCvarInteger("omnibot_playing", 0) != visibleBotCount)
+			trap_Cvar_Set("omnibot_playing", va("%i", visibleBotCount));
 
 		//////////////////////////////////////////////////////////////////////////
 		// Register any pending entity updates.

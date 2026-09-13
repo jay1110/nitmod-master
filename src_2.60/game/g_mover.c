@@ -8,6 +8,40 @@
 
 #include "g_local.h"
 #include "g_nitmod_config.h"
+#include "nitmod_protocol.h"
+
+/* Original Nitmod SP_func_fakebrush: a script-created collision box whose
+ * bounds are also sent to client prediction, without a compiled brush model. */
+void SP_func_fakebrush( gentity_t *ent ) {
+	char *contents;
+
+	if ( !G_SpawnVector( "origin", "1 0 0", ent->s.origin ) ) {
+		G_Error( "'func_fakebrush' does not have an origin\n" );
+		return;
+	}
+	if ( !G_SpawnString( "contents", "1", &contents ) ) {
+		G_Error( "'func_fakebrush' does not have contents\n" );
+		return;
+	}
+	ent->r.contents = NITMOD_ParseOriginalDecimal32( contents );
+	if ( !G_SpawnVector( "mins", "0 0 0", ent->r.mins ) ) {
+		G_Error( "'func_fakebrush' does not have mins\n" );
+		return;
+	}
+	if ( !G_SpawnVector( "maxs", "0 0 0", ent->r.maxs ) ) {
+		G_Error( "'func_fakebrush' does not have maxs\n" );
+		return;
+	}
+
+	ent->clipmask = ent->r.contents;
+	G_SetOrigin( ent, ent->s.origin );
+	G_SetAngle( ent, ent->s.angles );
+	ent->s.eFlags |= EF_SPARE3;
+	ent->s.eType = ET_GENERAL;
+	VectorCopy( ent->r.mins, ent->s.origin2 );
+	VectorCopy( ent->r.maxs, ent->s.angles2 );
+	trap_LinkEntity( ent );
+}
 
 char *hintStrings[HINT_NUM_HINTS] = {
 	"",					// HINT_NONE
@@ -3758,7 +3792,7 @@ void target_effect( gentity_t *self, gentity_t *other, gentity_t *activator )
 {
 	gentity_t	*tent;
 	
-	tent = G_TempEntity( self->r.currentOrigin, EV_EFFECT);
+	tent = G_NITMOD_TempEvent( self->r.currentOrigin, EV_EFFECT);
 	VectorCopy (self->r.currentOrigin, tent->s.origin);
 	if(self->spawnflags & 32)
 		tent->s.dl_intensity = 1;	// low grav
@@ -3939,6 +3973,9 @@ void func_explosive_explode(gentity_t *self, gentity_t *inflictor, gentity_t *at
 	}
 
 	G_AddEvent( self, EV_EXPLODE, DirToByte( dir ));
+	if (self->constructibleStats.constructxpbonus == 5.0f) {
+		G_Script_ScriptEvent(self, "exploded", "");
+	}
 
 	// Skills stuff
 
@@ -3964,6 +4001,9 @@ func_explosive_use
 */
 void func_explosive_use( gentity_t *self, gentity_t *other, gentity_t *activator ) {
 	G_Script_ScriptEvent( self, "death", "" ); // JPW NERVE used to trigger script stuff for MP
+	if (self->parent && Q_stricmp(self->scriptName, self->parent->scriptName)) {
+		G_Script_ScriptEvent(self->parent, "death", "");
+	}
 	func_explosive_explode(self, self, other, self->damage, 0);
 }
 
@@ -4032,7 +4072,7 @@ void target_explosion_use(gentity_t *self, gentity_t *other, gentity_t *attacker
 	vec3_t		dir = {0, 0, 1};
 	gentity_t	*tent = NULL;
 
-	tent = G_TempEntity( self->r.currentOrigin, EV_RUBBLE );
+	tent = G_NITMOD_TempEvent( self->r.currentOrigin, EV_RUBBLE );
 
 	G_UseTargets (self, attacker);
 
@@ -5124,6 +5164,13 @@ g_constructible_stats_t g_constructible_classes[NUM_CONSTRUCTIBLE_CLASSES] = {
 void SP_func_constructible( gentity_t *ent ) {
 	int		/*health, wait, */i;
 //	char	*s;
+
+	/* Original excludes construction objects in Deathmatch before team
+	 * validation, class defaults and delayed construction setup. */
+	if( g_gametype.integer == GT_WOLF_DM ) {
+		G_FreeEntity(ent);
+		return;
+	}
 
 	/*G_SpawnInt( "wait", "5000", &wait );
 	ent->wait = wait;*/

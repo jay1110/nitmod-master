@@ -116,6 +116,9 @@ void TeleportPlayer( gentity_t *player, vec3_t origin, vec3_t angles ) {
 
 	// toggle the teleport bit so the client knows to not lerp
 	player->client->ps.eFlags ^= EF_TELEPORT_BIT;
+	/* Original TeleportPlayer 0x86206 invalidates rewind history before
+	 * publishing the new linked origin. Preserve that reset ordering. */
+	G_ResetMarkers(player);
 
 	// set angles
 	SetClientViewAngle( player, angles );
@@ -1176,18 +1179,18 @@ void Fire_Lead_Ext( gentity_t *ent, gentity_t *activator, float spread, int dama
 
 	// rain - use activator for historicaltrace, not ent which may be
 	// the weapon itself (e.g. for mg42s)
-	G_HistoricalTrace( activator, &tr, muzzle, NULL, NULL, end, ent->s.number, MASK_SHOT );
+	G_HistoricalTrace( activator, &tr, muzzle, NULL, NULL, end, ent->s.number, MASK_SHOT, qtrue);
 
 	// bullet debugging using Q3A's railtrail
 	if( g_debugBullets.integer & 1 ) {
-		tent = G_TempEntity( muzzle, EV_RAILTRAIL );
+		tent = G_NITMOD_TempEvent( muzzle, EV_RAILTRAIL );
 		VectorCopy( tr.endpos, tent->s.origin2 );
 		tent->s.otherEntityNum2 = activator->s.number;
 	}
 
 	if ( tr.surfaceFlags & SURF_NOIMPACT) {
 
-		tent = G_TempEntity( tr.endpos, EV_MG42BULLET_HIT_WALL );
+		tent = G_NITMOD_TempEvent( tr.endpos, EV_MG42BULLET_HIT_WALL );
 		tent->s.otherEntityNum = ent->s.number;
 		tent->s.otherEntityNum2 = activator->s.number;
 		ent->s.effect1Time = seed;
@@ -1202,7 +1205,7 @@ void Fire_Lead_Ext( gentity_t *ent, gentity_t *activator, float spread, int dama
 
 	// send bullet impact
 	if( traceEnt->takedamage && traceEnt->client ) {
-		tent = G_TempEntity( tr.endpos, EV_MG42BULLET_HIT_FLESH );
+		tent = G_NITMOD_TempEvent( tr.endpos, EV_MG42BULLET_HIT_FLESH );
 		tent->s.eventParm = traceEnt->s.number;
 		tent->s.otherEntityNum = ent->s.number;
 		tent->s.otherEntityNum2 = activator->s.number;	// (SA) store the user id, so the client can position the tracer
@@ -1212,7 +1215,7 @@ void Fire_Lead_Ext( gentity_t *ent, gentity_t *activator, float spread, int dama
 		vec3_t	reflect;
 		float	dot;
 
-		tent = G_TempEntity( tr.endpos, EV_MG42BULLET_HIT_WALL );
+		tent = G_NITMOD_TempEvent( tr.endpos, EV_MG42BULLET_HIT_WALL );
 
 		// Gordon: bleugh, lets broadcast this in SP, (trainwreck issues)
 		if( G_IsSinglePlayerGame() ) {
@@ -1953,6 +1956,7 @@ void mg42_spawn (gentity_t *ent) {
 		}
 
 		trap_LinkEntity (gun);
+		G_NITMOD_RegisterMG42( gun );
 		/* Original 0x84f1a transfers goals before freeing the map entity. */
 		UpdateGoalEntity(ent,gun);
 	} 
@@ -2447,6 +2451,13 @@ void constructiblemarker_setup( gentity_t *ent ) {
 
 void SP_misc_constructiblemarker( gentity_t *ent ) {
 	char	*s;
+
+	/* Original skips construction markers entirely in Deathmatch, before
+	 * publishing their description or scheduling the target lookup. */
+	if( g_gametype.integer == GT_WOLF_DM ) {
+		G_FreeEntity(ent);
+		return;
+	}
 
 	ent->s.eType = ET_CONSTRUCTIBLE_MARKER;
 

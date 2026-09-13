@@ -341,7 +341,7 @@ static int PlayerCount(lua_State *L) {
 }
 extern qboolean G_NITMOD_ClientFloodStatus(gentity_t *ent);
 extern void G_Say(gentity_t *ent,gentity_t *target,int mode,const char *text);
-extern qboolean G_EntitiesFree(void);
+
 static int Flooding(lua_State *L) { lua_pushinteger(L,G_NITMOD_ClientFloodStatus(&g_entities[ClientIndex(L,1,0)]));return 1; }
 static int Say(lua_State *L) { int n=ClientIndex(L,1,0),mode=luaL_checkinteger(L,2); const char *text=luaL_checkstring(L,3); if(!g_entities[n].client) return luaL_error(L,"entity is not a client"); G_Say(&g_entities[n],NULL,mode,text);return 0; }
 static int EntitiesFree(lua_State *L) { G_EntitiesFree(); return 0; }
@@ -363,9 +363,18 @@ static int XPSet(lua_State *L) {
     int add=lua_isboolean(L,4)?lua_toboolean(L,4):luaL_checkinteger(L,4); gentity_t *ent=&g_entities[n]; gclient_t *client=ent->client;
     luaL_argcheck(L,ent->inuse && client,1,"entity is not an active client");
     luaL_argcheck(L,xp>=0,2,"negative XP is not allowed");luaL_argcheck(L,skill>=0 && skill<SK_NUM_SKILLS,3,"invalid skill");
-    if(add) { client->sess.skillpoints[skill]+=xp; client->sess.startxptotal+=xp; }
-    else { client->sess.startxptotal+=xp-client->sess.skillpoints[skill]; client->sess.skillpoints[skill]=xp; }
-    NITMOD_SetSnapshotXP(&client->ps,NITMOD_XPInteger(client->sess.startxptotal));
+    /* Original _et_G_XP_Set 0x1054bd..0x1054d7 adds the integer in
+     * x87 precision. Replacement 0x105584..0x105598 stores the subtraction
+     * before adding the new integer value: preserve both float roundings. */
+    if(add) {
+        client->sess.skillpoints[skill]=(float)((double)client->sess.skillpoints[skill]+xp);
+        client->sess.startxptotal=(float)((double)client->sess.startxptotal+xp);
+    } else {
+        client->sess.startxptotal=(float)((double)client->sess.startxptotal-client->sess.skillpoints[skill]);
+        client->sess.skillpoints[skill]=(float)xp;
+        client->sess.startxptotal=(float)((double)client->sess.startxptotal+xp);
+    }
+    NITMOD_SetSnapshotXP(&client->ps,NITMOD_OriginalXPInteger(client->sess.startxptotal));
     G_CalcRank(client); BG_PlayerStateToEntityState(&client->ps,&ent->s,qtrue);
     /* The original binding returns its fourth argument without pushing a value. */
     lua_pushvalue(L,4); return 1;
@@ -403,10 +412,8 @@ static int SpawnSet(lua_State *L) {
     } lua_pushvalue(L,3);return 1;
 }
 static int ClientSound(lua_State *L) {
-    int n=ClientIndex(L,1,0),sound=luaL_checkinteger(L,2);gentity_t *event;vec3_t origin={0,0,0};
-    if(!g_entities[n].client) return 0;
-    event=G_TempEntity(origin,EV_GLOBAL_CLIENT_SOUND);event->r.svFlags=SVF_SINGLECLIENT;
-    event->s.teamNum=n;event->s.eventParm=sound;event->r.singleClient=n;return 0;
+    int n=ClientIndex(L,1,0),sound=luaL_checkinteger(L,2);
+    G_ClientSound(&g_entities[n],sound);return 0;
 }
 static int ShrubLevel(lua_State *L) { int n=luaL_optinteger(L,1,-1); luaL_argcheck(L,n<MAX_CLIENTS,1,"invalid client index");lua_pushinteger(L,G_NITMOD_AdminLevel(n));return 1; }
 static int ShrubPermission(lua_State *L) { int n=luaL_optinteger(L,1,-1);const char *permission=luaL_checkstring(L,2);luaL_argcheck(L,n<MAX_CLIENTS,1,"invalid client index");lua_pushinteger(L,G_NITMOD_AdminAllowed(n,permission));return 1; }

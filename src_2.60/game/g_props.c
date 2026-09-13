@@ -211,7 +211,7 @@ void Psmoke_think (gentity_t *ent)
 	if (ent->count == 30)
 		ent->think = G_FreeEntity;
 
-	tent = G_TempEntity (ent->s.origin, EV_SMOKE);
+	tent = G_NITMOD_TempEvent (ent->s.origin, EV_SMOKE);
 	VectorCopy (ent->s.origin, tent->s.origin);
 	tent->s.time = 3000;
 	tent->s.time2 = 100;
@@ -253,7 +253,7 @@ void PGUNsparks_use (gentity_t *ent, gentity_t *self, gentity_t *activator )
 {
 	gentity_t *tent;
 
-	tent = G_TempEntity (ent->r.currentOrigin, EV_GUNSPARKS);
+	tent = G_NITMOD_TempEvent (ent->r.currentOrigin, EV_GUNSPARKS);
 	VectorCopy (ent->r.currentOrigin, tent->s.origin);
 	VectorCopy (ent->r.currentAngles, tent->s.angles);
 	tent->s.density = ent->health;
@@ -388,7 +388,7 @@ void smokedust_use (gentity_t *ent, gentity_t *self, gentity_t *activator )
 
 	for (i=0; i<ent->health; i++)
 	{
-		tent = G_TempEntity (ent->r.currentOrigin, EV_SMOKE);	
+		tent = G_NITMOD_TempEvent (ent->r.currentOrigin, EV_SMOKE);
 		VectorCopy (ent->r.currentOrigin, tent->s.origin);
 		VectorCopy (forward, tent->s.origin2);
 		tent->s.time = 1000;
@@ -424,7 +424,7 @@ void dust_use (gentity_t *ent, gentity_t *self, gentity_t *activator )
 
 	if (ent->target)
 	{
-		tent = G_TempEntity (ent->r.currentOrigin, EV_DUST);
+		tent = G_NITMOD_TempEvent (ent->r.currentOrigin, EV_DUST);
 		VectorCopy (ent->r.currentOrigin, tent->s.origin);
 		VectorCopy (ent->r.currentAngles, tent->s.angles);	
 		if (ent->spawnflags & 1)
@@ -435,7 +435,7 @@ void dust_use (gentity_t *ent, gentity_t *self, gentity_t *activator )
 	
 		AngleVectors (ent->r.currentAngles, forward, NULL, NULL);
 
-		tent = G_TempEntity (ent->r.currentOrigin, EV_DUST);	
+		tent = G_NITMOD_TempEvent (ent->r.currentOrigin, EV_DUST);
 		VectorCopy (ent->r.currentOrigin, tent->s.origin);
 		VectorCopy (forward, tent->s.angles);
 		if (ent->spawnflags & 1)
@@ -1902,7 +1902,7 @@ void barrel_smoke (gentity_t *ent)
 	
 	VectorCopy (ent->r.currentOrigin, point);
 
-	tent = G_TempEntity (point, EV_SMOKE);
+	tent = G_NITMOD_TempEvent (point, EV_SMOKE);
 	VectorCopy (point, tent->s.origin);
 	tent->s.time = 4000;
 	tent->s.time2 = 1000;
@@ -1944,7 +1944,7 @@ void SP_OilSlick (gentity_t *ent)
 	else
 		VectorCopy (ent->r.currentOrigin, point);
 
-	tent = G_TempEntity (ent->r.currentOrigin, EV_OILSLICK);
+	tent = G_NITMOD_TempEvent (ent->r.currentOrigin, EV_OILSLICK);
 	VectorCopy (ent->r.currentOrigin, tent->s.origin);
 	tent->s.angles2[0] = 16;
 	tent->s.angles2[1] = 48;
@@ -1964,7 +1964,7 @@ void OilParticles_think (gentity_t *ent)
 	{
 		ent->nextthink = (level.time + FRAMETIME/2);
 		
-		tent = G_TempEntity (ent->r.currentOrigin, EV_OILPARTICLES);
+		tent = G_NITMOD_TempEvent (ent->r.currentOrigin, EV_OILPARTICLES);
 		VectorCopy (ent->r.currentOrigin, tent->s.origin);
 		tent->s.time = ent->count2;
 		tent->s.density = ent->s.density;
@@ -1981,7 +1981,7 @@ void Delayed_Leak_Think (gentity_t *ent)
 
 	VectorCopy (ent->r.currentOrigin, point);
 
-	tent = G_TempEntity (point, EV_OILSLICK);
+	tent = G_NITMOD_TempEvent (point, EV_OILSLICK);
 	VectorCopy (point, tent->s.origin);
 		
 	tent->s.angles2[0] = 0;
@@ -2078,7 +2078,7 @@ void OilSlick_remove_think (gentity_t *ent)
 {
 	gentity_t *tent;
 
-	tent = G_TempEntity (ent->r.currentOrigin, EV_OILSLICKREMOVE);
+	tent = G_NITMOD_TempEvent (ent->r.currentOrigin, EV_OILSLICKREMOVE);
 	tent->s.density = ent->s.density;	
 }
 
@@ -2801,7 +2801,7 @@ void props_snowGenerator_think (gentity_t *ent)
 		point[1] += crandom() * (wide * 0.5); 
 		point[2] += crandom() * (high * 0.5); 
 		
-		tent = G_TempEntity (point, EV_SNOWFLURRY);
+		tent = G_NITMOD_TempEvent (point, EV_SNOWFLURRY);
 		VectorCopy (point, tent->s.origin);
 		VectorCopy (ent->movedir, tent->s.angles);
 		tent->s.time = 2000; // life time
@@ -3904,7 +3904,7 @@ void props_locker_mass (gentity_t *ent)
 	VectorSubtract (start, ent->r.currentOrigin, dir);
 	VectorNormalize (dir);
 
-	tent = G_TempEntity( ent->r.currentOrigin, EV_EFFECT);
+	tent = G_NITMOD_TempEvent( ent->r.currentOrigin, EV_EFFECT);
 	VectorCopy (ent->r.currentOrigin, tent->s.origin);
 	VectorCopy (dir, tent->s.angles2);
 	

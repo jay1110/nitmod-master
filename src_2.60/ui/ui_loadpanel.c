@@ -25,40 +25,39 @@ static qboolean UI_NitmodDownloading( void ) {
 		cstate.connState == CA_CONNECTED ) && downloadName[0];
 }
 
-/* Original UI_LoadPanel_RenderDownloadingBar 0x22690. */
-static void UI_NitmodDrawDownloadBar( void ) {
-	float downloadSize = trap_Cvar_VariableValue( "cl_downloadSize" );
-	float downloadCount = trap_Cvar_VariableValue( "cl_downloadCount" );
-	float fraction;
-	float x, y, w, h;
-	vec4_t background = { 1.f, 1.f, 1.f, .25f };
+/* Original x87 FISTP with truncation; invalid conversion yields INT_MIN. */
+static int UI_NitmodDownloadBarInteger(float value) {
+    return (double)value >= -2147483648.0 && (double)value < 2147483648.0
+        ? (int)value : INT_MIN;
+}
 
-	if( !(downloadSize > 0.f) || downloadSize > FLT_MAX ) {
-		return;
-	}
-	if(!(downloadCount >= 0.f)) downloadCount = 0.f;
-	if(downloadCount > downloadSize) downloadCount = downloadSize;
-	fraction = downloadCount / downloadSize;
-	if( fraction < 0.f ) fraction = 0.f;
-	if( fraction > 1.f ) fraction = 1.f;
-
-	/* Draw in raw screen coordinates, matching the original full-width bar. */
-	x = 0.f;
-	y = 468.f * uiInfo.uiDC.yscale;
-	w = 640.f * uiInfo.uiDC.xscale;
-	h = 12.f * uiInfo.uiDC.yscale;
-	trap_R_SetColor( background );
-	trap_R_DrawStretchPic( x, y, w, h, 0, 0, 1, 1,
-		uiInfo.uiDC.whiteShader );
-
-	x = 2.f * uiInfo.uiDC.xscale;
-	y = 469.f * uiInfo.uiDC.yscale;
-	w = 638.f * fraction * uiInfo.uiDC.xscale;
-	h = 10.f * uiInfo.uiDC.yscale;
-	trap_R_SetColor( colorGreen );
-	trap_R_DrawStretchPic( x, y, w, h, 0, 0, 1, 1,
-		uiInfo.uiDC.whiteShader );
-	trap_R_SetColor( NULL );
+/* Original UI_LoadPanel_RenderDownloadingBar 0x12690..0x129d0. */
+static void UI_NitmodDrawDownloadBar(void) {
+    int size = UI_NitmodDownloadBarInteger(trap_Cvar_VariableValue("cl_downloadSize"));
+    int count = UI_NitmodDownloadBarInteger(trap_Cvar_VariableValue("cl_downloadCount"));
+    float fraction, x, y, w, h;
+    vec4_t background = {1.f, 1.f, 1.f, .25f};
+    if(!size) return;
+    fraction = (float)((double)count / size);
+    if(fraction < 0.f) fraction = 0.f;
+    if(fraction > 1.f) fraction = 1.f;
+    x = 0.f; y = 468.f * uiInfo.uiDC.yscale;
+    w = 640.f * uiInfo.uiDC.xscale; h = 12.f * uiInfo.uiDC.yscale;
+    trap_R_SetColor(background);
+    trap_R_DrawStretchPic(x, y, w, h, 0, 0, 0, 1, uiInfo.uiDC.whiteShader);
+    trap_R_SetColor(NULL);
+    trap_R_SetColor(colorLtGrey);
+    trap_R_DrawStretchPic(x, y, w, h, 0, 0, 0, 1, uiInfo.uiDC.whiteShader);
+    trap_R_SetColor(NULL);
+    x = 2.f * uiInfo.uiDC.xscale; y = 469.f * uiInfo.uiDC.yscale;
+    w = 638.f * uiInfo.uiDC.xscale; h = 10.f * uiInfo.uiDC.yscale;
+    trap_R_SetColor(background);
+    trap_R_DrawStretchPic(x, y, w, h, 0, 0, 0, 1, uiInfo.uiDC.whiteShader);
+    trap_R_SetColor(NULL);
+    trap_R_SetColor(colorGreen);
+    trap_R_DrawStretchPic(x, y, 638.f * fraction * uiInfo.uiDC.xscale, h,
+        0, 0, 0, 1, uiInfo.uiDC.whiteShader);
+    trap_R_SetColor(NULL);
 }
 
 // panel_button_text_t FONTNAME = { SCALEX, SCALEY, COLOUR, STYLE, FONT };
@@ -338,20 +337,34 @@ void UI_LoadPanel_RenderHeaderText( panel_button_t* button ) {
 }
 
 #define ESTIMATES 80
+static int UI_DownloadSigned32(unsigned int value) {
+    return value <= INT_MAX ? (int)value : -1 - (int)(UINT_MAX - value);
+}
 int UI_DownloadCounter(const char *name) {
-	double value = trap_Cvar_VariableValue(name);
-	if(!(value >= 0)) return 0;
-	if(value >= INT_MAX) return INT_MAX;
-	return (int)value;
+    return UI_NitmodDownloadBarInteger(trap_Cvar_VariableValue(name));
 }
 int UI_DownloadPercent(int count, int size) {
-	if(size <= 0 || count <= 0) return 0;
-	return count >= size ? 100 : (int)((double)count * 100.0 / size);
+	double percent;
+	if(size <= 0) return 0;
+	/* Original 0x13164..0x13189 truncates without a 0..100 clamp. */
+	percent = (double)count * 100.0 / size;
+	return percent >= -2147483648.0 && percent < 2147483648.0
+		? (int)percent : INT_MIN;
 }
 int UI_DownloadRate(int count, int started, int now) {
-	double elapsed = ((double)now - started) / 1000.0;
-	if(count <= 0 || started <= 0 || elapsed < 1) return 0;
-	return count / (int)elapsed;
+    int elapsed = UI_DownloadSigned32((unsigned int)now - (unsigned int)started);
+    int seconds = elapsed / 1000;
+    if(count < 4096 || !started || !seconds) return 0;
+    return count / seconds;
+}
+static int UI_DownloadRemaining(int count, int size, int rate) {
+    int total, product, divisor = -(size / 1024);
+    /* Keep defined behavior where the original IDIV would fault. */
+    if(!rate || !divisor || (size == INT_MIN && rate == -1)) return 0;
+    total = size / rate;
+    product = UI_DownloadSigned32((unsigned int)(count / 1024) * (unsigned int)total);
+    if(product == INT_MIN && divisor == -1) return 0;
+    return UI_DownloadSigned32((unsigned int)(product / divisor) + (unsigned int)total);
 }
 const char *UI_DownloadInfo( const char *downloadName )
 {
@@ -372,7 +385,7 @@ const char *UI_DownloadInfo( const char *downloadName )
 
 	if( downloadSize > 0 ) {
 		int percent = UI_DownloadPercent(downloadCount, downloadSize);
-		progress = va( "%s (%d%%)", downloadName, percent );
+		progress = va( "%d%%", percent );
 	} else {
 		progress = downloadName;
 	}
@@ -384,18 +397,15 @@ const char *UI_DownloadInfo( const char *downloadName )
 	xferRate = UI_DownloadRate(downloadCount, downloadTime, uiInfo.uiDC.realTime);
 	UI_ReadableSize( xferRateBuf, sizeof(xferRateBuf), xferRate );
 	dlTimeBuf[0] = '\0';
-	if( downloadSize > 0 && xferRate > 0 ) {
-		int totalSeconds = downloadSize / xferRate;
-		int remaining = totalSeconds - downloadCount / xferRate;
-		double average = 0;
-		int i;
-		if( remaining < 0 ) remaining = 0;
-		tleEstimates[tleIndex++] = remaining;
-		if( tleIndex >= ESTIMATES ) tleIndex = 0;
-		for( i = 0; i < ESTIMATES; ++i ) average += tleEstimates[i];
-		UI_PrintTime( dlTimeBuf, sizeof(dlTimeBuf), (int)(average / ESTIMATES) );
-	}
-	if( xferRate > 0 ) {
+	if( downloadSize != 0 && xferRate != 0 ) {
+        unsigned int sum = 0;
+        int i;
+        tleEstimates[tleIndex++] = UI_DownloadRemaining(downloadCount, downloadSize, xferRate);
+        if(tleIndex >= ESTIMATES) tleIndex = 0;
+        for(i = 0; i < ESTIMATES; ++i) sum += (unsigned int)tleEstimates[i];
+        UI_PrintTime(dlTimeBuf, sizeof(dlTimeBuf), UI_DownloadSigned32(sum) / ESTIMATES);
+    }
+	if( xferRate != 0 ) {
 		return va( "File: '%s'\nSpeed: %s/s\n\n^0%s -- %s remaining^7",
 			downloadName, xferRateBuf, progress, dlTimeBuf );
 	}
@@ -413,7 +423,7 @@ void UI_LoadPanel_RenderLoadingText( panel_button_t* button )
 
 	trap_GetClientState( &cstate );
 
-	Com_sprintf( buff, sizeof(buff), "Connecting to:\n %s^*\n\n%s", cstate.servername, Info_ValueForKey( cstate.updateInfoString, "motd" ) );
+	Com_sprintf( buff, sizeof(buff), "Connecting to: %s", cstate.servername );
 
 	//Com_sprintf( buff, sizeof(buff), "%s^*", cstate.servername, Info_ValueForKey( cstate.updateInfoString, "motd" ) );
 
@@ -446,13 +456,19 @@ void UI_LoadPanel_RenderLoadingText( panel_button_t* button )
 			s = (char *)UI_DownloadInfo( downloadName );
 		}
 
-		Q_strcat( buff, sizeof(buff), va( "\n\n%s^*", s ) );
+		Q_strcat( buff, sizeof(buff), va( "\n\n%s", s ) );
 
 		if( cstate.connState < CA_CONNECTED && *cstate.messageString ) {
-			Q_strcat( buff, sizeof(buff), va( "\n\n%s^*", cstate.messageString ) );
+			Q_strcat( buff, sizeof(buff), va( "\n\n%s", cstate.messageString ) );
 		}
 	}
 
+	/* Original 0x13758..0x13788 replaces the side text during downloads;
+	 * transfer details are rendered separately above the progress bar. */
+	if( UI_NitmodDownloading() ) {
+		Com_sprintf( buff, sizeof(buff), "Connecting to: %s\n\n\n\nMissing paks:\n%s",
+			cstate.servername, UI_Cvar_VariableString("com_missingFiles") );
+	}
 	BG_FitTextToWidth_Ext( buff, button->font->scalex, button->rect.w, sizeof(buff), button->font->font );
 
 	//UI_DrawRect( button->rect.x, button->rect.y, button->rect.w, button->rect.h, colorRed );
@@ -466,7 +482,7 @@ void UI_LoadPanel_RenderLoadingText( panel_button_t* button )
 		if( *p == '\n' ) {
 			*p++ = '\0';
 			Text_Paint_Ext( textX, y, button->font->scalex, button->font->scaley,
-				button->font->colour, s, 0, 0, 0, button->font->font );
+				colorWhite, s, 0, 0, 0, button->font->font );
 			y += 8;
 			s = p;
 		} else {
@@ -484,6 +500,7 @@ void UI_LoadPanel_RenderLoadingText( panel_button_t* button )
 			sizeof(downloadText) );
 		BG_FitTextToWidth_Ext( downloadText, .2f, 640.f,
 			sizeof(downloadText), &bg_loadscreenfont2 );
+		UI_NitmodDrawDownloadBar();
 		y = 454.f;
 		line = downloadText;
 		p = downloadText;
@@ -502,6 +519,5 @@ void UI_LoadPanel_RenderLoadingText( panel_button_t* button )
 			Text_Paint_Ext( textX, y, .2f, .2f, colorWhite, line,
 				0, 0, 0, &bg_loadscreenfont2 );
 		}
-		UI_NitmodDrawDownloadBar();
 	}
 }

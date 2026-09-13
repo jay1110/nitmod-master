@@ -401,6 +401,7 @@ typedef enum {
 	LE_MOVE_SCALE_FADE,
 	LE_FALL_SCALE_FADE,
 	LE_FADE_RGB,
+	LE_CONST_RGB,
 	LE_SCALE_FADE,
 	LE_SPARK,
 	LE_DEBRIS,
@@ -432,7 +433,8 @@ typedef enum {
 	LEBS_WOOD,
 	LEBS_BRASS,
 	LEBS_METAL,
-	LEBS_BONE
+	LEBS_BONE,
+	LEBS_SHOTGUN_BRASS
 } leBounceSoundType_t;	// fragment local entities can make sounds on impacts
 
 typedef struct localEntity_s {
@@ -844,6 +846,7 @@ typedef struct {
 
 	float		duckChange;				// for duck viewheight smoothing
 	int			duckTime;
+	qboolean	duckFromPlayDead; /* Original viewheight-transition state. */
 
 	float		landChange;				// for landing hard
 	int			landTime;
@@ -983,6 +986,7 @@ typedef struct {
 	int			itemPickupTime;
 	int			itemPickupBlendTime;	// the pulse around the crosshair is timed seperately
 
+	int			nitmodKnifeBlood; /* Original local knife overlay intensity, 0..255. */
 	int			weaponSelectTime;
 	int			weaponAnimation;
 	int			weaponAnimationTime;
@@ -1548,6 +1552,7 @@ typedef struct {
 	sfxHandle_t	sfx_grenexp;
 	sfxHandle_t	sfx_grenexpDist;
 	sfxHandle_t sfx_brassSound[BRASSSOUND_MAX][3];
+	sfxHandle_t sfx_shotgunBrassSound[BRASSSOUND_MAX][3];
 	sfxHandle_t	sfx_rubbleBounce[3];
 
 	sfxHandle_t	sfx_bullet_fleshhit[5];
@@ -2704,6 +2709,7 @@ void CG_FlameDamage( int owner, vec3_t org, float radius );
 //
 void	CG_InitLocalEntities( void );
 localEntity_t	*CG_AllocLocalEntity( void );
+void CG_FreeLocalEntity( localEntity_t *le );
 void	CG_AddLocalEntities( void );
 
 //
@@ -3493,7 +3499,9 @@ void CG_DrawPlayerHead( rectDef_t *rect, bg_character_t* character, bg_character
 void CG_InitPM( void );
 void CG_InitPMGraphics( void );
 void CG_UpdatePMLists( void );
+void CG_NitmodAddColoredPMItem(popupMessageType_t type, const char *message, qhandle_t shader, const vec3_t color);
 void CG_AddPMItem( popupMessageType_t type, const char* message, qhandle_t shader );
+void CG_NitmodAddColoredPMItemBig(popupMessageBigType_t type, const char *message, qhandle_t shader, const vec3_t color);
 void CG_AddPMItemBig( popupMessageBigType_t type, const char* message, qhandle_t shader );
 void CG_DrawPMItems( void );
 void CG_DrawPMItemsBig( void );

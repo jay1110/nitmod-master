@@ -1,5 +1,6 @@
 #include "g_local.h"
 #include "g_nitmod_legacy_cvars.h"
+#include "g_nitmod_entities.h"
 
 /*
 ===================
@@ -16,12 +17,12 @@ void G_PushMapEntityToBuffer( char* buffer, int size, mapEntityData_t *mEnt ) {
 	}
 
 	switch( mEnt->type ) {
-		case ME_CONSTRUCT: // Gordon: these ones don't need much info
+		/* Original Nitmod includes coordinates for every map entity;
+		 * these objective types omit only yaw. */
+		case ME_CONSTRUCT:
 		case ME_DESTRUCT:
 		case ME_DESTRUCT_2:
 		case ME_COMMANDMAP_MARKER:
-			Q_strcat( buffer, size, va(" %i %i", mEnt->type, mEnt->data ) );
-			break;
 		case ME_TANK:
 		case ME_TANK_DEAD:
 			Q_strcat( buffer, size, va(" %i %s %i", mEnt->type, buf, mEnt->data ) );
@@ -834,6 +835,12 @@ void G_UpdateTeamMapData( void ) {
 	}
 	level.lastMapEntityUpdate = level.time;
 
+	/* Original updates mines first, in registration order, including reused
+	 * entity slots. The same order determines binocular spotting below. */
+	for( i = 0; (ent = G_NITMOD_LandmineAt( i )) != NULL; i++ ) {
+		G_UpdateTeamMapData_LandMine( ent, qfalse, qfalse );
+	}
+
 	for(i = 0, ent = g_entities; i < level.num_entities; i++, ent++) {
 		if(!ent->inuse) {
 //			mapEntityData[0][i].valid = qfalse;
@@ -869,11 +876,6 @@ void G_UpdateTeamMapData( void ) {
 			case ET_TANK_INDICATOR:
 			case ET_TANK_INDICATOR_DEAD:
 				G_UpdateTeamMapData_Tank(ent);
-				break;
-			case ET_MISSILE:
-				if( ent->methodOfDeath == MOD_LANDMINE) {
-					G_UpdateTeamMapData_LandMine(ent, qfalse, qfalse);
-				}
 				break;
 			case ET_COMMANDMAP_MARKER:
 				G_UpdateTeamMapData_CommandmapMarker( ent );
@@ -1007,14 +1009,14 @@ void G_UpdateTeamMapData( void ) {
 					!(ent->client->ps.pm_flags & PMF_LIMBO)) {
 					G_SetupFrustum_ForBinoculars( ent );
 
-					for(j = 0, ent2 = g_entities; j < level.num_entities; j++, ent2++) {
+					for(j = 0; (ent2 = G_NITMOD_LandmineAt( j )) != NULL; j++) {
 						if(!ent2->inuse || ent2 == ent) {
 							continue;
 						}
 
 						switch(ent2->s.eType) {
 						case ET_MISSILE:
-							if( ent2->methodOfDeath == MOD_LANDMINE) {
+							{
 								if( (ent2->s.teamNum < 4 || ent2->s.teamNum >= 8) && (ent2->s.teamNum%4 != ent->client->sess.sessionTeam) ) 
 								{
 									// TAT - as before, we can only detect a mine if we can see it from our binoculars

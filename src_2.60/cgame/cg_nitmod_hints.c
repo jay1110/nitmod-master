@@ -44,12 +44,18 @@ void CG_NitmodDrawCursorHint(const rectDef_t *rect) {
     case HINT_PLYR_FRIEND: icon = cgs.media.friendShader; break;
     default: icon = cgs.media.usableHintShader; break;
     }
-    if(icon <= 0 || !(fade = CG_FadeColor(cg.cursorHintTime, cg.cursorHintFade))) return;
+    if(icon <= 0) return;
+    fade = CG_FadeColor(cg.cursorHintTime, cg.cursorHintFade);
+    if(!fade) {
+        /* Original CG_DrawCursorhint 0x89030 resets renderer color on expiry. */
+        trap_R_SetColor(NULL);
+        return;
+    }
     Vector4Copy(fade, color);
-    if(cg_cursorHints.integer == 3) color[3] *= .5f + .5f * sin(cg.time / 150.0f);
+    if(cg_cursorHints.integer == 3) color[3] *= .5f + .5f * sin((double)cg.time / 150.0);
     else if(cg_cursorHints.integer < 3)
         pulse = cg_cursorHints.integer == 2 ? (cg.cursorHintTime % 1000) / 100.0f :
-            10 * (.5f + .5f * sin(cg.time / 150.0f));
+            10 * (.5f + .5f * sin((double)cg.time / 150.0));
     half = pulse * .5f;
     previous = CG_NitmodHudAnchor(NITMOD_HUD_CENTER);
     trap_R_SetColor(color);
@@ -217,6 +223,8 @@ void CG_NitmodRegisterHintMedia(void) {
     artilleryShader = trap_R_RegisterShaderNoMip("gfx/awards/12");
     buildShader = trap_R_RegisterShaderNoMip("gfx/awards/13");
 }
+void CG_NitmodResetArtilleryHint(void) { artilleryPeriod = 0; }
+
 void CG_NitmodHintsReset(void) { artilleryPeriod = 0; mineOwner = -1; memset(&dynamiteHint, 0, sizeof(dynamiteHint)); }
 
 qboolean CG_NitmodScanMine(const centity_t *cent) {
@@ -442,7 +450,8 @@ void CG_NitmodDrawArtilleryHint(void) {
     vec4_t color = {1, 1, 1, 0};
     artilleryPeriod = 0;
     if(!NITMOD_UsesNitmodHud() || !cg_artilleryHints.integer || !period || !cg.time || artilleryShader <= 0) return;
-    color[3] = ((float)sin((double)cg.time / period) * .5f + .5f) * .5f;
+    /* Original x87 path keeps the sine expression wide until final storage. */
+    color[3] = (float)((sin((double)cg.time / period) * .5 + .5) * .5);
     previous = CG_NitmodHudAnchor(NITMOD_HUD_CENTER);
     trap_R_SetColor(color);
     CG_DrawPic(302, 320, 36, 36, artilleryShader);

@@ -6,6 +6,7 @@
 */
 
 #include "g_local.h"
+#include "nitmod_protocol.h"
 qboolean G_SpawnStringExt( const char *key, const char *defaultString, char **out, const char* file, int line ) {
 	int		i;
 
@@ -176,6 +177,84 @@ field_t fields[] = {
 };
 
 
+/* Original delete action searches each criterion independently, then frees
+ * the collected entities. Keep that ordering, with a bounded match buffer. */
+qboolean etpro_ScriptAction_DeleteEntity( gentity_t *ent, char *params ) {
+	gentity_t *matches[32];
+	int count = 0, i;
+	char key[MAX_TOKEN_CHARS], value[MAX_TOKEN_CHARS];
+	char *token;
+	field_t *field;
+	if (g_scriptDebug.value != 0.0f)
+		G_Printf("%d : (%s) Beginning entity deletion (from %s)\n", level.time, ent->scriptName, ent->scriptName);
+	while ((token = COM_ParseExt(&params, qfalse))[0]) {
+		int integer = 0;
+		float scalar = 0;
+		vec3_t vector = {0, 0, 0};
+		Q_strncpyz(key, token, sizeof(key));
+		token = COM_ParseExt(&params, qfalse);
+		if (!token[0]) {
+			G_Error("G_ScriptAction_Delete(): key \"%s\" has no value", key);
+			return qfalse;
+		}
+		Q_strncpyz(value, token, sizeof(value));
+		for (field = fields; field->name; ++field)
+			if (!Q_stricmp(field->name, key)) break;
+		if (!field->name) {
+			G_Error("G_ScriptAction_Delete(): Unknown key \"%s\"", key);
+			return qfalse;
+		}
+		if (g_scriptDebug.integer)
+			G_Printf("%d : (%s) Searching for entity to delete where \"%s\" = \"%s\"\n", level.time, ent->scriptName, key, value);
+		switch (field->type) {
+		case F_INT: integer = NITMOD_ParseOriginalDecimal32(value); break;
+		case F_FLOAT: scalar = (float)atof(value); break;
+		case F_LSTRING: case F_GSTRING: break;
+		case F_VECTOR:
+			if (sscanf(value, "%f %f %f", &vector[0], &vector[1], &vector[2]) != 3) {
+				G_Error("G_ScriptAction_Delete(): Invalid vector for key \"%s\"", key);
+				return qfalse;
+			}
+			break;
+		case F_ANGLEHACK: vector[1] = (float)atof(value); break;
+		default:
+			G_Error("G_ScriptAction_Delete(): Invalid key \"%s\"", key);
+			return qfalse;
+		}
+		for (i = 0; i < level.num_entities; ++i) {
+			gentity_t *candidate = &g_entities[i];
+			byte *data = (byte *)candidate + field->ofs;
+			qboolean found = qfalse;
+			if (!candidate->inuse) continue;
+			switch (field->type) {
+			case F_INT: found = (*(int *)data == integer); break;
+			case F_FLOAT: found = (*(float *)data == scalar); break;
+			case F_LSTRING: case F_GSTRING:
+				found = (*(char **)data && !Q_stricmp(*(char **)data, value)); break;
+			case F_VECTOR: case F_ANGLEHACK: found = VectorCompare((float *)data, vector); break;
+			default: break;
+			}
+			if (found) {
+				if (count == (int)(sizeof(matches) / sizeof(matches[0]))) {
+					G_Error("G_ScriptAction_Delete(): too many matches (maximum 32)");
+					return qfalse;
+				}
+				matches[count++] = candidate;
+			}
+		}
+	}
+	if (!count) {
+		G_Printf("G_ScriptAction_Delete(): No matches while deleting entity\n");
+		return qfalse;
+	}
+	for (i = 0; i < count; ++i) {
+		if (g_scriptDebug.integer)
+			G_Printf("%d : (%s) Freeing entity #%d\n", level.time, ent->scriptName, matches[i]->s.number);
+		G_FreeEntity(matches[i]);
+	}
+	return qtrue;
+}
+
 typedef struct {
 	char	*name;
 	void	(*spawn)(gentity_t *ent);
@@ -210,6 +289,8 @@ void SP_func_door_rotating (gentity_t *ent);
 // RF
 void SP_func_constructible( gentity_t *ent );
 void SP_func_brushmodel( gentity_t *ent );
+void SP_func_fakebrush( gentity_t *ent );
+void SP_trigger_removeProtection( gentity_t *ent );
 void SP_misc_constructiblemarker( gentity_t *ent );
 void SP_target_explosion( gentity_t *ent );
 void SP_misc_landmine( gentity_t *ent );
@@ -293,6 +374,7 @@ void SP_team_CTF_blueplayer( gentity_t *ent );
 
 void SP_team_CTF_redspawn( gentity_t *ent );
 void SP_team_CTF_bluespawn( gentity_t *ent );
+void SP_team_CTF_greenspawn( gentity_t *ent );
 
 // JPW NERVE for multiplayer spawnpoint selection
 void SP_team_WOLF_objective( gentity_t *ent );
@@ -581,6 +663,7 @@ spawn_t	spawns[] = {
 
 	{"team_CTF_redspawn", SP_team_CTF_redspawn},
 	{"team_CTF_bluespawn", SP_team_CTF_bluespawn},
+	{"team_CTF_greenspawn", SP_team_CTF_greenspawn},
 
 	{"team_WOLF_objective", SP_team_WOLF_objective},
 
@@ -655,6 +738,8 @@ spawn_t	spawns[] = {
 
 	{"func_constructible",	SP_func_constructible},
 	{"func_brushmodel",		SP_func_brushmodel},
+	{"func_fakebrush", SP_func_fakebrush},
+	{"trigger_removeProtection", SP_trigger_removeProtection},
 	{"misc_beam",			SP_misc_beam},
 	{"misc_constructiblemarker", SP_misc_constructiblemarker},
 	{"target_explosion",	SP_target_explosion },
@@ -815,7 +900,7 @@ Spawn an entity and fill in all of the level fields from
 level.spawnVars[], then call the class specfic spawn function
 ===================
 */
-void G_SpawnGEntityFromSpawnVars( void ) {
+gentity_t *G_SpawnGEntityFromSpawnVars( void ) {
 	int			i;
 	gentity_t	*ent;
 	char		*str;
@@ -831,7 +916,7 @@ void G_SpawnGEntityFromSpawnVars( void ) {
 	G_SpawnInt( "notteam", "0", &i );
 	if ( i ) {
 		G_FreeEntity( ent );
-		return;
+		return NULL;
 	}
 
 	// allowteams handling
@@ -866,9 +951,11 @@ void G_SpawnGEntityFromSpawnVars( void ) {
 	}
 	/* Original refresh occurs after G_CallSpawn and its failure/free path. */
 	G_NITMOD_RefreshClassnameHash( ent );
+	G_NITMOD_RegisterSpawnEntity( ent );
 
 	// RF, try and move it into the bot entities if possible
 //	BotCheckBotGameEntity( ent );
+	return ent;
 }
 
 

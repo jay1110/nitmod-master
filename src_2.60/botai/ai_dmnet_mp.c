@@ -2659,7 +2659,7 @@ int AINode_MP_MG42Mount(bot_state_t *bs)
 		vec3_t forward, right, up, offset;
 		// look at the gun
 		AngleVectors (bs->viewangles, forward, right, up);
-		CalcMuzzlePointForActivate (&g_entities[bs->client], forward, right, up, offset);
+		CalcMuzzlePointForActivate (&g_entities[bs->client], forward, right, up, offset, qfalse);
 		VectorSubtract( ent->melee->r.currentOrigin, offset, dir );
 		VectorNormalize( dir );
 		vectoangles( dir, bs->ideal_viewangles );

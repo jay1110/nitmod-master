@@ -548,7 +548,7 @@ void UI_LoadCampaigns( void ) {
 	const char *dirptr;
 	int			i, j;
 	int offset = 0;
-	long		hash;
+	unsigned int hash;
 	char		*ch;
 
 	uiInfo.campaignCount = 0;
@@ -578,12 +578,14 @@ void UI_LoadCampaigns( void ) {
 	for( i = 0; i < uiInfo.campaignCount; i++ ) {
 		// generate hash for campaign shortname
 		for( hash = 0, ch = (char *)uiInfo.campaignList[i].campaignShortName; *ch != '\0'; ch++ ) {
-			hash += (long)(tolower((unsigned char)*ch))*((ch-uiInfo.campaignList[i].campaignShortName)+119);
+			/* Original 0x121e8..0x121ef accumulates modulo 2^32. */
+			hash += (unsigned int)tolower((unsigned char)*ch) *
+				((unsigned int)(ch-uiInfo.campaignList[i].campaignShortName)+119u);
 		}
 
 		// find the entry in the campaignsave
 		for( j = 0; j < uiInfo.campaignStatus.header.numCampaigns; j++ ) {
-			if( hash == uiInfo.campaignStatus.campaigns[j].shortnameHash ) {
+			if( hash == (unsigned int)uiInfo.campaignStatus.campaigns[j].shortnameHash ) {
 				uiInfo.campaignList[i].unlocked = qtrue;
 				uiInfo.campaignList[i].progress = uiInfo.campaignStatus.campaigns[j].progress;
 				uiInfo.campaignList[i].cpsCampaign = &uiInfo.campaignStatus.campaigns[j];

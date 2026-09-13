@@ -2752,7 +2752,7 @@ void BotVoiceChatAfterTeamIdleTime( int client, const char *id, int mode, int de
 	BotSendVoiceChat( bs, id, mode, delay, voiceonly, forceIfDead );
 }
 
-void G_SpawnGEntityFromSpawnVars( void );
+gentity_t *G_SpawnGEntityFromSpawnVars( void );
 char *G_AddSpawnVarToken( const char *string );
 
 /*

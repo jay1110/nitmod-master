@@ -142,12 +142,12 @@ void UI_OrderCampaigns(void) {
     }
 }
 
-/* Serverinfo contains a BSP load name, not the localized/colorized menu title.
- * Reset the map cursor for every campaign (the original retained it by mistake). */
+/* Original UI_NameForCampaign / UI_DescriptionForCampaign compare mapName
+ * and retain the map cursor across campaigns, including failed searches. */
 static campaignInfo_t *UI_CurrentCampaign(void) {
     char info[MAX_INFO_STRING];
     const char *name;
-    int i, j;
+    int i, j = 0;
     if(uiInfo.campaignCount < 0 || uiInfo.campaignCount > MAX_CAMPAIGNS) return NULL;
     trap_GetConfigString(CS_SERVERINFO, info, sizeof(info));
     name = Info_ValueForKey(info, "mapname");
@@ -155,9 +155,9 @@ static campaignInfo_t *UI_CurrentCampaign(void) {
     for(i = 0; i < uiInfo.campaignCount; ++i) {
         campaignInfo_t *campaign = &uiInfo.campaignList[i];
         if(campaign->mapCount < 0 || campaign->mapCount > MAX_MAPS_PER_CAMPAIGN) continue;
-        for(j = 0; j < campaign->mapCount; ++j) {
+        for(; j < campaign->mapCount; ++j) {
             mapInfo *map = campaign->mapInfos[j];
-            if(map && map->mapLoadName && !Q_stricmp(name, map->mapLoadName)) return campaign;
+            if(map && map->mapName && !Q_stricmp(name, map->mapName)) return campaign;
         }
     }
     return NULL;

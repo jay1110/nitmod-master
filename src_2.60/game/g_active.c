@@ -2,6 +2,7 @@
 
 #include "g_local.h"
 #include "g_nitmod_nxac.h"
+extern qboolean Bot_Util_AllowPush(int weaponId);
 #include "g_nitmod_admin.h"
 #include "g_nitmod_mdx.h"
 #include "nitmod_lua_events.h"
@@ -19,6 +20,7 @@
 #include "nitmod_air.h"
 #include "nitmod_weapon_reload.h"
 #include "nitmod_regeneration.h"
+#include "nitmod_support_time.h"
 #include <limits.h>
 
 /* Original G_SendVoiceChat 0x59210: Pmove alternate tool action uses the
@@ -104,19 +106,18 @@ void P_WorldEffects( gentity_t *ent ) {
 	int waterlevel;
 	int drowningDamage;
 
-	/* Six-level skill storage is not active: pass no unlock bits yet. */
-	drowningDamage = G_NITMOD_UpdateClientAir( ent, level.time, 0u );
+	/* Original P_WorldEffects tests Battle Sense reward bit 0x20. */
+	drowningDamage = G_NITMOD_UpdateClientAir( ent, level.time,
+		ent->client->sess.nitmodSkillMasks[SK_BATTLE_SENSE] );
 	if( ent->client->noclip ) {
 		return;
 	}
 	waterlevel = ent->waterlevel;
 	if( drowningDamage ) {
-		if( ent->health <= drowningDamage ) {
-			G_Sound(ent, G_SoundIndex("*drown.wav"));
-		} else if( rand() & 1 ) {
-			G_Sound(ent, G_SoundIndex("sound/player/gurp1.wav"));
-		} else {
-			G_Sound(ent, G_SoundIndex("sound/player/gurp2.wav"));
+		/* Original P_WorldEffects 0x3cdb9/0x3ce88: only surviving
+		 * drowning ticks emit a fixed-bank Nitmod sound (9 or 10). */
+		if( ent->health > drowningDamage ) {
+			NITMOD_PlaySoundEvent(ent, (rand() & 1) ? 9 : 10);
 		}
 		ent->pain_debounce_time = level.time + 200;
 		G_Damage(ent, NULL, NULL, NULL, NULL, drowningDamage, 0, MOD_WATER);
@@ -152,7 +153,9 @@ void P_WorldEffects( gentity_t *ent ) {
 			if ((ent->s.onFireEnd > level.time) && (ent->health > 0)) {
 				gentity_t *attacker;
    				attacker = g_entities + ent->flameBurnEnt;
-				G_Damage (ent, attacker, attacker, NULL, NULL, 5, DAMAGE_NO_KNOCKBACK, MOD_FLAMETHROWER); // JPW NERVE was 7
+				/* Original P_WorldEffects resolves flame damage for every burn tick. */
+				G_Damage (ent, attacker, attacker, NULL, NULL,
+					G_GetWeaponDamage(WP_FLAMETHROWER), DAMAGE_NO_KNOCKBACK, MOD_FLAMETHROWER);
 			}
 		}
 	}
@@ -183,6 +186,9 @@ void BotVoiceChatAfterIdleTime( int client, const char *id, int mode, int delay,
 void PushBot( gentity_t *ent, gentity_t *other ) {
 	vec3_t dir, ang, f, r;
 	float oldspeed;
+	/* Original PushBot 0x3cf08..0x3cf46. */
+	if (!other->client || !Bot_Util_AllowPush(other->client->ps.weapon) ||
+		!other->client->sess.botPush) return;
 	//
 	oldspeed = VectorLength( other->client->ps.velocity );
 	if (oldspeed < 200)
@@ -202,11 +208,7 @@ void PushBot( gentity_t *ent, gentity_t *other ) {
 		VectorNormalize( other->client->ps.velocity );
 		VectorScale( other->client->ps.velocity, oldspeed, other->client->ps.velocity );
 	}
-	//
-	// also, if "ent" is a bot, tell "other" to move!
-	if (rand()%50 == 0 && (ent->r.svFlags & SVF_BOT) && oldspeed < 10) {
-		BotVoiceChatAfterIdleTime( ent->s.number, "Move", SAY_TEAM, 1000, qfalse, 20000, qfalse );
-	}
+
 }
 
 /*
@@ -298,30 +300,17 @@ void ClientImpacts( gentity_t *ent, pmove_t *pm ) {
 		}
 		other = &g_entities[ pm->touchents[i] ];
 
-		if ( ( ent->r.svFlags & SVF_BOT ) && ( ent->touch ) ) {
-			ent->touch( ent, other, &trace );
-		}
-
-		// RF, bot should get pushed out the way
-		if ( (ent->client) /*&& !(ent->r.svFlags & SVF_BOT)*/ && (other->r.svFlags & SVF_BOT) ) {
-/*			vec3_t dir;
-			// if we are not heading for them, ignore
-			VectorSubtract( other->r.currentOrigin, ent->r.currentOrigin, dir );
-			VectorNormalize( dir );
-			if (DotProduct( ent->client->ps.velocity, dir ) > 0) {
-				PushBot( ent, other );
-			}
-*/
+		/* Original ClientImpacts suppresses both pushes while the contacted
+		 * client has invulnerability, and dispatches only the other touch. */
+		if ( ent->client && (other->r.svFlags & SVF_BOT) &&
+			other->client && !other->client->ps.powerups[PW_INVULNERABLE] ) {
 			PushBot( ent, other );
 		}
 
-		// if we are standing on their head, then we should be pushed also
-		if ( (ent->r.svFlags & SVF_BOT) && ent->s.groundEntityNum == other->s.number && other->client) {
+		if ( (ent->r.svFlags & SVF_BOT) &&
+			ent->s.groundEntityNum == other->s.number && other->client &&
+			!other->client->ps.powerups[PW_INVULNERABLE] ) {
 			PushBot( other, ent );
-		}
-
-		if ( ent->r.svFlags & SVF_BOT ) {
-			CheckBotImpacts( ent, other );
 		}
 
 		if ( !other->touch ) {
@@ -357,7 +346,9 @@ void	G_TouchTriggers( gentity_t *ent ) {
 	ent->client->touchingTOI = NULL;
 
 	// dead clients don't activate triggers!
-	if ( ent->client->ps.stats[STAT_HEALTH] <= 0 ) {
+	/* Original G_TouchTriggers 0x3d525 also rejects flag 0x00800000. */
+	if ( ent->client->ps.stats[STAT_HEALTH] <= 0 ||
+		(ent->client->ps.eFlags & EF_SPARE0) ) {
 		return;
 	}
 
@@ -414,9 +405,6 @@ void	G_TouchTriggers( gentity_t *ent ) {
 			hit->touch (hit, ent, &trace);
 		}
 
-		if ( ( ent->r.svFlags & SVF_BOT ) && ( ent->touch ) ) {
-			ent->touch( ent, hit, &trace );
-		}
 	}
 }
 
@@ -1126,6 +1114,13 @@ void ClientThink_real( gentity_t *ent ) {
 		return;
 	}
 
+	/* Original ClientThink_real 0x4052b: spectators/limbo retain the deadline;
+	 * equality is still visible, zero means no flame-owned broadcast expiry. */
+	if(client->nitmodFlameBroadcastUntil && client->nitmodFlameBroadcastUntil < level.time) {
+		client->nitmodFlameBroadcastUntil = 0;
+		ent->r.svFlags &= ~SVF_BROADCAST;
+	}
+
 	/* Original G_CheckClientWeapons revokes adrenaline immediately when its
 	 * configured class/unlock eligibility changes. It never grants here; the
 	 * spawn/skill paths remain responsible for assignment. */
@@ -1822,9 +1817,9 @@ void ClientEndFrame( gentity_t *ent ) {
 
 	/* Original ClientEndFrame drains one pending command per frame after the
 	 * last flood wait plus 999 ms; the 30-second window does not clear count. */
-	if((int)((unsigned int)ent->client->pers.nitmodFloodNextTime + 999u) < level.time &&
+	if(NITMOD_SupportSignedTime((uint32_t)ent->client->pers.nitmodFloodNextTime + UINT32_C(999)) < level.time &&
 		ent->client->pers.nitmodFloodCount != 0) {
-		ent->client->pers.nitmodFloodCount = (int)((unsigned int)ent->client->pers.nitmodFloodCount - 1u);
+		ent->client->pers.nitmodFloodCount = NITMOD_SupportSignedTime((uint32_t)ent->client->pers.nitmodFloodCount - UINT32_C(1));
 		if(!ent->client->pers.nitmodFloodCount)
 			ent->client->pers.nitmodFloodWindowTime = 0;
 	}
@@ -1848,17 +1843,12 @@ void ClientEndFrame( gentity_t *ent ) {
 		// OSP -- range changed for MV
 		for ( i = 0 ; i < PW_NUM_POWERUPS ; i++ ) {
 
-			if(	i == PW_FIRE ||				// these aren't dependant on level.time
-				i == PW_ELECTRIC ||
-				i == PW_BLACKOUT ||
-				i == PW_BREATHER ||
-				i == PW_NOFATIGUE ||
-				ent->client->ps.powerups[i] == 0		// OSP
-				|| i == PW_OPS_CLASS_1
-				|| i == PW_OPS_CLASS_2
-				|| i == PW_OPS_CLASS_3
-				|| i == PW_OPS_DISGUISED
-				) {
+			/* Original 0x42673/0x42689 excludes wire slots 4 and 7..10.
+			 * BLACKOUT is maintained separately for the native admin adapter. */
+			if( i == PW_BLACKOUT || i == PW_NOFATIGUE ||
+				ent->client->ps.powerups[i] == 0 ||
+				i == PW_OPS_CLASS_1 || i == PW_OPS_CLASS_2 ||
+				i == PW_OPS_CLASS_3 || i == PW_OPS_DISGUISED ) {
 
 				continue;
 			}
@@ -1878,33 +1868,23 @@ void ClientEndFrame( gentity_t *ent ) {
 		}
 
 		{
-			int totalXP = 0;
-			/* Original truncates after each float addition, then splits the
-			 * total so both snapshot stats fit the engine's signed shorts. */
-			for(i = 0; i < SK_NUM_SKILLS; ++i)
-				totalXP = NITMOD_XPInteger((float)totalXP + ent->client->sess.skillpoints[i]);
+			int totalXP = NITMOD_TotalSkillXP(ent->client->sess.skillpoints);
 			NITMOD_SetSnapshotXP(&ent->client->ps, totalXP);
 		}
 
-		// OSP - If we're paused, make sure other timers stay in sync
-		//		--> Any new things in ET we should worry about?
+		/* Original 0x42843..0x428a2 shifts these nine integer clocks only.
+		 * SUB/ADD wrap in 32 bits, including the air deadline. */
 		if(level.match_pause != PAUSE_NONE) {
-			int time_delta = level.time - level.previousTime;
-
-			ent->client->airOutTime = NITMOD_ShiftAirDeadline( ent->client->airOutTime, time_delta );
-			ent->client->inactivityTime += time_delta;
-			ent->client->lastBurnTime += time_delta;
-			ent->client->pers.connectTime += time_delta;
-			ent->client->pers.enterTime += time_delta;
-			ent->client->pers.teamState.lastreturnedflag += time_delta;
-			ent->client->pers.teamState.lasthurtcarrier += time_delta;
-			ent->client->pers.teamState.lastfraggedcarrier += time_delta;
-			ent->client->ps.classWeaponTime += time_delta;
-//			ent->client->respawnTime += time_delta;
-//			ent->client->sniperRifleFiredTime += time_delta;
-			ent->lastHintCheckTime += time_delta;
-			ent->pain_debounce_time += time_delta;
-			ent->s.onFireEnd += time_delta;
+			uint32_t time_delta = (uint32_t)level.time - (uint32_t)level.previousTime;
+			ent->client->airOutTime = NITMOD_SupportSignedTime((uint32_t)ent->client->airOutTime + time_delta);
+			ent->client->inactivityTime = NITMOD_SupportSignedTime((uint32_t)ent->client->inactivityTime + time_delta);
+			ent->client->lastBurnTime = NITMOD_SupportSignedTime((uint32_t)ent->client->lastBurnTime + time_delta);
+			ent->client->pers.connectTime = NITMOD_SupportSignedTime((uint32_t)ent->client->pers.connectTime + time_delta);
+			ent->client->pers.enterTime = NITMOD_SupportSignedTime((uint32_t)ent->client->pers.enterTime + time_delta);
+			ent->client->ps.classWeaponTime = NITMOD_SupportSignedTime((uint32_t)ent->client->ps.classWeaponTime + time_delta);
+			ent->lastHintCheckTime = NITMOD_SupportSignedTime((uint32_t)ent->lastHintCheckTime + time_delta);
+			ent->pain_debounce_time = NITMOD_SupportSignedTime((uint32_t)ent->pain_debounce_time + time_delta);
+			ent->s.onFireEnd = NITMOD_SupportSignedTime((uint32_t)ent->s.onFireEnd + time_delta);
 		}
 
 	// save network bandwidth
@@ -1939,8 +1919,8 @@ void ClientEndFrame( gentity_t *ent ) {
 	}
 	}
 
-	// apply all the damage taken this frame
-	P_DamageFeedback (ent);
+	/* Original ClientEndFrame 0x42928..0x42993 goes directly from
+	 * disorientation to snapshot state; no legacy P_DamageFeedback pass. */
 
 	// add the EF_CONNECTION flag if we haven't gotten commands recently
 	if ( level.time - ent->client->lastCmdTime > 1000 ) {

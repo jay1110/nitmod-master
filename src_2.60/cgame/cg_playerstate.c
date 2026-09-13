@@ -6,6 +6,7 @@
 // when the snapshot transitions like all the other entities
 
 #include "cg_local.h"
+#include "cg_nitmod_hints.h"
 #include "cg_nitmod_config.h"
 #include "cg_nitmod_autoexec.h"
 #include "cg_nitmod_ammo.h"
@@ -142,6 +143,7 @@ A respawn happened this snapshot
 ================
 */
 void CG_Respawn( qboolean revived ) {
+	CG_NitmodResetArtilleryHint();
 	cg.serverRespawning = qfalse;	// Arnout: just in case
 
 	// no error decay on player movement
@@ -169,6 +171,7 @@ void CG_Respawn( qboolean revived ) {
 
 	trap_SendConsoleCommand( "-zoom\n" );
 	cg.binocZoomTime = 0;
+	cg.nitmodKnifeBlood = 0;
 
 
 	// clear pmext
@@ -241,12 +244,7 @@ void CG_CheckPlayerstateEvents( playerState_t *ps, playerState_t *ops ) {
 	int			event;
 	centity_t	*cent;
 
-	if ( ps->externalEvent && ps->externalEvent != ops->externalEvent ) {
-		cent = &cg_entities[ ps->clientNum ];
-		cent->currentState.event = ps->externalEvent;
-		cent->currentState.eventParm = ps->externalEventParm;
-		CG_EntityEvent( cent, cent->lerpOrigin );
-	}
+	/* Original 0x98830 processes only the predictable event ring here. */
 
 	cent = &cg.predictedPlayerEntity; // cg_entities[ ps->clientNum ];
 	// go through the predictable events buffer
@@ -490,5 +488,6 @@ void CG_TransitionPlayerState( playerState_t *ps, playerState_t *ops )
 	if ( ps->viewheight != ops->viewheight ) {
 		cg.duckChange = ps->viewheight - ops->viewheight;
 		cg.duckTime = cg.time;
+		cg.duckFromPlayDead = (ops->eFlags & EF_SPARE0) && !(ps->eFlags & EF_SPARE0);
 	}
 }

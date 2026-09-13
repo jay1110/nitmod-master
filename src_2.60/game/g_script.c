@@ -6,7 +6,7 @@
 // Tab Size:		4 (real tabs)
 //===========================================================================
 
-#include "../game/g_local.h"
+#include "g_nitmod_etbot_interface.h" /* includes g_local.h */
 #include "../game/q_shared.h"
 
 /*
@@ -117,6 +117,8 @@ qboolean G_ScriptAction_ConstructibleDuration( gentity_t *ent, char *params ) ;
 
 //bani
 qboolean etpro_ScriptAction_SetValues( gentity_t *ent, char *params );
+qboolean etpro_ScriptAction_DeleteEntity( gentity_t *ent, char *params );
+qboolean G_ScriptAction_Create( gentity_t *ent, char *params );
 
 // these are the actions that each event can call
 g_script_stack_action_t gScriptActions[] =
@@ -218,6 +220,8 @@ g_script_stack_action_t gScriptActions[] =
 
 //bani
 	{"set",							etpro_ScriptAction_SetValues},
+	{"create", G_ScriptAction_Create},
+	{"delete", etpro_ScriptAction_DeleteEntity},
 
 	{ "constructible_class",			G_ScriptAction_ConstructibleClass },
 	{ "constructible_chargebarreq",		G_ScriptAction_ConstructibleChargeBarReq },
@@ -253,6 +257,7 @@ g_script_event_define_t	gScriptEvents[] =
 	{"mg42",			G_Script_EventMatch_StringEqual},
 	{"message",			G_Script_EventMatch_StringEqual},	// contains a sequence of VO in a message
 
+	{"exploded", NULL},
 	{NULL,				NULL}
 };
 
@@ -600,13 +605,19 @@ void G_Script_ScriptParse( gentity_t *ent )
 				memset( params, 0, sizeof(params) );
 
 				// Ikkyo - Parse for {}'s if this is a set command
-				if( !Q_stricmp( action->actionString, "set" ) ) {
+				if( !Q_stricmp( action->actionString, "set" ) ||
+					!Q_stricmp( action->actionString, "create" ) ||
+					!Q_stricmp( action->actionString, "delete" ) ) {
 					token = COM_Parse( &pScript );
 					if( token[0] != '{' ) {
 						COM_ParseError( "'{' expected, found: %s.\n", token );
 					}
 
 					while( ( token = COM_Parse( &pScript ) ) && ( token[0] != '}') ) {
+						if( !token[0] ) {
+							G_Error("G_Script_ScriptParse(): unterminated %s block", action->actionString);
+							return;
+						}
 						if ( strlen( params ) )   // add a space between each param
 							Q_strcat( params, sizeof( params ), " " );
 
@@ -805,6 +816,34 @@ void G_Script_ScriptEvent( gentity_t *ent, char *eventStr, char *params )
 
 	if (i>=0)
 		G_Script_ScriptChange( ent, i );
+
+	/* Original 0xac0a0..0xac37e runs these notifications even when no
+	 * matching map-script handler exists, and after the handler returns. */
+	if( !strcmp(eventStr, "defused") || !strcmp(eventStr, "dynamited") ) {
+		qboolean defused = !strcmp(eventStr, "defused");
+		const char *track = ent->parent ? ent->parent->track : ent->track;
+		Bot_Util_SendTrigger( ent, NULL,
+			va(defused ? "Defused at %s." : "Planted at %s.", track), eventStr );
+		track = ent->parent ? ent->parent->track : ent->track;
+		G_LogPrintf( defused ? "nitmod popup: %s defused \"%s\"\n" :
+			"nitmod popup: %s planted \"%s\"\n", params, track );
+	} else if( !strcmp(eventStr, "destroyed") ) {
+		Bot_Util_SendTrigger( ent, NULL,
+			va("%s Destroyed.", ent->parent ? ent->parent->track : ent->track), eventStr );
+	} else if( !strcmp(eventStr, "exploded") ) {
+		Bot_Util_SendTrigger( ent, NULL, va("Explode_%s Exploded.", _GetEntityName(ent)), eventStr );
+	} else if( !strcmp(eventStr, "trigger") && params ) {
+		qboolean alliedFlag = ent->nitmodClassnameHash == 0x36af1;
+		if( !Q_stricmp(params, "stolen") )
+			G_LogPrintf( "nitmod popup: %s stole \"%s\"\n",
+				alliedFlag ? "axis" : "allies", ent->message );
+		else if( !Q_stricmp(params, "returned") )
+			G_LogPrintf( "nitmod popup: %s returned \"%s\"\n",
+				alliedFlag ? "allies" : "axis", ent->message );
+		else if( !Q_stricmp(params, "dropped") )
+			G_LogPrintf( "nitmod popup: %s dropped \"%s\"\n",
+				alliedFlag ? "axis" : "allies", ent->message );
+	}
 }
 
 /*

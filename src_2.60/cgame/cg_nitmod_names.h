@@ -3,8 +3,8 @@
 extern vmCvar_t cg_woundedNames;
 void CG_NitmodNamesReset(void);
 void CG_NitmodNamesBeginFrame(void);
-typedef struct { float alpha; int visibleTime, hiddenTime, lastTime; qboolean initialized; } nitmodNameFade_t;
-float CG_NitmodNameFade(nitmodNameFade_t *fade, qboolean visible, int now);
+typedef struct { float alpha; int visibleTime, hiddenTime; } nitmodNameFade_t;
+float CG_NitmodNameFade(nitmodNameFade_t *fade, qboolean visible, int now, float alpha);
 float CG_NitmodFloatNameScale(float distance);
 qboolean CG_NitmodQueueSpectatorName(const centity_t *cent);
 qboolean CG_NitmodQueueDynamiteName(const centity_t *cent);

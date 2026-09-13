@@ -28,6 +28,12 @@ void G_NITMOD_CurePoisonFromHealth(gentity_t *victim, gentity_t *provider,
 	 * victim using a health pack. A cabinet has no provider and always cures. */
 	if(!cabinet && (poisonOptions & 8) && provider && provider->client &&
 		victim->client->nitmodPoisonAttacker == provider->s.number) return;
+	if(cabinet) {
+		/* Original heal_touch clears only the flag and stack count. */
+		victim->client->ps.eFlags &= ~NITMOD_EF_POISONED;
+		victim->client->nitmodPoisonStacks = 0;
+		return;
+	}
 	G_NITMOD_ClearPoison(victim);
 }
 
@@ -39,8 +45,8 @@ qboolean G_NITMOD_PoisonAttack(gentity_t *attacker) {
 	 * so changing it to0 cannot disable a syringe the player already owns. */
 	if(!attacker || !attacker->client) return qfalse;
 	AngleVectors(attacker->client->ps.viewangles, direction, localRight, localUp);
-	/* Weapon_Poison keeps fractional coordinates and lowers the leaned
-	 * muzzle, unlike the ET activation helper (which also SnapVectors it). */
+	/* Original Weapon_Poison keeps fractional coordinates and lowers
+	 * the leaned muzzle. */
 	VectorCopy(attacker->s.pos.trBase, start);
 	/* Original ELF 0xf3590..0xf35c8, 0xf3770 and 0xf3820. */
 	if(attacker->health <= 0) start[2] += 25;
@@ -51,7 +57,7 @@ qboolean G_NITMOD_PoisonAttack(gentity_t *attacker) {
 	start[2] -= fabs(attacker->client->ps.leanf / 3.5f);
 	VectorMA(start, 64, direction, end);
 	G_HistoricalTrace(attacker, &trace, start, NULL, NULL, end,
-		attacker->s.number, MASK_SHOT);
+		attacker->s.number, MASK_SHOT, qfalse);
 	if(trace.fraction == 1 || trace.entityNum < 0 || trace.entityNum >= level.maxclients) return qfalse;
 	victim = &g_entities[trace.entityNum];
 	/* Original client+0x154 is the invulnerability powerup expiry, also

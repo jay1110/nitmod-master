@@ -10,20 +10,22 @@
 #include "../game/nitmod_clamp.h"
 
 qboolean Nit_RemoveWordInString( char *text, const char *word ) {
-	char *match;
-	size_t wordLength;
+	char *cursor;
+	size_t matched = 0, wordLength;
 
-	if ( !text || !word ) {
-		return qfalse;
-	}
+	if ( !text || !word ) return qfalse;
+	wordLength = strlen(word);
+	if ( !wordLength ) return qtrue;
 
-	wordLength = strlen( word );
-	if ( !wordLength ) {
-		return qtrue;
-	}
-
-	while ( ( match = strstr( text, word ) ) != NULL ) {
-		memmove( match, match + wordLength, strlen( match + wordLength ) + 1 );
+	/* Original 0x16490..0x164c3 keeps partial matches across mismatches
+	 * and resumes at the old read position after removing a match. */
+	for ( cursor = text; *cursor; ++cursor ) {
+		if ( *cursor == word[matched] ) ++matched;
+		if ( matched == wordLength ) {
+			char *next = cursor + 1;
+			memmove(next - matched, next, strlen(next) + 1);
+			matched = 0;
+		}
 	}
 
 	return qtrue;

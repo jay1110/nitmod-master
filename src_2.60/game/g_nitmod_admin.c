@@ -8,6 +8,7 @@
 #include "g_nitmod_records.h"
 #include "g_nitmod_legacy_cvars.h"
 #include "nitmod_admin_commands.h"
+#include "nitmod_support_time.h"
 #include "nitmod_lua_events.h"
 #include "../sqlite/sqlite3.h"
 #include <time.h>
@@ -975,8 +976,7 @@ static int DispatchAdminCommand(int n,const char *command,adminLogRequest_t *log
                 Print(n,va("^1%s error: ^9Player must be on a team^7\n",cursor));continue;
             }
             if(pip) {
-                gentity_t *event=G_TempEntity(g_entities[target].r.currentOrigin,EV_NITMOD_LUA_FIRST);
-                event->s.event=NITMOD_LuaEventEncode(61);
+                gentity_t *event=G_NITMOD_TempEventOriginal(g_entities[target].r.currentOrigin,61);
                 VectorCopy(g_entities[target].r.currentOrigin,event->s.origin);event->s.origin[2]-=6;
                 VectorCopy(g_entities[target].r.currentAngles,event->s.angles);
                 event->s.density=5000;event->s.frame=6000;
@@ -1048,7 +1048,7 @@ static int DispatchAdminCommand(int n,const char *command,adminLogRequest_t *log
         Q_strncpyz(value,hasAccount?account.user.guid:Info_ValueForKey(info,"n_guid"),sizeof(value));
         Print(n,strlen(value)==32?va("^9NGUID:  ^g%s\n",value):"^9NGUID:  ^1INVALID\n");
         Print(n,va("^9IP:     ^g%s\n",hasAccount?account.ip:Info_ValueForKey(info,"ip")));
-        Print(n,va("^9MAC:    ^g%s\n",hasAccount?account.mac:Info_ValueForKey(info,"mac")));
+        Print(n,va("^9MAC:    ^g%s\n",hasAccount?account.mac:G_NITMOD_AccountMAC(target)));
         Q_strncpyz(value,Info_ValueForKey(info,"etVersion"),sizeof(value));if(value[0]) Print(n,va("^9Client: ^g%s\n",value));
         Q_strncpyz(value,Info_ValueForKey(info,"build"),sizeof(value));if(value[0]) Print(n,va("^9Mod build: ^g%s\n",value));
         if(hasAccount) {
@@ -1089,8 +1089,7 @@ static int DispatchAdminCommand(int n,const char *command,adminLogRequest_t *log
         if(victim->client->sess.sessionTeam!=TEAM_AXIS && victim->client->sess.sessionTeam!=TEAM_ALLIES) { Print(n,"^1slap error: ^9Player must be on a team.^7\n");return 1; }
         if(victim->health<=0 || (victim->client->ps.pm_flags&PMF_LIMBO)) { Print(n,va("^1slap error: ^7%s ^9is dead.^7\n",victim->client->pers.netname));return 1; }
         victim->health=victim->health>damage?victim->health-damage:1;
-        event=G_TempEntity(victim->client->ps.origin,EV_NITMOD_LUA_FIRST);
-        event->s.event=NITMOD_LuaEventEncode(102);
+        event=G_NITMOD_TempEventOriginal(victim->client->ps.origin,102);
         event->s.onFireStart=2;event->r.svFlags=SVF_BROADCAST|SVF_SINGLECLIENT;event->r.singleClient=target;
         trap_SendServerCommand(-1,va("cpm \"^xslap: ^7%s ^9was slapped^7\"",victim->client->pers.netname));return 1;
     }
@@ -1182,21 +1181,28 @@ static int DispatchAdminCommand(int n,const char *command,adminLogRequest_t *log
         if(!reason[0]) Q_strncpyz(reason,"^7kicked by admin^7",sizeof(reason));
         duration=G_NITMOD_LegacyCvarInteger("g_autoTempBanTime",1800);
         if(G_NITMOD_LegacyCvarInteger("g_autoTempBan",0) && duration) {
-            nitmodDatabasePenalty_t penalty;qtime_t now;int timestamp=trap_RealTime(&now)-946490400;
-            long long expires=(long long)timestamp+duration;
+            nitmodDatabasePenalty_t penalty;qtime_t now;int unixTime=trap_RealTime(&now);
+            /* Original G_shrubbot_tempban (ELF 0xbda4a): wrapping 32-bit add/sub. */
+            int expires=NITMOD_SupportSignedTime((uint32_t)unixTime+(uint32_t)duration-UINT32_C(946490400));
             if(!G_NITMOD_ClientAccount(target,&account)) {
                 char userinfo[MAX_INFO_STRING];memset(&account,0,sizeof(account));trap_GetUserinfo(target,userinfo,sizeof(userinfo));
                 Q_strncpyz(account.user.guid,Info_ValueForKey(userinfo,"n_guid"),sizeof(account.user.guid));
                 Q_strncpyz(account.ip,Info_ValueForKey(userinfo,"ip"),sizeof(account.ip));
-                Q_strncpyz(account.mac,Info_ValueForKey(userinfo,"mac"),sizeof(account.mac));
+                Q_strncpyz(account.mac,G_NITMOD_AccountMAC(target),sizeof(account.mac));
             }
-            if(timestamp<0 || expires<0 || expires>2147483647 || strlen(account.user.guid)!=32) {
+            if(!unixTime || strlen(account.user.guid)!=32) {
                 Print(n,"^1kick error: ^9Cannot create temporary ban\n");
             } else {
             memset(&penalty,0,sizeof(penalty));
             Q_strncpyz(penalty.name,g_entities[target].client->pers.netname,36);
             Q_strncpyz(penalty.guid,account.user.guid,sizeof(penalty.guid));
-            Q_strncpyz(penalty.ip,account.ip,sizeof(penalty.ip));Q_strncpyz(penalty.mac,account.mac,sizeof(penalty.mac));
+            { char info[MAX_INFO_STRING],ip[64],*port;
+              trap_GetUserinfo(target,info,sizeof(info));
+              Q_strncpyz(ip,Info_ValueForKey(info,"ip"),sizeof(ip));
+              port=strchr(ip,':');if(port)*port=0;
+              Q_strncpyz(penalty.ip,ip,sizeof(penalty.ip)); }
+            /* G_shrubbot_tempban copies the live client MAC, not the user row. */
+            Q_strncpyz(penalty.mac,G_NITMOD_AccountMAC(target),sizeof(penalty.mac));
             Q_strncpyz(penalty.actor,"Temp Ban System",sizeof(penalty.actor));
             Com_sprintf(penalty.reason,sizeof(penalty.reason),"^7You have been kicked, Reason: %s^7",reason);
             Com_sprintf(penalty.made,sizeof(penalty.made),"%02d/%02d/%02d %02d:%02d:%02d",now.tm_mon+1,now.tm_mday,(now.tm_year+1900)%100,now.tm_hour,now.tm_min,now.tm_sec);

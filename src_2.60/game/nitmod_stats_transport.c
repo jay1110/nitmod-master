@@ -48,9 +48,15 @@ EM_JS(void,NITMOD_StatsCancel,(int client),{
     const slots=globalThis.__nitmodStatsRequests;const item=slots?.[client];
     if(item) { delete slots[client];item.controller.abort(); }
 });
+void NITMOD_StatsShutdown(void) {
+    int i;for(i=0;i<64;++i) NITMOD_StatsCancel(i);
+}
+#elif defined(_WIN32)
+#include "nitmod_stats_windows.inc"
 #else
 int NITMOD_StatsUpload(const char *url,const char *packet) { return 0; }
 int NITMOD_StatsStart(int client,const char *url,const char *guid) { return 0; }
 int NITMOD_StatsRead(int client,char *out,int size) { return -1; }
 void NITMOD_StatsCancel(int client) {}
+void NITMOD_StatsShutdown(void) {}
 #endif

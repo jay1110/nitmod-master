@@ -2,6 +2,11 @@
 #include "g_nitmod_legacy_cvars.h"
 #include "g_nitmod_antiwarp.h"
 
+/* Original i386 time/frame subtraction wraps before signed comparison. */
+static int WarpDelta(int newer, int older) {
+    return (int)((unsigned int)newer - (unsigned int)older);
+}
+
 extern void ClientThink_real(gentity_t *ent);
 extern void PmovePredict(pmove_t *move, float seconds);
 
@@ -13,7 +18,7 @@ qboolean G_NITMOD_DoAntiwarp(gentity_t *ent) {
     cl = ent->client;
     return cl->sess.sessionTeam != TEAM_SPECTATOR &&
         !(cl->ps.pm_flags & PMF_LIMBO) && !cl->pers.localClient &&
-        level.time - cl->pers.connectTime > 4999;
+        WarpDelta(level.time, cl->pers.connectTime) > 4999;
 }
 
 /* Original etpro_AddUsercmd: 512 commands; an overflowing enqueue replaces
@@ -40,15 +45,15 @@ void G_NITMOD_RunUsercmds(gentity_t *ent) {
     before = cl->nitmodWarpCount;
     now = trap_Milliseconds();
     if (now < cl->nitmodWarpTime) cl->nitmodWarpBudget = 0;
-    else cl->nitmodWarpBudget -= (float)(now - cl->nitmodWarpTime);
+    else cl->nitmodWarpBudget -= (float)(WarpDelta(now, cl->nitmodWarpTime));
     if (cl->nitmodWarpCount < 2 && cl->nitmodWarpBudget < 0) cl->nitmodWarpBudget = 0;
     cl->nitmodWarpTime = now;
     previous = cl->ps.commandTime;
     latest = cl->nitmodWarpCommands[(cl->nitmodWarpHead + cl->nitmodWarpCount - 1) % 512].serverTime;
     while (cl->nitmodWarpCount > 0) {
         usercmd_t *cmd = &cl->nitmodWarpCommands[cl->nitmodWarpHead];
-        int originalTime = cmd->serverTime, age = latest - originalTime;
-        int msec = originalTime - previous, step;
+        int originalTime = cmd->serverTime, age = WarpDelta(latest, originalTime);
+        int msec = WarpDelta(originalTime, previous), step;
         float scale, cost;
         if (age >= dropAge) {
             cl->ps.commandTime = previous = originalTime;
@@ -73,7 +78,7 @@ void G_NITMOD_RunUsercmds(gentity_t *ent) {
                 RunCommand(ent, cmd);
                 previous = cl->ps.commandTime;
             } else {
-                cmd->serverTime = previous + step;
+                cmd->serverTime = (int)((unsigned int)previous + (unsigned int)step);
                 RunCommand(ent, cmd);
                 cmd->serverTime = originalTime;
                 /* A denial/disconnect in the native think path must not spin. */
@@ -88,20 +93,21 @@ void G_NITMOD_RunUsercmds(gentity_t *ent) {
         --cl->nitmodWarpCount;
     }
     /* Original ps +0xec, the otherwise unused multiplayer stats[7]. */
-    cl->ps.stats[STAT_CAPTUREHOLD_BLUE] = latest - previous;
+    cl->ps.stats[STAT_CAPTUREHOLD_BLUE] = WarpDelta(latest, previous);
     if (G_NITMOD_LegacyCvarInteger("g_antiwarp", 1) & 32)
         trap_SendServerCommand(ent - g_entities, va("cp \"%d %d\n\"",
-            latest - previous, before - cl->nitmodWarpCount));
+            WarpDelta(latest, previous), before - cl->nitmodWarpCount));
 }
 
 void G_NITMOD_PrepareUsercmd(gentity_t *ent) {
     gclient_t *cl = ent->client;
     int maximum = G_NITMOD_LegacyCvarInteger("g_maxWarp", 4);
     if (cl->nitmodWarpPending && maximum && G_NITMOD_DoAntiwarp(ent)) {
-        int frames = level.framenum - cl->nitmodLastUpdateFrame;
+        int frames = WarpDelta(level.framenum, cl->nitmodLastUpdateFrame);
         if (frames > maximum) frames = maximum;
         cl->nitmodWarpCorrected = qtrue;
-        cl->ps.commandTime = level.previousTime + frames * (level.previousTime - level.time);
+        cl->ps.commandTime = (int)((unsigned int)level.previousTime + (unsigned int)frames *
+            (unsigned int)WarpDelta(level.previousTime, level.time));
     }
     cl->nitmodWarpPending = qfalse;
     cl->nitmodLastUpdateFrame = level.framenum;
@@ -142,7 +148,7 @@ void G_NITMOD_PredictPmove(gentity_t *ent, float seconds) {
 
 void G_NITMOD_SkipCorrection(gentity_t *ent) {
     gclient_t *cl = ent->client;
-    int missed = level.framenum - cl->nitmodLastUpdateFrame - 1;
+    int missed = WarpDelta(WarpDelta(level.framenum, cl->nitmodLastUpdateFrame), 1);
     int maximum = G_NITMOD_LegacyCvarInteger("g_maxWarp", 4);
     cl->ps.eFlags &= ~EF_CONNECTION;
     if (maximum && missed > maximum && G_NITMOD_DoAntiwarp(ent)) cl->nitmodWarpPending = qtrue;

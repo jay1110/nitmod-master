@@ -44,87 +44,31 @@ static int G_NITMOD_AddPickupHealth(int health, int amount, int maximum) {
 }
 
 int Pickup_Powerup( gentity_t *ent, gentity_t *other ) {
-	int			quantity;
-	int			i;
-	gclient_t	*client;
+	gclient_t *client = other->client;
+	int powerup = ent->item->giTag;
+	int quantity = ent->item->quantity;
 
-	if ( !other->client->ps.powerups[ent->item->giTag] ) {
-
-		// some powerups are time based on how long the powerup is /used/
-		// rather than timed from when the player picks it up.
-		if(ent->item->giTag == PW_NOFATIGUE) {
-		} else {
-			// round timing to seconds to make multiple powerup timers
-			// count in sync
-			other->client->ps.powerups[ent->item->giTag] = level.time - ( level.time % 1000 );
+	/* Original tags are translated to the native powerup slots. */
+	if( powerup == PW_OPS_DISGUISED ) {
+		client->ps.eFlags &= ~EF_SPARE3;
+		if( client->sess.sessionTeam != ent->item->giAmmoIndex ) {
+			client->ps.powerups[PW_OPS_DISGUISED] = 1;
+			client->ps.powerups[PW_OPS_CLASS_1] = quantity & 1;
+			client->ps.powerups[PW_OPS_CLASS_2] = quantity & 2;
+			client->ps.powerups[PW_OPS_CLASS_3] = quantity & 4;
+			Q_strncpyz(client->disguiseNetname, client->pers.netname,
+				sizeof(client->disguiseNetname));
+			client->disguiseRank = client->sess.rank;
+			ClientUserinfoChanged(other->s.clientNum);
 		}
+	} else if( powerup == PW_BREATHER ) {
+		client->ps.eFlags &= ~EF_HEADSHOT;
+	} else if( powerup >= 0 && powerup < MAX_POWERUPS ) {
+		/* Quantities are milliseconds; no seconds rounding or stacking. */
+		client->ps.powerups[powerup] = powerup == PW_NOFATIGUE || quantity == INT_MAX ?
+			quantity : (int)((unsigned int)level.time + (unsigned int)quantity);
 	}
-
-	// if an amount was specified in the ent, use it
-	if ( ent->count ) {
-		quantity = ent->count;
-	} else {
-		quantity = ent->item->quantity;
-	}
-
-	other->client->ps.powerups[ent->item->giTag] += quantity * 1000;
-
-
-	// brandy also gives a little health (10)
-	if(ent->item->giTag == PW_NOFATIGUE) {
-		if(Q_stricmp(ent->item->classname, "item_stamina_brandy") == 0) {
-			other->health = G_NITMOD_AddPickupHealth(other->health, 10,
-				other->client->ps.stats[STAT_MAX_HEALTH]);
-			other->client->ps.stats[STAT_HEALTH] = other->health;
-		}
-	}
-
-
-	// give any nearby players a "denied" anti-reward
-	for ( i = 0 ; i < level.maxclients ; i++ ) {
-		vec3_t		delta;
-		float		len;
-		vec3_t		forward;
-		trace_t		tr;
-
-		client = &level.clients[i];
-		if ( client == other->client ) {
-			continue;
-		}
-		if ( client->pers.connected == CON_DISCONNECTED ) {
-			continue;
-		}
-		if ( client->ps.stats[STAT_HEALTH] <= 0 ) {
-			continue;
-		}
-
-		// if too far away, no sound
-		VectorSubtract( ent->s.pos.trBase, client->ps.origin, delta );
-		len = VectorNormalize( delta );
-		if ( len > 192 ) {
-			continue;
-		}
-
-		// if not facing, no sound
-		AngleVectors( client->ps.viewangles, forward, NULL, NULL );
-		if ( DotProduct( delta, forward ) < 0.4 ) {
-			continue;
-		}
-
-		// if not line of sight, no sound
-		trap_Trace( &tr, client->ps.origin, NULL, NULL, ent->s.pos.trBase, ENTITYNUM_NONE, CONTENTS_SOLID );
-		if ( tr.fraction != 1.0 ) {
-			continue;
-		}
-	}
-
-	if(ent->s.density == 2) {	// multi-stage health first stage
-		return RESPAWN_PARTIAL;
-	} else if(ent->s.density == 1) {	// last stage, leave the plate
-		return RESPAWN_PARTIAL_DONE;
-	}
-
-	return RESPAWN_POWERUP;
+	return RESPAWN_SP;
 }
 
 //----(SA) Wolf keys
@@ -383,17 +327,16 @@ Pickup_Ammo
 ==============
 */
 int Pickup_Ammo (gentity_t *ent, gentity_t *other) {
-	// added some ammo pickups, so I'll use ent->item->quantity if no ent->count
-	if (ent->count)
-	{
-		Add_Ammo (other, ent->item->giTag, ent->count, qfalse);
-	}
+	int density = ent->s.density ? ent->s.density : 1;
+	/* Original Pickup_Ammo 0x720de: same drop lockout as weapon pickup. */
+	if((int)((unsigned int)level.time - (unsigned int)other->client->dropWeaponTime) < 1000)
+		return 0;
+	if(ent->item->giTag == WP_AMMO)
+		AddMagicAmmo(other, (int)((unsigned int)ent->count * (unsigned int)density));
 	else
-	{
-		Add_Ammo (other, ent->item->giTag, ent->item->quantity, qfalse);
-	}
-
-	return RESPAWN_AMMO;
+		Add_Ammo(other, ent->item->giTag, ent->count ? ent->count :
+			(int)((unsigned int)ent->item->quantity * (unsigned int)density), qfalse);
+	return ent->s.density == 2 ? RESPAWN_PARTIAL : RESPAWN_SP;
 }
 
 // xkan, 9/18/2002 - Extracted AddMagicAmmo from Pickup_Weapon()
@@ -740,6 +683,7 @@ int Pickup_Weapon( gentity_t *ent, gentity_t *other ) {
 
 int Pickup_Health (gentity_t *ent, gentity_t *other) {
 	int			max;
+	int amount;
 //	int			quantity = 0;
 	/* Last supplier powers chat substitution; it is not a reward/assist
 	 * eligibility flag. Original Pickup_Health updates it for medics too. */
@@ -769,8 +713,15 @@ int Pickup_Health (gentity_t *ent, gentity_t *other) {
 	max = BG_EffectiveMaxHealth(&other->client->ps);
 	G_NITMOD_CurePoisonFromHealth(other, ent->parent, qfalse);
 
-	other->health = G_NITMOD_AddPickupHealth(other->health, ent->item->quantity, max);
+	/* Original 0x72622..72664: staged quantity precedes supplier reward. */
+	amount = ent->s.density == 2 ? (int)((unsigned int)ent->item->quantity * 2u) :
+		(ent->s.density == 0 || ent->s.density == 1) ? ent->item->quantity : 0;
+	if(ent->parent && ent->parent->client &&
+	   (ent->parent->client->sess.nitmodSkillMasks[SK_FIRST_AID] & 32u))
+		amount = (int)((unsigned int)amount + 10u);
+	other->health = G_NITMOD_AddPickupHealth(other->health, amount, max);
 	other->client->ps.stats[STAT_HEALTH] = other->health;
+	if(ent->s.density == 2) return RESPAWN_PARTIAL;
 	if (ent->parent) {
 		Bot_Event_Healed(other - g_entities, ent->parent);
 	}
@@ -910,6 +861,9 @@ void Touch_Item( gentity_t *ent, gentity_t *other, trace_t *trace ) {
 	case IT_HEALTH:
 		respawn = Pickup_Health(ent, other);
 		break;
+	case IT_AMMO:
+		respawn = Pickup_Ammo(ent, other);
+		break;
 	case IT_TEAM:
 		respawn = Pickup_Team(ent, other);
 		break;
@@ -939,7 +893,7 @@ void Touch_Item( gentity_t *ent, gentity_t *other, trace_t *trace ) {
 
 	// powerup pickups are global broadcasts
 	if ( ent->item->giType == IT_TEAM ) {
-		gentity_t* te = G_TempEntity( ent->s.pos.trBase, EV_GLOBAL_ITEM_PICKUP );
+		gentity_t* te = G_NITMOD_TempEvent( ent->s.pos.trBase, EV_GLOBAL_ITEM_PICKUP );
 		te->s.eventParm = ent->s.modelindex;
 		te->r.svFlags |= SVF_BROADCAST;
 	}
@@ -948,6 +902,13 @@ void Touch_Item( gentity_t *ent, gentity_t *other, trace_t *trace ) {
 
 	// fire item targets
 	G_UseTargets (ent, other);
+
+	/* Original Touch_Item 0x740c3/0x74222: retain the next visible stage. */
+	if(respawn == RESPAWN_PARTIAL && --ent->s.density) {
+		ent->active = qtrue;
+		trap_LinkEntity(ent);
+		return;
+	}
 
 	// dropped items will not respawn
 	if ( ent->flags & FL_DROPPED_ITEM ) {
@@ -1049,7 +1010,7 @@ gentity_t *LaunchItem( gitem_t *item, vec3_t origin, vec3_t velocity, int ownerN
 		dropped->nextthink = level.time + 30000;
 
 		if( level.gameManager ) {
-			G_Script_ScriptEvent( level.gameManager, "trigger", flag->item->giTag == PW_REDFLAG ? "allied_object_dropped" : "axis_object_dropped" );
+			G_Script_ScriptEvent( level.gameManager, "trigger", flag->item && flag->item->giTag == PW_REDFLAG ? "allied_object_dropped" : "axis_object_dropped" );
 		}
 		G_Script_ScriptEvent( flag, "trigger", "dropped" );
 	} else { // auto-remove after 30 seconds
@@ -1059,6 +1020,12 @@ gentity_t *LaunchItem( gitem_t *item, vec3_t origin, vec3_t velocity, int ownerN
 	}
 
 	dropped->flags = FL_DROPPED_ITEM;
+
+	/* Original supply stages depend on the first two model slots only. */
+	if( item->giType == IT_HEALTH || item->giType == IT_AMMO ) {
+		dropped->s.density = !item->world_model[0] ? -1 :
+			(item->world_model[1] != NULL);
+	}
 
 	trap_LinkEntity (dropped);
 
@@ -1211,14 +1178,10 @@ void FinishSpawningItem( gentity_t *ent ) {
 
 	// health/ammo can potentially be multi-stage (multiple use)
 	if( ent->item->giType == IT_HEALTH || ent->item->giType == IT_AMMO ) {
-		int i;
-
-		// having alternate models defined in bg_misc.c for a health or ammo item specify it as "multi-stage"
-    // TTimo left-hand operand of comma expression has no effect
-		// initial line: for(i=0;i<4,ent->item->world_model[i];i++) {}
-		for(i=0; i<4 && ent->item->world_model[i] ;i++) {}
-
-		ent->s.density = i-1;	// store number of stages in 'density' for client (most will have '1')
+		/* Original FinishSpawningItem uses the same two model checks as
+		 * LaunchItem, rather than counting native ET's extra model slots. */
+		ent->s.density = !ent->item->world_model[0] ? -1 :
+			(ent->item->world_model[1] != NULL);
 	}
 
 	trap_LinkEntity (ent);
@@ -1325,7 +1288,8 @@ void G_BounceItem( gentity_t *ent, trace_t *trace ) {
 	int		hitTime;
 
 	// reflect the velocity on the trace plane
-	hitTime = level.previousTime + ( level.time - level.previousTime ) * trace->fraction;
+	/* Preserve the original intermediate precision until integer truncation. */
+	hitTime = (int)(level.previousTime + ( level.time - level.previousTime ) * (double)trace->fraction);
 	BG_EvaluateTrajectoryDelta( &ent->s.pos, hitTime, velocity, qfalse, ent->s.effect2Time );
 	dot = DotProduct( velocity, trace->plane.normal );
 	VectorMA( velocity, -2*dot, trace->plane.normal, ent->s.pos.trDelta );
@@ -1566,7 +1530,7 @@ void G_RunItem( gentity_t *ent ) {
 	contents = trap_PointContents( ent->r.currentOrigin, -1 );
 	if ( contents & CONTENTS_NODROP ) {
 		if (ent->item && ent->item->giType == IT_TEAM) {
-			Team_ReturnFlag(ent);
+			Team_ReturnFlag(ent, NULL);
 		} else {
 			G_FreeEntity( ent );
 		}
@@ -1579,7 +1543,8 @@ void G_RunItem( gentity_t *ent ) {
 		gentity_t *hit = &g_entities[tr.entityNum];
 		vec3_t velocity, direction;
 		float speed;
-		int hitTime = level.previousTime + (level.time-level.previousTime)*tr.fraction;
+		/* Original x87 calculation converts only after adding previousTime. */
+		int hitTime = (int)(level.previousTime + (level.time-level.previousTime)*(double)tr.fraction);
 		BG_EvaluateTrajectoryDelta(&ent->s.pos, hitTime, velocity, qfalse, ent->s.effect2Time);
 		VectorCopy(velocity, direction);
 		VectorNormalize(direction);
@@ -1588,9 +1553,11 @@ void G_RunItem( gentity_t *ent ) {
 			if((g_friendlyFire.integer & 1) || g_gametype.integer == GT_WOLF_DM ||
 			   !ent->parent || !OnSameTeam(ent->parent, hit))
 				G_Damage(hit, ent, ent->parent, direction, tr.endpos,
-					(int)((speed-300.f)/20.f + ent->damage), 0, ent->methodOfDeath);
+					/* Keep intermediates wide until the integer conversion, as in
+					 * the original x87 path (0x75b81..0x75bb9). */
+					(int)(((double)speed-300.0)/20.0 + ent->damage), 0, ent->methodOfDeath);
 			if(hit->client && hit->takedamage) {
-				gentity_t *impact = G_TempEntity(tr.endpos, EV_MISSILE_HIT);
+				gentity_t *impact = G_NITMOD_TempEvent(tr.endpos, EV_MISSILE_HIT);
 				impact->s.otherEntityNum = hit->s.number;
 				impact->s.weapon = ent->s.weapon;
 				impact->s.clientNum = ent->r.ownerNum;

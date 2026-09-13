@@ -13,6 +13,7 @@ float G_NITMOD_WeaponMovementScale(int weapon);
 int G_NITMOD_WeaponFalloffMode(int weapon, int fallback);
 int G_NITMOD_WeaponHeadshotAllowed(int weapon, int fallback);
 int G_NITMOD_WeaponGibAllowed(int weapon, int fallback);
+int G_NITMOD_ScaleDamage(int damage, float ratio);
 int G_NITMOD_HeadshotDamage(int weapon, int damage);
 int G_NITMOD_WeaponRecoil(int weapon, struct nitmodWeaponRecoil_s *recoil);
 int G_NITMOD_WeaponNoMidclipReload(int weapon);

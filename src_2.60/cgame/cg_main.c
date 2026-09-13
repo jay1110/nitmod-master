@@ -863,18 +863,14 @@ void CG_nameCleanFilename(const char *pszIn, char *pszOut, unsigned int dwOutSiz
 char *CG_generateFilename(void)
 {
 	qtime_t ct;
-//	int index = (cg.snap == NULL || (cg.snap->ps.pm_flags & PMF_LIMBO)) ? cg.clientNum : cg.snap->ps.clientNum;
-//	char strCleanName[64];
-	const char *pszServerInfo = CG_ConfigString(CS_SERVERINFO);
-//	const char *pszPlayerInfo = CG_ConfigString(CS_PLAYERS + index);
+	const char *serverInfo = CG_ConfigString(CS_SERVERINFO);
 
 	trap_RealTime(&ct);
-//	CG_nameCleanFilename(Info_ValueForKey(pszPlayerInfo, "n"), strCleanName, sizeof(strCleanName));
-	return(va("%d-%02d-%02d-%02d%02d%02d-%s%s",
-								1900+ct.tm_year, ct.tm_mon+1,ct.tm_mday,
-								ct.tm_hour, ct.tm_min, ct.tm_sec,
-								Info_ValueForKey(pszServerInfo, "mapname"),
-								(cg.mvTotalClients < 1) ? "" : "-MVD"));
+	/* Original CG_generateFilename (0x82dd0) has no multiview suffix. */
+	return va("%d-%02d-%02d-%02d%02d%02d-%s",
+		1900 + ct.tm_year, ct.tm_mon + 1, ct.tm_mday,
+		ct.tm_hour, ct.tm_min, ct.tm_sec,
+		Info_ValueForKey(serverInfo, "mapname"));
 }
 
 int CG_findClientNum(char *s)
@@ -893,7 +889,10 @@ int CG_findClientNum(char *s)
 
 	// numeric values are just slot numbers
 	if(fIsNumber) {
-		id = atoi(s);
+		long long parsed = strtoll(s, NULL, 10);
+		/* Match the original 32-bit strtol range on every host. */
+		id = parsed > 2147483647LL ? 2147483647 :
+			parsed < (-2147483647LL - 1) ? (-2147483647 - 1) : (int)parsed;
 		if(id >= 0 && id < cgs.maxclients && cgs.clientinfo[id].infoValid) return(id);
 	}
 
@@ -903,10 +902,10 @@ int CG_findClientNum(char *s)
 		if(!cgs.clientinfo[id].infoValid) continue;
 
 		BG_cleanName(cgs.clientinfo[id].name, n2, sizeof(n2), qfalse);
-		if(!Q_stricmp(n2, s2)) return(id);
+		if(!strcmp(n2, s2)) return(id);
 	}
 
-	CG_Printf("[cgnotify]%s ^3%s^7 %s.\n", CG_TranslateString("User"), s, CG_TranslateString("is not on the server"));
+	CG_Printf("[cgnotify]User ^3%s ^7is not on the server.\n", s);
 	return(-1);
 }
 
@@ -1289,6 +1288,10 @@ static void CG_RegisterSounds( void ) {
 		cgs.media.sfx_brassSound[BRASSSOUND_SOFT][i] =	trap_S_RegisterSound (va("sound/weapons/misc/shell_soft%i.wav",		i + 1), qfalse );
 		cgs.media.sfx_brassSound[BRASSSOUND_STONE][i] =	trap_S_RegisterSound (va("sound/weapons/misc/shell_stone%i.wav",	i + 1), qfalse );
 		cgs.media.sfx_brassSound[BRASSSOUND_WOOD][i] =	trap_S_RegisterSound (va("sound/weapons/misc/shell_wood%i.wav",		i + 1), qfalse );
+		cgs.media.sfx_shotgunBrassSound[BRASSSOUND_METAL][i] = trap_S_RegisterSound(va("sound/weapons/misc/sg_shell_metal%i.wav", i + 1), qfalse);
+		cgs.media.sfx_shotgunBrassSound[BRASSSOUND_SOFT][i] = trap_S_RegisterSound(va("sound/weapons/misc/sg_shell_soft%i.wav", i + 1), qfalse);
+		cgs.media.sfx_shotgunBrassSound[BRASSSOUND_STONE][i] = trap_S_RegisterSound(va("sound/weapons/misc/sg_shell_stone%i.wav", i + 1), qfalse);
+		cgs.media.sfx_shotgunBrassSound[BRASSSOUND_WOOD][i] = trap_S_RegisterSound(va("sound/weapons/misc/sg_shell_wood%i.wav", i + 1), qfalse);
 		cgs.media.sfx_rubbleBounce[i] =					trap_S_RegisterSound (va("sound/world/debris%i.wav",				i + 1), qfalse );
 	}
 	cgs.media.sfx_knifehit[0] =				trap_S_RegisterSound ("sound/weapons/knife/knife_hit1.wav", qfalse );
@@ -2728,6 +2731,36 @@ Will perform callbacks to make the loading info screen update.
 #define DEBUG_INITPROFILE_INIT int elapsed, dbgTime = trap_Milliseconds();
 #define DEBUG_INITPROFILE_EXEC(f) if( developer.integer ) { CG_Printf("^5%s passed in %i msec\n", f, elapsed = trap_Milliseconds()-dbgTime );  dbgTime += elapsed; }
 #endif // _DEBUG
+/* Original CG_RestoreProfile (0x83d90), called before binding migration. */
+static void CG_RestoreProfile(void) {
+    char profile[256], path[256], backup[256], data[1024];
+    fileHandle_t input = 0, output = 0;
+    int length, count;
+    trap_Cvar_VariableStringBuffer("cl_profile", profile, sizeof(profile));
+    Com_sprintf(path, sizeof(path), "profiles/%s/etconfig.cfg", profile);
+    Com_sprintf(backup, sizeof(backup), "profiles/%s/etconfig.cfg.bak", profile);
+    length = trap_FS_FOpenFile(backup, &input, FS_READ);
+    if(length <= 0) {
+        if(input) trap_FS_FCloseFile(input);
+        return;
+    }
+    if(trap_FS_FOpenFile(path, &output, FS_WRITE) < 0 || !output) {
+        CG_Printf("RestoreProfile: could not open %s.\n", path);
+        trap_FS_FCloseFile(input);
+        return;
+    }
+    while(length > 0) {
+        count = length < sizeof(data) ? length : sizeof(data);
+        trap_FS_Read(data, count, input);
+        trap_FS_Write(data, count, output);
+        length -= count;
+    }
+    trap_FS_FCloseFile(output);
+    trap_FS_FCloseFile(input);
+    trap_FS_Delete(backup);
+    CG_Printf("Old forced cvars cleaned.\n");
+}
+
 void CG_Init( int serverMessageNum, int serverCommandSequence, int clientNum, qboolean demoPlayback, qboolean isLegacyClient ) {
 	const char	*s;
 	int			i;
@@ -2949,6 +2982,7 @@ void CG_Init( int serverMessageNum, int serverCommandSequence, int clientNum, qb
 	/* A Nitmod server sends extensions only after this explicit handshake. */
 	NITMOD_AdvertiseCapabilities();
 	NITMOD_BeginOriginalSession();
+	CG_RestoreProfile();
 	CG_NitmodMigrateAltWeaponBindings();
 
 #ifdef _DEBUG

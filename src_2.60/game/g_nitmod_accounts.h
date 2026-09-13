@@ -3,6 +3,7 @@
 #include "nitmod_database.h"
 #include "g_nitmod_database.h"
 int G_NITMOD_AccountUserinfo(int clientNum,const char *userinfo);
+const char *G_NITMOD_AccountMAC(int clientNum);
 void G_NITMOD_AccountReset(int clientNum);
 unsigned int G_NITMOD_AccountConnectionGeneration(int clientNum);
 unsigned int G_NITMOD_AccountsMapGeneration(void);
@@ -10,6 +11,7 @@ void G_NITMOD_AccountBegin(int clientNum);
 int G_NITMOD_AccountCommand(int clientNum,const char *command);
 void G_NITMOD_AccountSaveXP(int clientNum);
 void G_NITMOD_AccountsSaveAllXP(void);
+void G_NITMOD_AccountsClearXP(void);
 void G_NITMOD_AccountsMapStart(void);
 const char *G_NITMOD_DatabaseBanReason(const char *userinfo);
 int G_NITMOD_AccountMuted(int clientNum);

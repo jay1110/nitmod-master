@@ -407,15 +407,15 @@ qboolean CG_NitmodMapVoteKeyEvent( int key, qboolean down ) {
     maxOffset = count > NITMOD_MAPVOTE_VISIBLE ? count - NITMOD_MAPVOTE_VISIBLE : 0;
     if(cgs.nitmodMapVoteOffset < 0) cgs.nitmodMapVoteOffset = 0;
     if(cgs.nitmodMapVoteOffset > maxOffset) cgs.nitmodMapVoteOffset = maxOffset;
-    if(key == K_MWHEELUP || key == K_UPARROW) {
+    if(key == K_MWHEELUP) {
         if(cgs.nitmodMapVoteOffset > 0) --cgs.nitmodMapVoteOffset;
         return qtrue;
     }
-    if(key == K_MWHEELDOWN || key == K_DOWNARROW) {
+    if(key == K_MWHEELDOWN) {
         if(cgs.nitmodMapVoteOffset < maxOffset) ++cgs.nitmodMapVoteOffset;
         return qtrue;
     }
-    if(key == K_ENTER) return CG_NitmodMapVoteCast(cgs.nitmodMapVoteMulti ? 3 : 1);
+    /* Enter belongs to the debriefing chat; original vote buttons accept only Mouse1. */
     if(key != K_MOUSE1) return qfalse;
     if(CG_MapVoteInside(cgs.cursorX, cgs.cursorY, &mapVoteScrollbar.rect)) {
         CG_Debriefing_ScrollCheckOffset(&mapVoteScrollbar);

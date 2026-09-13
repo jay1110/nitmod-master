@@ -1,5 +1,6 @@
 #include "g_local.h"
 #include "g_nitmod_mdx.h"
+#include "g_nitmod_hitboxdebug.h"
 #include "g_nitmod_legacy_cvars.h"
 
 /* Original G_AntilagSafe / G_ReAdjustSingleClientPosition 0x451b0. */
@@ -116,27 +117,18 @@ void G_AdjustClientPositions( gentity_t* ent, int time, qboolean forward ) {
 }
 
 void G_ResetMarkers( gentity_t* ent ) {
-	int	i, time;
-	char	buffer[ MAX_CVAR_VALUE_STRING ];
-	float	period;
+	int i;
 
-	trap_Cvar_VariableStringBuffer( "sv_fps", buffer, sizeof( buffer ) - 1 );
-
-	period = atoi( buffer );
-	if( !period ) {
-		period = 50;
-	} else {
-		period = 1000.f / period;
-	}
-
+	/* Original G_ResetMarkers 0x45740 initializes all 17 times to zero. */
 	ent->client->topMarker = MAX_CLIENT_MARKERS - 1;
-	for( i = MAX_CLIENT_MARKERS - 1, time = level.time; i >= 0; i--, time -= period ) {
+	for( i = MAX_CLIENT_MARKERS - 1; i >= 0; i-- ) {
 		VectorCopy( ent->r.mins, ent->client->clientMarkers[i].mins );
 		VectorCopy( ent->r.maxs, ent->client->clientMarkers[i].maxs );
 		VectorCopy( ent->r.currentOrigin, ent->client->clientMarkers[i].origin );
-		ent->client->clientMarkers[i].time = time;
-		G_NITMOD_MDXStoreMarker(ent,i);
+		ent->client->clientMarkers[i].time = 0;
+		G_NITMOD_MDXInitializeMarker(ent,i);
 	}
+	G_NITMOD_MDXFinishMarkerReset(ent);
 }
 
 /* Recovered nitrox_HitboxHeight (qagame 0x0010f460). */
@@ -174,12 +166,11 @@ void G_AttachBodyParts(gentity_t* ent) {
 		list = g_entities + level.sortedClients[i];
 		// Gordon: ok lets test everything under the sun
 	 	if( list->inuse && 
- 			(list->client->sess.sessionTeam == TEAM_AXIS || list->client->sess.sessionTeam == TEAM_ALLIES) && 
+			(list->client->sess.sessionTeam != TEAM_SPECTATOR) &&
  			(list != ent) &&
  			list->r.linked &&
- 			(list->health > 0) &&
- 			!(list->client->ps.pm_flags & PMF_LIMBO) &&
-			(list->client->ps.pm_type == PM_NORMAL)
+			!(list->client->ps.pm_flags & PMF_LIMBO) &&
+			(list->client->ps.pm_type == PM_NORMAL || list->client->ps.pm_type == PM_DEAD)
 		) {
 			list->client->tempHead = G_BuildHead( list );
 			list->client->tempLeg = G_BuildLeg( list );
@@ -193,6 +184,7 @@ void G_AttachBodyParts(gentity_t* ent) {
 				list->r.maxs[1] -= 3.0f;
 			}
 			list->r.maxs[2] = G_NITMOD_HitboxHeight( list, ent );
+			if (g_antilag.integer & 2) G_NITMOD_DrawAttachedHitboxes(list);
 		} else {
 			list->client->tempHead = NULL;
 			list->client->tempLeg = NULL;
@@ -240,20 +232,52 @@ int G_SwitchBodyPartEntity(gentity_t* ent) {
 		results->entityNum = res;				\
 	}
 
+/* Original DetectHitZone: recover the temporary part before detachment. */
+static void G_NITMOD_HistoricalRegion(gentity_t *attacker,trace_t *result,
+ const vec3_t start,const vec3_t end) {
+ gentity_t *part=&g_entities[result->entityNum];
+ int targetNum=G_SwitchBodyPartEntity(part),region=HR_BODY;
+ gentity_t *target=&g_entities[targetNum];
+ trace_t detail;
+ G_NITMOD_MDXEndDamage();
+ attacker->nitmodLastTraceRegion=-1;
+ if(!target->client) return;
+ if(part->s.eType==ET_TEMPHEAD) region=HR_HEAD;
+ else if(part->s.eType==ET_TEMPLEGS) region=HR_LEGS;
+ else {
+  trap_Trace(&detail,start,NULL,NULL,end,targetNum,MASK_SHOT);
+  part=&g_entities[detail.entityNum];
+  if(part->parent==target) {
+   if(part->s.eType==ET_TEMPHEAD) region=HR_HEAD;
+   else if(part->s.eType==ET_TEMPLEGS) region=HR_LEGS;
+  }
+ }
+ attacker->nitmodLastTraceRegion=region;
+ G_NITMOD_MDXBeginDamage(attacker,target,region);
+}
+
 // Run a trace with players in historical positions.
-void G_HistoricalTrace( gentity_t* ent, trace_t *results, const vec3_t start, const vec3_t mins, const vec3_t maxs, const vec3_t end, int passEntityNum, int contentmask ) {
-	int res;
+void G_HistoricalTrace( gentity_t* ent, trace_t *results, const vec3_t start, const vec3_t mins, const vec3_t maxs, const vec3_t end, int passEntityNum, int contentmask, qboolean recordRegion ) {
+	int res, i;
 	vec3_t dir;
+
+	/* Original G_HistoricalTrace resets the region and ignores corpses. */
+	ent->nitmodLastTraceRegion = -1;
+	G_NITMOD_MDXEndDamage();
+	for(i = 0; i < BODY_QUEUE_SIZE; ++i)
+		if(level.bodyQue[i]) G_TempTraceIgnoreEntity(level.bodyQue[i]);
 
 	if( !(g_antilag.integer & 1) || !ent->client ) {
 		G_AttachBodyParts( ent );
 
 		trap_Trace( results, start, mins, maxs, end, passEntityNum, contentmask );
 
+		if(recordRegion) G_NITMOD_HistoricalRegion(ent,results,start,end);
 		res = G_SwitchBodyPartEntity( &g_entities[ results->entityNum ] );
 		POSITION_READJUST
 
 		G_DettachBodyParts();
+		G_ResetTempTraceIgnoreEnts();
 		return;
 	}
 
@@ -263,10 +287,12 @@ void G_HistoricalTrace( gentity_t* ent, trace_t *results, const vec3_t start, co
 
 	trap_Trace( results, start, mins, maxs, end, passEntityNum, contentmask );
 
+	if(recordRegion) G_NITMOD_HistoricalRegion(ent,results,start,end);
 	res = G_SwitchBodyPartEntity( &g_entities[ results->entityNum ] );
 	POSITION_READJUST
 
 	G_DettachBodyParts();
+	G_ResetTempTraceIgnoreEnts();
 
 	G_AdjustClientPositions( ent, 0, qfalse );
 }
@@ -281,7 +307,7 @@ void G_HistoricalTraceEnd( gentity_t *ent ) {
 }
 
 //bani - Run a trace without fixups (historical fixups will be done externally)
-void G_Trace( gentity_t* ent, trace_t *results, const vec3_t start, const vec3_t mins, const vec3_t maxs, const vec3_t end, int passEntityNum, int contentmask ) {
+void G_Trace( gentity_t* ent, trace_t *results, const vec3_t start, const vec3_t mins, const vec3_t maxs, const vec3_t end, int passEntityNum, int contentmask, qboolean recordRegion ) {
 	int res;
 	vec3_t dir;
 
@@ -289,6 +315,7 @@ void G_Trace( gentity_t* ent, trace_t *results, const vec3_t start, const vec3_t
 
 	trap_Trace( results, start, mins, maxs, end, passEntityNum, contentmask );
 
+	if(recordRegion) G_NITMOD_HistoricalRegion(ent,results,start,end);
 	res = G_SwitchBodyPartEntity( &g_entities[ results->entityNum ] );
 	POSITION_READJUST
 

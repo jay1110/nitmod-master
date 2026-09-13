@@ -10,6 +10,8 @@
 #include "g_nitmod_config.h"
 #include "g_nitmod_entities.h"
 #include "nitmod_config_index.h"
+#include "nitmod_lua_events.h"
+#include "nitmod_support_time.h"
 
 typedef struct {
   char oldShader[MAX_QPATH];
@@ -21,6 +23,17 @@ typedef struct {
 
 int remapCount = 0;
 shaderRemap_t remappedShaders[MAX_SHADER_REMAPS];
+
+void G_InitRemappedShaders(void) {
+	int i;
+	/* Original resets every slot, including unused entries, on GAME_INIT. */
+	for (i = 0; i < MAX_SHADER_REMAPS; ++i) {
+		remappedShaders[i].oldShader[0] = '\0';
+		remappedShaders[i].newShader[0] = '\0';
+		remappedShaders[i].timeOffset = 0.0f;
+	}
+	remapCount = 0;
+}
 
 void AddRemap(const char *oldShader, const char *newShader, float timeOffset) {
 	int i;
@@ -109,6 +122,31 @@ int G_FindConfigstringIndex( const char *name, int start, int max, qboolean crea
 	return index;
 }
 
+
+void G_RemoveConfigstringIndex(const char *name, int start, int max) {
+	int i, found;
+	char value[MAX_STRING_CHARS];
+	if (!name || !*name) return;
+	if (start < 0 || start >= MAX_CONFIGSTRINGS || max < 1 || max > MAX_CONFIGSTRINGS - start) {
+		G_Error("G_RemoveConfigstringIndex: invalid range %i %i", start, max);
+		return;
+	}
+	for (i = 1; i < max; ++i) {
+		trap_GetConfigstring(start + i, value, sizeof(value));
+		if (!*value) return;
+		if (strcmp(value, name)) continue;
+		found = start + i;
+		trap_SetConfigstring(found, "");
+		/* Original 0xe6480..0xe64b6 keeps the destination fixed and
+		 * excludes the final slot. Do not replace this with compaction. */
+		for (++i; i < max - 1; ++i) {
+			trap_GetConfigstring(start + i, value, sizeof(value));
+			trap_SetConfigstring(start + i, "");
+			trap_SetConfigstring(found, value);
+		}
+		return;
+	}
+}
 
 int G_ModelIndex( char *name ) {
 	return nitrox_CSIndex( name, NITMOD_NCS_MODELS, NITMOD_NCS_MODEL_COUNT, qtrue );
@@ -213,7 +251,7 @@ gentity_t* G_FindByTargetname(gentity_t *from, const char* match) {
 			continue;
 		}
 
-		if( from->targetnamehash == hash && !Q_stricmp( from->targetname, match ) ) {
+		if( from->targetname && from->targetnamehash == hash && !Q_stricmp( from->targetname, match ) ) {
 			return from;
 		}
 	}
@@ -236,7 +274,7 @@ gentity_t* G_FindByTargetnameFast(gentity_t *from, const char* match, int hash) 
 			continue;
 		}
 
-		if( from->targetnamehash == hash && !Q_stricmp( from->targetname, match ) ) {
+		if( from->targetname && from->targetnamehash == hash && !Q_stricmp( from->targetname, match ) ) {
 			return from;
 		}
 	}
@@ -355,11 +393,7 @@ void G_UseTargets( gentity_t *ent, gentity_t *activator ) {
 			if ( t->use ) {
 				//G_Printf ("ent->classname %s ent->targetname %s t->targetname %s t->s.number %d\n", ent->classname, ent->targetname, t->targetname, t->s.number);
 
-				t->flags |= (ent->flags & FL_KICKACTIVATE);	// (SA) If 'ent' was kicked to activate, pass this along to it's targets.
-															//		It may become handy to put a "KICKABLE" flag in ents so that it knows whether to pass this along or not
-															//		Right now, the only situation where it would be weird would be an invisible_user that is a 'button' near
-															//		a rotating door that it triggers.  Kick the switch and the door next to it flies open.
-
+				/* Original G_UseTargets 0xe6afe forwards only soft activation. */
 				t->flags |= (ent->flags & FL_SOFTACTIVATE);	// (SA) likewise for soft activation
 
 				if (	activator &&
@@ -475,6 +509,8 @@ void G_SetMovedir( vec3_t angles, vec3_t movedir ) {
 
 void G_InitGentity( gentity_t *e ) {
 	e->nitmodDynamiteObjective = 0;
+	/* Original G_InitGentity 0xe6e5d clears the run-suppression flag. */
+	e->nitmodEventInactive = qfalse;
 	e->inuse = qtrue;
 	e->classname = "noclass";
 	e->s.number = e - g_entities;
@@ -487,7 +523,7 @@ void G_InitGentity( gentity_t *e ) {
 	// RF, init scripting
 	e->scriptStatus.scriptEventIndex = -1;
 	// inc the spawncount
-	e->spawnCount++;
+	e->spawnCount = NITMOD_SupportSignedTime((uint32_t)e->spawnCount + UINT32_C(1));
 	// mark the time
 	e->spawnTime = level.time;
 	Bot_Queue_EntityCreated(e);
@@ -525,7 +561,7 @@ gentity_t *G_Spawn( void ) {
 
 			// the first couple seconds of server time can involve a lot of
 			// freeing and allocating, so relax the replacement policy
-			if ( !force && e->freetime > level.startTime + 2000 && level.time - e->freetime < 1000 ) {
+			if ( !force && e->freetime > NITMOD_SupportSignedTime((uint32_t)level.startTime + 2000u) && NITMOD_SupportSignedTime((uint32_t)level.time - (uint32_t)e->freetime) < 1000 ) {
 				continue;
 			}
 
@@ -560,19 +596,12 @@ gentity_t *G_Spawn( void ) {
 G_EntitiesFree
 =================
 */
-qboolean G_EntitiesFree( void ) {
-	int			i;
-	gentity_t	*e;
-
-	e = &g_entities[MAX_CLIENTS];
-	for ( i = MAX_CLIENTS; i < level.num_entities; i++, e++) {
-		if ( e->inuse ) {
-			continue;
-		}
-		// slot available
-		return qtrue;
-	}
-	return qfalse;
+int G_EntitiesFree( void ) {
+	int i, used = MAX_CLIENTS;
+	/* Original 0xe7160 includes the not-yet-allocated tail. */
+	for(i = MAX_CLIENTS; i < level.num_entities && i < MAX_GENTITIES; ++i)
+		if(g_entities[i].inuse) ++used;
+	return MAX_GENTITIES - used;
 }
 
 /*
@@ -589,10 +618,13 @@ void G_FreeEntity( gentity_t *ed ) {
 	G_NITMOD_BotEntityDeleted( ed );
 	Bot_Event_EntityDeleted(ed);
 
+	G_NITMOD_UnregisterSpawnEntity(ed);
+
 	/* Remove before callbacks and before the engine can reuse this slot. */
 	G_NITMOD_UnregisterSatchel( ed );
 	G_NITMOD_UnregisterLandmine( ed );
 	G_NITMOD_UnregisterAirstrike( ed );
+	G_NITMOD_UnregisterMG42( ed );
 
 	if(ed->free) {
 		ed->free( ed );
@@ -634,14 +666,95 @@ gentity_t *G_TempEntity( vec3_t origin, int event ) {
 	e->r.eventTime = level.time;
 	e->freeAfterEvent = qtrue;
 
-	VectorCopy( origin, snapped );
-	SnapVector( snapped );		// save network bandwidth
-	G_SetOrigin( e, snapped );
+	/* Original G_TempEntity 0xe748d/0xe74c1 also accepts a null origin. */
+	if(origin) {
+		VectorCopy( origin, snapped );
+		SnapVector( snapped );		// save network bandwidth
+		G_SetOrigin( e, snapped );
+	}
 
 	// find cluster for PVS
 	trap_LinkEntity( e );
 
 	return e;
+}
+
+/* Original nitrox_InitEventsQueue/TempEventFromQueue, 0x10e290/0x10e330.
+ * Private Nitmod sound events share this pool; Lua G_TempEntity stays ordinary. */
+static gentity_t *nitmodEventPool[32];
+static int nitmodEventCursor;
+
+void G_NITMOD_InitEventPool(void) {
+	int i;
+	nitmodEventCursor = 0;
+	memset(nitmodEventPool, 0, sizeof(nitmodEventPool));
+	for(i = 0; i < 32; ++i) {
+		gentity_t *ent = G_Spawn();
+		ent->think = NULL;
+		ent->neverFree = qtrue;
+		ent->freeAfterEvent = ent->unlinkAfterEvent = qfalse;
+		ent->classname = "eventQueue";
+		ent->s.eType = ET_INVISIBLE;
+		ent->r.svFlags = SVF_NOCLIENT;
+		ent->nitmodEventInactive = qtrue;
+		nitmodEventPool[i] = ent;
+	}
+}
+
+static gentity_t *NitmodPoolEvent(vec3_t origin, int event, qboolean extended) {
+	gentity_t *ent = nitmodEventPool[nitmodEventCursor];
+	vec3_t snapped;
+	/* The null case supports module entry points before game initialization. */
+	if(!ent || !ent->inuse || level.time - ent->eventTime <= 299)
+		return G_TempEntity(origin, event);
+	ent->s.eType = ET_EVENTS + event;
+	ent->eventTime = ent->r.eventTime = level.time + (extended ? 200 : 0);
+	ent->freeAfterEvent = qfalse;
+	ent->unlinkAfterEvent = qtrue;
+	ent->r.svFlags = 0;
+	ent->nitmodEventInactive = qfalse;
+	nitmodEventCursor = (nitmodEventCursor + 1) % 32;
+	if(origin) {
+		VectorCopy(origin, snapped);
+		SnapVector(snapped);
+		G_SetOrigin(ent, snapped);
+	}
+	trap_LinkEntity(ent);
+	return ent;
+}
+
+gentity_t *G_NITMOD_TempEvent(vec3_t origin, int event) {
+	return NitmodPoolEvent(origin, event, event == EV_RAILTRAIL);
+}
+
+/* Original G_ClientSound 0xe78d0: queued, single-recipient sound. */
+void G_ClientSound(gentity_t *ent, int soundIndex) {
+	gentity_t *event;
+	if (!ent || !ent->client) return;
+	event = G_NITMOD_TempEvent(NULL, EV_GLOBAL_CLIENT_SOUND);
+	event->r.svFlags = SVF_SINGLECLIENT;
+	event->s.teamNum = (int)(ent->client - level.clients);
+	event->s.eventParm = soundIndex;
+	event->r.singleClient = (int)(ent - g_entities);
+}
+
+gentity_t *G_NITMOD_TempEventOriginal(vec3_t origin, int originalEvent) {
+	gentity_t *ent = NitmodPoolEvent(origin, EV_NITMOD_LUA_FIRST,
+		originalEvent == 50 || (originalEvent >= 104 && originalEvent <= 106));
+	ent->s.event = NITMOD_LuaEventEncode(originalEvent);
+	return ent;
+}
+
+qboolean G_NITMOD_ExpireTempEvent(gentity_t *ent) {
+	int i;
+	for(i = 0; i < 32; ++i) {
+		if(nitmodEventPool[i] != ent) continue;
+		ent->s.eType = ET_INVISIBLE;
+		ent->r.svFlags = SVF_NOCLIENT;
+		ent->nitmodEventInactive = qtrue;
+		return qtrue;
+	}
+	return qfalse;
 }
 
 gentity_t* G_PopupMessage( popupMessageType_t type ) {
@@ -746,7 +859,7 @@ void G_AddEvent( gentity_t *ent, int event, int eventParm ) {
 		// NERVE - SMF - commented in - externalEvents not being handled properly in Wolf right now
 		ent->client->ps.events[ent->client->ps.eventSequence & (MAX_EVENTS-1)] = event;
 		ent->client->ps.eventParms[ent->client->ps.eventSequence & (MAX_EVENTS-1)] = eventParm;
-		ent->client->ps.eventSequence++;
+		ent->client->ps.eventSequence = NITMOD_SupportSignedTime((uint32_t)ent->client->ps.eventSequence + 1u);
 		// -NERVE - SMF
 
 		// NERVE - SMF - commented out
@@ -760,7 +873,7 @@ void G_AddEvent( gentity_t *ent, int event, int eventParm ) {
 		// NERVE - SMF - commented in - externalEvents not being handled properly in Wolf right now
 		ent->s.events[ent->s.eventSequence & (MAX_EVENTS-1)] = event;
 		ent->s.eventParms[ent->s.eventSequence & (MAX_EVENTS-1)] = eventParm;
-		ent->s.eventSequence++;
+		ent->s.eventSequence = NITMOD_SupportSignedTime((uint32_t)ent->s.eventSequence + 1u);
 		// -NERVE - SMF
 
 		// NERVE - SMF - commented out
@@ -785,7 +898,7 @@ G_Sound
 void G_Sound( gentity_t *ent, int soundIndex ) {
 	gentity_t	*te;
 
-	te = G_TempEntity( ent->r.currentOrigin, EV_GENERAL_SOUND );
+	te = G_NITMOD_TempEvent( ent->r.currentOrigin, EV_GENERAL_SOUND );
 	te->s.eventParm = soundIndex;
 }
 
@@ -817,6 +930,8 @@ void G_SetOrigin( gentity_t *ent, vec3_t origin ) {
 	ent->s.pos.trDuration = 0;
 	VectorClear( ent->s.pos.trDelta );
 
+	/* Original 0xe7a8c..0xe7a9a also publishes the fixed origin. */
+	VectorCopy( origin, ent->s.origin );
 	VectorCopy( origin, ent->r.currentOrigin );
 
 	if( ent->client ) {
@@ -1104,6 +1219,7 @@ static qboolean G_LoadCampaignsFromFile( const char *filename ) {
 	pc_token_t token;
 	const char *s;
 	qboolean mapFound = qfalse;
+	qboolean discardCampaign = qfalse;
 
 	handle = trap_PC_LoadSource( filename );
 
@@ -1122,8 +1238,10 @@ static qboolean G_LoadCampaignsFromFile( const char *filename ) {
 	}
 
 	while ( trap_PC_ReadToken( handle, &token ) ) {
+		if(discardCampaign && *token.string != '}') continue;
 		if( *token.string == '}' ) {
-			level.campaignCount++;
+			if(!discardCampaign) level.campaignCount++;
+			discardCampaign = qfalse;
 
 			// zinx - can't handle any more.
 			if( level.campaignCount >= MAX_CAMPAIGNS ) {
@@ -1200,7 +1318,11 @@ static qboolean G_LoadCampaignsFromFile( const char *filename ) {
 			while( *ptr ) {
 				mapnamePtr = mapname;
 				while( *ptr && *ptr != ';' ) {
-					*mapnamePtr++ = *ptr++;
+					/* Keep consuming an oversized token without writing past
+					 * the local buffer or losing the following map separator. */
+					if(mapnamePtr < mapname + sizeof(mapname) - 1)
+						*mapnamePtr++ = *ptr;
+					++ptr;
 				}
 				if( *ptr )
 					ptr++;
@@ -1240,7 +1362,9 @@ static qboolean G_LoadCampaignsFromFile( const char *filename ) {
 					// rain - clear out this campaign so that everything's
 					// okay when when we add the next
 					memset(&g_campaigns[level.campaignCount], 0, sizeof(g_campaigns[0]));
-					level.campaignCount--;
+					/* Preserve rejection of this campaign without exposing a
+					 * negative index to fields preceding its closing brace. */
+					discardCampaign = qtrue;
 					
 					break;
 				}
@@ -1266,6 +1390,7 @@ qboolean G_MapIsValidCampaignStartMap( void ) {
 void G_ParseCampaigns( void ) {
 	int			numdirs;
 	char		filename[128];
+	char        campaignFile[MAX_CVAR_VALUE_STRING];
 	static char dirlist[100000];
 	char*		dirptr;
 	int			i;
@@ -1278,8 +1403,10 @@ void G_ParseCampaigns( void ) {
 
 	/* Original G_ParseCampaigns gives g_campaignFile first refusal. Its
 	 * return value means the active map was found, not merely file-open success. */
-	trap_Cvar_VariableStringBuffer("g_campaignFile", filename, sizeof(filename));
-	if (filename[0]) mapFound = G_LoadCampaignsFromFile(filename);
+	/* Original 0xe88e0 passes vmCvar.string directly, without the
+	 * shorter buffer used for directory-list entries. */
+	trap_Cvar_VariableStringBuffer("g_campaignFile", campaignFile, sizeof(campaignFile));
+	if (campaignFile[0]) mapFound = G_LoadCampaignsFromFile(campaignFile);
 	if (!mapFound) {
 		numdirs = trap_FS_GetFileList("scripts", ".campaign", dirlist, sizeof(dirlist));
 		dirptr = dirlist;
@@ -1288,6 +1415,8 @@ void G_ParseCampaigns( void ) {
 			Com_sprintf(filename, sizeof(filename), "scripts/%s", dirptr);
 			if (G_LoadCampaignsFromFile(filename)) mapFound = qtrue;
 		}
+		if(level.campaignCount >= MAX_CAMPAIGNS)
+			G_LogPrintf("Warning: number of campaigns larger then MAX_CAMPAIGNS\n");
 	}
 
 	if( g_gametype.integer != GT_WOLF_CAMPAIGN ) {
@@ -1305,7 +1434,10 @@ void G_ParseCampaigns( void ) {
 
 				level.newCampaign = qtrue;
 
-				g_campaigns[level.campaignCount].current = 0;
+				/* Original 0xe8890 writes the next unused slot. Preserve that
+				 * behavior only while the slot is inside the campaign array. */
+				if(level.campaignCount < MAX_CAMPAIGNS)
+					g_campaigns[level.campaignCount].current = 0;
 				level.currentCampaign = i;
 
 				break;
@@ -1321,7 +1453,9 @@ void G_ParseCampaigns( void ) {
 
 			trap_Argv(0, buf, sizeof(buf));
 
-			if (!buf) { // command not found, throw error
+			/* Original G_ParseCampaigns 0xe897d checks the first byte.
+			 * A local array's address can never detect an empty command. */
+			if (!buf[0]) { // command not found, throw error
 				G_Error("Usage 'map <mapname>\n'");
 			}
 

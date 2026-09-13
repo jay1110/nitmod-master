@@ -1,4 +1,5 @@
 #include "g_local.h"
+#include "nitmod_support_time.h"
 #include "g_nitmod_server_cvars.h"
 
 /* Original ConsoleCommand 0xd4500 / G_UpdateSvCvars 0xd4170.
@@ -80,7 +81,8 @@ qboolean G_NITMOD_ServerCvarCommand(const char *command) {
         ++forcedCvarCount;
         /* Initial settings reach humans on ClientBegin. Later commands also
          * update connected clients, matching the original 600 ms boundary. */
-        if((long long)level.time - level.startTime > 600)
+        /* Original 0xd539e..0xd53af subtracts in signed 32-bit time. */
+        if(NITMOD_SupportSignedTime((uint32_t)level.time - (uint32_t)level.startTime) > 600)
             trap_SendServerCommand(-1, va("fc \"%s\" \"%s\"", name, first));
         return qtrue;
     }

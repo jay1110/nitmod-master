@@ -20,6 +20,8 @@ void Bot_Event_TakeDamage(int clientNum, struct gentity_s *attacker);
 void Bot_Event_Death(int clientNum, struct gentity_s *killer, const char *meansOfDeath);
 void Bot_Event_KilledSomeone(int clientNum, struct gentity_s *victim, const char *meansOfDeath);
 void Bot_Event_FireWeapon(int clientNum, int weaponId, struct gentity_s *projectile);
+void Bot_Event_PostTriggerMine(int clientNum, struct gentity_s *mine);
+void Bot_Event_PreTriggerMine(int clientNum, struct gentity_s *mine);
 void Bot_Event_AddWeapon(int clientNum, int weaponId);
 void Bot_Event_RemoveWeapon(int clientNum, int weaponId);
 void Bot_Event_ResetWeapons(int clientNum);

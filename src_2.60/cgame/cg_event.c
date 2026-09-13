@@ -7,6 +7,7 @@
 #include "cg_nitmod_hud.h"
 #include "cg_nitmod_events.h"
 #include "cg_nitmod_debug.h"
+#include "cg_nitmod.h"
 #include <limits.h>
 
 extern void CG_StartShakeCamera( float param );
@@ -658,7 +659,8 @@ CG_Explode
 void CG_Explode(centity_t *cent, vec3_t origin, vec3_t dir, qhandle_t shader) {
 
 	qhandle_t		inheritmodel = 0;
-	if(cent->currentState.frame < 0 || cent->currentState.frame >= POSSIBLE_PIECES) return;
+	/* Seven material types, including fabric; POSSIBLE_PIECES counts sizes. */
+	if(cent->currentState.frame < 0 || cent->currentState.frame > 6) return;
 	if(cent->currentState.dl_intensity < -1 || cent->currentState.dl_intensity >= MAX_SOUNDS) return;
 	if((cent->currentState.eFlags & EF_INHERITSHADER) &&
 	   (cent->currentState.modelindex < 0 || cent->currentState.modelindex >= MAX_MODELS)) return;
@@ -717,7 +719,8 @@ CG_Explode
 void CG_Rubble(centity_t *cent, vec3_t origin, vec3_t dir, qhandle_t shader) {
 
 	qhandle_t		inheritmodel = 0;
-	if(cent->currentState.frame < 0 || cent->currentState.frame >= POSSIBLE_PIECES) return;
+	/* Seven material types, including fabric; POSSIBLE_PIECES counts sizes. */
+	if(cent->currentState.frame < 0 || cent->currentState.frame > 6) return;
 	if(cent->currentState.dl_intensity < -1 || cent->currentState.dl_intensity >= MAX_SOUNDS) return;
 	if((cent->currentState.eFlags & EF_INHERITSHADER) &&
 	   (cent->currentState.modelindex < 0 || cent->currentState.modelindex >= MAX_MODELS)) return;
@@ -2090,7 +2093,7 @@ static void CG_EntityEventForProtocol( centity_t *cent, vec3_t position, qboolea
 		if(!original || es->eventParm)
 			trap_S_StartSound (NULL, es->number, CHAN_AUTO, cgs.media.watrUnSound );
 		if( cg.clientNum == es->number ) {
-			int duration = original && cg.snap &&
+			int duration = NITMOD_UsesNitmodHud() && cg.snap &&
 				NITMOD_ClientSkillUnlocked(cg.snap->ps.clientNum, SK_BATTLE_SENSE, 5) ? 15000 : HOLDBREATHTIME;
 			cg.waterundertime = cg.time > INT_MAX - duration ? INT_MAX : cg.time + duration;
 		}
@@ -2335,6 +2338,9 @@ static void CG_EntityEventForProtocol( centity_t *cent, vec3_t position, qboolea
 		DEBUGNAME("EV_FIRE_WEAPON");
 		if( cent->currentState.clientNum == cg.snap->ps.clientNum && cg.snap->ps.eFlags & EF_ZOOMING ) // to stop airstrike sfx
 			break;
+		if( NITMOD_UsesNitmodHud() && es->weapon == WP_KNIFE &&
+			es->clientNum == cg.snap->ps.clientNum )
+			cg.nitmodKnifeBlood = cg.nitmodKnifeBlood > 10 ? cg.nitmodKnifeBlood - 10 : 0;
 		CG_FireWeapon(cent, event);
 		if( event == EV_FIRE_WEAPONB )	// akimbo firing
 			cent->akimboFire = qtrue;
@@ -2371,7 +2377,7 @@ static void CG_EntityEventForProtocol( centity_t *cent, vec3_t position, qboolea
 			trap_S_StartSound (NULL, es->number, CHAN_AUTO, cgs.media.satchelbounce1 );
 		} else if( es->weapon == WP_DYNAMITE ) {
 			trap_S_StartSound (NULL, es->number, CHAN_AUTO, cgs.media.dynamitebounce1 );
-		} else if( es->weapon == WP_LANDMINE ) {
+		} else if( es->weapon == WP_LANDMINE || es->weapon == WP_POISON_MINE ) {
 			trap_S_StartSound (NULL, es->number, CHAN_AUTO, cgs.media.landminebounce1 );
 		} else {
 		// GRENADES
@@ -2395,7 +2401,8 @@ static void CG_EntityEventForProtocol( centity_t *cent, vec3_t position, qboolea
 		break;*/
 
 	case EV_RAILTRAIL:
-		if(original || (NITMOD_UsesNitmodHud() && es->dmgFlags == 1 && es->effect1Time > 0)) {
+		if(original || (NITMOD_UsesNitmodHud() &&
+		   (es->density == -1 || (es->dmgFlags == 1 && es->effect1Time > 0)))) {
 			CG_NitmodRailEvent(es); break;
 		}
 		CG_RailTrail( &cgs.clientinfo[ es->otherEntityNum2 ], es->origin2, es->pos.trBase, es->dmgFlags);	//----(SA)	added 'type' field
@@ -2408,6 +2415,9 @@ static void CG_EntityEventForProtocol( centity_t *cent, vec3_t position, qboolea
 		DEBUGNAME("EV_MISSILE_HIT");
 		ByteToDir( es->eventParm, dir );
 		CG_MissileHitPlayer( cent, es->weapon, position, dir, es->otherEntityNum );
+		if( NITMOD_UsesNitmodHud() && es->weapon == WP_KNIFE &&
+			es->clientNum == cg.snap->ps.clientNum )
+			cg.nitmodKnifeBlood = cg.nitmodKnifeBlood < 210 ? cg.nitmodKnifeBlood + 45 : 255;
 		if( es->weapon == WP_MORTAR_SET ) {
 			if( !es->legsAnim ) {
 				CG_MortarImpact( cent, position, 3, qtrue );
@@ -2427,6 +2437,9 @@ static void CG_EntityEventForProtocol( centity_t *cent, vec3_t position, qboolea
 		DEBUGNAME("EV_MISSILE_MISS");
 		ByteToDir( es->eventParm, dir );
 		CG_MissileHitWall( es->weapon, 0, position, dir, 0 );	// (SA) modified to send missilehitwall surface parameters
+		if( NITMOD_UsesNitmodHud() && es->weapon == WP_KNIFE &&
+			es->clientNum == cg.snap->ps.clientNum )
+			cg.nitmodKnifeBlood = cg.nitmodKnifeBlood > 10 ? cg.nitmodKnifeBlood - 10 : 0;
 		if( es->weapon == WP_MORTAR_SET ) {
 			if( !es->legsAnim ) {
 				CG_MortarImpact( cent, position, 3, qtrue );
@@ -2485,6 +2498,25 @@ static void CG_EntityEventForProtocol( centity_t *cent, vec3_t position, qboolea
 
 	case EV_GENERAL_SOUND:
 		DEBUGNAME("EV_GENERAL_SOUND");
+		if( NITMOD_UsesNitmodHud() ) {
+			sfxHandle_t sound = CG_GetGameSound(es->eventParm);
+			/* Original 0x64760: cached sound precedes scripts and door expansion. */
+			if( !sound ) {
+				s = NITMOD_AssetConfigString(CS_SOUNDS + es->eventParm);
+				if( strstr(s, "d!") ) {
+					char door[256];
+					Q_strncpyz(door, s, sizeof(door));
+					Nit_RemoveWordInString(door, "d!");
+					sound = trap_S_RegisterSound(va("sound/movers/doors/door%s.wav", door), qfalse);
+				} else {
+					if( CG_SoundPlaySoundScript(s, NULL, es->number, qfalse) ) break;
+					sound = trap_S_RegisterSound(s, qfalse);
+					if( !sound ) break;
+				}
+			}
+			trap_S_StartSoundVControl(NULL, es->number, CHAN_VOICE, sound, 255);
+			break;
+		}
 		// Ridah, check for a sound script
 		s = NITMOD_AssetConfigString( CS_SOUNDS + es->eventParm );
 		if( !strstr( s, ".wav" ) ) {
@@ -2524,6 +2556,16 @@ static void CG_EntityEventForProtocol( centity_t *cent, vec3_t position, qboolea
 			int volume = es->onFireStart;
 
 			DEBUGNAME("EV_GENERAL_SOUND_VOLUME");
+			if( NITMOD_UsesNitmodHud() ) {
+				sfxHandle_t handle = CG_GetGameSound(sound);
+				if( !handle ) {
+					s = NITMOD_AssetConfigString(CS_SOUNDS + sound);
+					if( CG_SoundPlaySoundScript(s, NULL, es->number, qfalse) ) break;
+					if( !s || !(handle = trap_S_RegisterSound(s, qfalse)) ) break;
+				}
+				trap_S_StartSoundVControl(NULL, es->number, CHAN_VOICE, handle, volume);
+				break;
+			}
 			// Ridah, check for a sound script
 			s = NITMOD_AssetConfigString( CS_SOUNDS + sound );
 			if( !strstr( s, ".wav" ) ) {
@@ -2553,6 +2595,16 @@ static void CG_EntityEventForProtocol( centity_t *cent, vec3_t position, qboolea
 		}
 	case EV_GLOBAL_SOUND:	// play from the player's head so it never diminishes
 		DEBUGNAME("EV_GLOBAL_SOUND");
+		if( NITMOD_UsesNitmodHud() ) {
+			sfxHandle_t handle = CG_GetGameSound(es->eventParm);
+			if( !handle ) {
+				s = NITMOD_AssetConfigString(CS_SOUNDS + es->eventParm);
+				if( CG_SoundPlaySoundScript(s, NULL, -1, qtrue) ) break;
+				if( !s || !(handle = trap_S_RegisterSound(s, qfalse)) ) break;
+			}
+			trap_S_StartSound(NULL, cg.snap->ps.clientNum, CHAN_AUTO, handle);
+			break;
+		}
 		// Ridah, check for a sound script
 		s = NITMOD_AssetConfigString( CS_SOUNDS + es->eventParm );
 		if( !strstr( s, ".wav" ) ) {
@@ -2579,6 +2631,17 @@ static void CG_EntityEventForProtocol( centity_t *cent, vec3_t position, qboolea
 		DEBUGNAME("EV_GLOBAL_CLIENT_SOUND");
 
 		if ( cg.snap->ps.clientNum == es->teamNum ) {
+			if( NITMOD_UsesNitmodHud() ) {
+				sfxHandle_t handle = CG_GetGameSound(es->eventParm);
+				if( !handle ) {
+					s = NITMOD_AssetConfigString(CS_SOUNDS + es->eventParm);
+					if( CG_SoundPlaySoundScript(s, NULL, -1, !es->effect1Time) ) break;
+					handle = s ? trap_S_RegisterSound(s, qfalse) : 0;
+				}
+				/* Original targeted event submits even a zero fallback handle. */
+				trap_S_StartSound(NULL, cg.snap->ps.clientNum, CHAN_AUTO, handle);
+				break;
+			}
 			s = NITMOD_AssetConfigString( CS_SOUNDS + es->eventParm );
 			if ( !strstr( s, ".wav" ) ) {
 				if( CG_SoundPlaySoundScript( s, NULL, -1, (es->effect1Time ? qfalse : qtrue) ) ) {

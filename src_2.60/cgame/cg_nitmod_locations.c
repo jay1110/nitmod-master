@@ -1,6 +1,4 @@
 #include <stdlib.h>
-#include <float.h>
-#include <errno.h>
 #include "cg_local.h"
 #include "cg_nitmod_config.h"
 #include "cg_nitmod_locations.h"
@@ -17,12 +15,14 @@ static nitmodLocation_t locations[NITMOD_MAX_LOCATIONS];
 static int locationCount;
 
 static qboolean CG_NitmodLocationNumber(const char *token, float *value) {
-    char *end;
-    double number;
+    long number;
     if(!token || !token[0]) return qfalse;
-    errno = 0;
-    number = strtod(token, &end);
-    if(*end || end == token || errno == ERANGE || !(number >= -FLT_MAX && number <= FLT_MAX)) return qfalse;
+    /* Original CG_LoadLocations uses 32-bit strtol(base 10), then converts
+     * the result to float. Preserve prefix parsing and saturation on hosts
+     * where long is wider than the original i386 long. */
+    number = strtol(token, NULL, 10);
+    if(number > 2147483647L) number = 2147483647L;
+    if(number < (-2147483647L - 1L)) number = (-2147483647L - 1L);
     *value = (float)number;
     return qtrue;
 }

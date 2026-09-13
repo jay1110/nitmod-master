@@ -70,6 +70,7 @@ void trap_NITMOD_DemoSupport(void);
 #define TKFL_MINES				0x00000001
 #define TKFL_AIRSTRIKE			0x00000002
 #define TKFL_MORTAR				0x00000004
+#define TKFL_TRIPMINES            0x00000008
 
 // movers are things like doors, plats, buttons, etc
 typedef enum {
@@ -491,6 +492,8 @@ struct gentity_s {
 	vec3_t	oldOrigin;
 
 	qboolean runthisframe;
+	/* Original reserved temporary-event entity inactivity flag. */
+	qboolean nitmodEventInactive;
 
 	g_constructible_stats_t	constructibleStats;
 
@@ -499,6 +502,7 @@ struct gentity_s {
 	/* Original gentity+0x500: primary objective number for planted dynamite.
 	 * Server-only; zero initialized, constructible planting leaves it alone. */
 	int nitmodDynamiteObjective;
+	int nitmodLastTraceRegion; /* Original entity+0x5ec, retained across item impacts. */
 	/* Nitmod original cached classname hash; not part of engine shared prefix. */
 	int nitmodClassnameHash;
 	int nitmodTargetHash;
@@ -778,7 +782,7 @@ typedef struct {
 } clientMarker_t;
 
 
-#define MAX_CLIENT_MARKERS 10
+#define MAX_CLIENT_MARKERS 17 /* Original qagame ring indices 0..16. */
 
 #define NUM_SOLDIERKILL_TIMES 10
 #define SOLDIERKILL_MAXTIME 60000
@@ -943,6 +947,7 @@ struct gclient_s {
 	qboolean		wantsscore;
 	qboolean		maxlivescalced;
 	int nitmodLastShoveTime;
+	int nitmodFlameBroadcastUntil; /* Original client+0x5380; ordinary spawn-reset state. */
 	int nitmodLuaUnusedPowerups[3]; /* Original slots 13..15, never alias ET blackout/multiview. */
 	int nitmodLuaPersistant[16]; /* Original-only counters; retained across ClientSpawn. */
 	int nitmodLuaUnusedAmmo[2][12]; /* Original unused weapon slots 52..63; never alias native weapons. */
@@ -1131,6 +1136,8 @@ typedef struct {
 	float		covertopsChargeTimeModifier[2];
 
 	int			firstbloodTeam;
+	qboolean nitmodFirstBloodAnnounced, nitmodFirstHeadshotAnnounced;
+	char *nitmodLastFragName; /* Original retains the live client name buffer. */
 	int			teamEliminateTime;
 	int			lmsWinningTeam;
 
@@ -1235,6 +1242,7 @@ char *G_NewString( const char *string );
 qboolean G_CallSpawn( gentity_t *ent );
 // done.
 char *G_AddSpawnVarToken( const char *string );
+gentity_t *G_SpawnGEntityFromSpawnVars( void );
 void G_ParseField( const char *key, const char *value, gentity_t *ent );
 
 //
@@ -1312,11 +1320,16 @@ void	G_SetMovedir ( vec3_t angles, vec3_t movedir);
 void	G_InitGentity( gentity_t *e );
 gentity_t	*G_Spawn (void);
 gentity_t *G_TempEntity( vec3_t origin, int event );
+void G_NITMOD_InitEventPool(void);
+gentity_t *G_NITMOD_TempEvent(vec3_t origin, int event);
+void G_ClientSound(gentity_t *ent, int soundIndex);
+gentity_t *G_NITMOD_TempEventOriginal(vec3_t origin, int originalEvent);
+qboolean G_NITMOD_ExpireTempEvent(gentity_t *ent);
 gentity_t* G_PopupMessage( popupMessageType_t type );
 void	G_Sound( gentity_t *ent, int soundIndex );
 void	G_AnimScriptSound( int soundIndex, vec3_t org, int client );
 void	G_FreeEntity( gentity_t *e );
-//qboolean	G_EntitiesFree( void );
+int G_EntitiesFree( void );
 
 void	G_TouchTriggers (gentity_t *ent);
 void	G_TouchSolids (gentity_t *ent);
@@ -1328,6 +1341,8 @@ void G_AddPredictableEvent( gentity_t *ent, int event, int eventParm );
 void G_AddEvent( gentity_t *ent, int event, int eventParm );
 void G_SetOrigin( gentity_t *ent, vec3_t origin );
 void AddRemap(const char *oldShader, const char *newShader, float timeOffset);
+void G_InitRemappedShaders(void);
+void G_RemoveConfigstringIndex(const char *name, int start, int max);
 const char *BuildShaderStateConfig();
 void G_SetAngle( gentity_t *ent, vec3_t angle );
 
@@ -1454,7 +1469,7 @@ int G_GetWeaponDamage( int weapon );
 
 void CalcMuzzlePoints(gentity_t *ent, int weapon);
 void G_NITMOD_ThrowKnife(gentity_t *ent);
-void CalcMuzzlePointForActivate ( gentity_t *ent, vec3_t forward, vec3_t right, vec3_t up, vec3_t muzzlePoint );
+void CalcMuzzlePointForActivate ( gentity_t *ent, vec3_t forward, vec3_t right, vec3_t up, vec3_t muzzlePoint, qboolean useViewHeight );
 
 //
 // g_client.c
@@ -1584,6 +1599,7 @@ void ClientCleanName( const char *in, char *out, int outSize );
 void ClientDisconnect( int clientNum );
 void ClientBegin( int clientNum );
 void ClientCommand( int clientNum );
+void G_NITMOD_PrivateMessage_f( gentity_t *ent );
 
 //
 // g_active.c
@@ -2245,6 +2261,7 @@ messageStatus_t	trap_MessageStatus( int clientNum );
 
 void G_ExplodeMissile( gentity_t *ent );
 void G_NITMOD_FadeDisconnectProjectiles( gentity_t *owner, int cameraOptions );
+void G_NITMOD_FadeSupportProjectiles( gentity_t *owner );
 void G_MissileDownXPAward( gentity_t *attacker, int mod );
 void G_MissileDie( gentity_t *self, gentity_t *inflictor, gentity_t *attacker, int damage, int mod );
 
@@ -2258,11 +2275,11 @@ void trap_PbStat ( int clientNum , char *category , char *values ) ;
 void G_StoreClientPosition( gentity_t* ent );
 void G_AdjustClientPositions( gentity_t* ent, int time, qboolean forward);
 void G_ResetMarkers( gentity_t* ent );
-void G_HistoricalTrace( gentity_t* ent, trace_t *results, const vec3_t start, const vec3_t mins, const vec3_t maxs, const vec3_t end, int passEntityNum, int contentmask );
+void G_HistoricalTrace( gentity_t* ent, trace_t *results, const vec3_t start, const vec3_t mins, const vec3_t maxs, const vec3_t end, int passEntityNum, int contentmask, qboolean recordRegion );
 void G_HistoricalTraceBegin( gentity_t *ent );
 void G_HistoricalTraceEnd( gentity_t *ent );
 float G_NITMOD_HitboxHeight( const gentity_t *target, const gentity_t *attacker );
-void G_Trace( gentity_t* ent, trace_t *results, const vec3_t start, const vec3_t mins, const vec3_t maxs, const vec3_t end, int passEntityNum, int contentmask );
+void G_Trace( gentity_t* ent, trace_t *results, const vec3_t start, const vec3_t mins, const vec3_t maxs, const vec3_t end, int passEntityNum, int contentmask, qboolean recordRegion );
 
 #define BODY_VALUE(ENT) ENT->watertype
 #define BODY_TEAM(ENT) ENT->s.modelindex
@@ -2615,6 +2632,7 @@ void G_smvRegenerateClients(gentity_t *ent, int clientList);
 void G_smvRemoveEntityInMVList(gentity_t *ent, mview_t *ref);
 void G_smvRemoveInvalidClients(gentity_t *ent, int nTeam);
 qboolean G_smvRunCamera(gentity_t *ent);
+void G_NITMOD_CreateMissileCamera(gentity_t *owner, gentity_t *missile);
 qboolean G_NITMOD_RunMissileCamera(gentity_t *ent);
 void G_smvUpdateClientCSList(gentity_t *ent);
 
@@ -2771,3 +2789,18 @@ void G_NITMOD_ExpandCommandShortcuts(gentity_t *ent,const char *input,char *outp
 
 void G_NITMOD_WarModeTouchClients(void);
 void CheckVote(void);
+
+int G_NITMOD_ClientNumbersFromString(char *name, int targets[MAX_CLIENTS]);
+
+void G_NITMOD_ResetSpawnEntities(void);
+void G_NITMOD_RegisterSpawnEntity(gentity_t *ent);
+void G_NITMOD_UnregisterSpawnEntity(gentity_t *ent);
+
+gentity_t *G_NITMOD_NextSpawnEntity(int *cursor, int hash);
+
+void G_NITMOD_ResetDMSpawnTimes(void);
+
+void G_NITMOD_TeamVoteUsage(gentity_t *ent,unsigned int index,const char *arg,qboolean referee);
+
+void G_shuffleTeamsXP(void);
+void Svcmd_ShuffleTeamsXP_f(void);

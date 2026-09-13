@@ -8,12 +8,14 @@
 
 #include "g_local.h"
 #include "g_nitmod_mdx.h"
+#include "g_nitmod_admin.h"
 #include "nitmod_powerup_ids.h"
 #include "g_nitmod_restrictions.h"
 #include "g_nitmod_weapon_definition.h"
 #include "g_nitmod_config.h"
 #include "g_nitmod_etbot_lifecycle.h"
 #include "g_nitmod_legacy_cvars.h"
+#include "nitmod_support_time.h"
 #include "../game/q_shared.h"
 #include "../game/botlib.h"		//bot lib interface
 #include "../game/be_aas.h"
@@ -110,6 +112,13 @@ void AddKillScore( gentity_t *ent, int score ) {
 	// someone already won
 	if( level.lmsWinningTeam )
 		return;
+
+	/* Original AddKillScore 0x663cf: TDM option 1 suppresses this
+	 * scoring route before either personal points or ranks are changed. */
+	if( g_gametype.integer == GT_WOLF_TDM &&
+		(G_NITMOD_LegacyCvarInteger("g_TDMOptions", 0) & 1) ) {
+		return;
+	}
 
 	if( g_gametype.integer == GT_WOLF_LMS ) {
 		ent->client->ps.persistant[PERS_SCORE] += score;
@@ -300,7 +309,8 @@ body_die
 */
 void body_die( gentity_t *self, gentity_t *inflictor, gentity_t *attacker, int damage, int meansOfDeath )
 {
-	if(self->health <= GIB_HEALTH) {
+	/* Original body_die 0x65d9c uses a strict signed comparison. */
+	if(self->health < GIB_HEALTH) {
 		GibEntity(self, 0);
 	}
 }
@@ -411,8 +421,8 @@ player_die
 void BotRecordTeamDeath( int client );
 
 /* Original player_die 0x76850 consumes the per-attacker damage slots written
- * by G_Damage 0x79c3a.  Keep the accounting on typed client storage and clear
- * every slot at death so contributions never leak into the next life. */
+ * by G_Damage 0x79c3a. Original 0x668b9..0x668da skips nonpositive,
+ * victim, killer and spectator slots before clearing processed contributions. */
 static void G_NITMOD_AwardKillAssists( gentity_t *victim, gentity_t *killer,
 	int meansOfDeath ) {
 	int clientNum;
@@ -424,9 +434,7 @@ static void G_NITMOD_AwardKillAssists( gentity_t *victim, gentity_t *killer,
 		gentity_t *helper = &g_entities[clientNum];
 		int damage = victim->client->nitmodDamageReceived[clientNum];
 		int points = damage < 50 ? lowDamagePoints : 2;
-		victim->client->nitmodDamageReceived[clientNum] = 0;
 		if( damage <= 0 || helper == victim || helper == killer || !helper->client ||
-			helper->client->pers.connected != CON_CONNECTED ||
 			helper->client->sess.sessionTeam == TEAM_SPECTATOR ) continue;
 
 		if( killer == victim || meansOfDeath == MOD_SWITCHTEAM ) {
@@ -443,6 +451,7 @@ static void G_NITMOD_AwardKillAssists( gentity_t *victim, gentity_t *killer,
 			trap_SendServerCommand(clientNum, va("an 3 -%i", points));
 			G_LoseSkillPoints(helper, SK_BATTLE_SENSE, (float)points);
 		}
+		victim->client->nitmodDamageReceived[clientNum] = 0;
 		lowDamagePoints = points;
 	}
 }
@@ -454,13 +463,13 @@ static void G_NITMOD_RecordMultiKill( gentity_t *attacker ) {
 	window = G_NITMOD_LegacyCvarInteger("g_multikillTime", 2000);
 	/* Original player_die 0x670ac..0x6713c and CSWTCH.57: signed32
 	 * elapsed time, private tiers2/3 and broadcast tiers4/5/6 only. */
-	if( (int)((unsigned int)level.time -
-		(unsigned int)attacker->client->lastKillTime) > window ) {
+	if( NITMOD_SupportSignedTime((uint32_t)level.time -
+		(uint32_t)attacker->client->lastKillTime) > window ) {
 		attacker->client->nitmodMultiKillCount = 1;
 		return;
 	}
 	attacker->client->nitmodMultiKillCount =
-		(int)((unsigned int)attacker->client->nitmodMultiKillCount + 1u);
+		NITMOD_SupportSignedTime((uint32_t)attacker->client->nitmodMultiKillCount + UINT32_C(1));
 	if( attacker->client->nitmodMultiKillCount >= 2 &&
 		attacker->client->nitmodMultiKillCount <= 6 ) {
 		int detail = attacker->client->nitmodMultiKillCount - 2;
@@ -516,10 +525,32 @@ static void G_NITMOD_CheckDeathmatchWinner(gentity_t *attacker) {
 	Info_SetValueForKey(cs, "w", "0");
 	Info_SetValueForKey(cs, "winner", "0");
 	trap_SetConfigstring(CS_MULTI_MAPWINNER, cs);
+	level.nitmodLastFragName=attacker->client->pers.netname;
 	LogExit(va("^1Death Match^7: %s ^gwins this round",attacker->client->pers.netname));
 	trap_SendServerCommand(-1, va("DM %i", attacker->client->ps.clientNum));
 	trap_SendServerCommand(-1, va("print \"^1Death Match^7: %s ^gwins this round.\n\"",
 		attacker->client->pers.netname));
+}
+
+/* Original player_die 0x6878c and G_Damage first-event branches.
+ * Level-owned latches survive Cvar toggles and reset with the map. */
+static void G_NITMOD_FirstCombatAnnouncement(gentity_t *victim, gentity_t *attacker, qboolean headshot) {
+ qboolean *announced=headshot?&level.nitmodFirstHeadshotAnnounced:&level.nitmodFirstBloodAnnounced;
+ int bit=headshot?16:8;
+ if(!(G_NITMOD_LegacyCvarInteger("g_announcer",127)&bit) ||
+    !victim || !victim->client || !attacker || !attacker->client ||
+    attacker->s.number>=ENTITYNUM_WORLD || attacker==victim ||
+    OnSameTeam(victim,attacker) || g_gamestate.integer!=GS_PLAYING ||
+    (headshot && victim->health<=0)) return;
+ if(!headshot) level.nitmodLastFragName=attacker->client->pers.netname;
+ if(*announced) return;
+ nitmod_Sound_Global(headshot?15:14);
+ trap_SendServerCommand(-1,va(headshot?
+  "pop \"^7%s ^ghad the ^1FIRST HEADSHOT^g from ^7%s^7!\"":
+  "pop \"^7%s ^ghad ^1FIRST BLOOD ^gfrom ^7%s^7!\"",
+  attacker->client->pers.netname,victim->client->pers.netname));
+ trap_SendServerCommand(attacker-g_entities,headshot?"an 5 0":"an 4 0");
+ *announced=qtrue;
 }
 
 void player_die( gentity_t *self, gentity_t *inflictor, gentity_t *attacker, int damage, int meansOfDeath ) {
@@ -708,8 +739,10 @@ void player_die( gentity_t *self, gentity_t *inflictor, gentity_t *attacker, int
 
 	// broadcast the death event to everyone
 	if(!G_NITMOD_LuaObituary(self->s.number,killer,meansOfDeath)) {
-	ent = G_TempEntity( self->r.currentOrigin, EV_OBITUARY );
+	ent = G_NITMOD_TempEvent( self->r.currentOrigin, EV_OBITUARY );
 	ent->s.eventParm = meansOfDeath;
+	/* This native protocol extension must not inherit another pooled event. */
+	ent->s.effect3Time = 0;
 	if(meansOfDeath == MOD_GOOMBA) {
 		ent->s.eventParm = MOD_CRUSH;
 		ent->s.effect3Time = NITMOD_OBITUARY_GOOMBA;
@@ -769,16 +802,19 @@ void player_die( gentity_t *self, gentity_t *inflictor, gentity_t *attacker, int
 		if ( attacker == self || OnSameTeam (self, attacker ) ) {
 
 			// DHM - Nerve :: Complaint lodging
-			if( attacker != self && level.warmupTime <= 0 && g_gamestate.integer == GS_PLAYING) {
+			if( attacker != self && level.warmupTime <= 0 && g_gamestate.integer == GS_PLAYING &&
+                !G_NITMOD_AdminPrivilege((int)(attacker-g_entities), "immunity")) {
 				if( attacker->client->pers.localClient ) {
-					trap_SendServerCommand( self-g_entities, "complaint -4" );
+					trap_SendServerCommand( self-g_entities, (attacker->r.svFlags & SVF_BOT) ? "complaint -5" : "complaint -4" );
 				} else {
 					if( meansOfDeath != MOD_CRUSH_CONSTRUCTION && meansOfDeath != MOD_CRUSH_CONSTRUCTIONDEATH && meansOfDeath != MOD_CRUSH_CONSTRUCTIONDEATH_NOATTACKER ) {
 						if( g_complaintlimit.integer ) {
 
 							if( !(meansOfDeath == MOD_LANDMINE && g_disableComplaints.integer & TKFL_MINES ) &&
 								!((meansOfDeath == MOD_ARTY || meansOfDeath == MOD_AIRSTRIKE) && g_disableComplaints.integer & TKFL_AIRSTRIKE ) &&
-								!(meansOfDeath == MOD_MORTAR && g_disableComplaints.integer & TKFL_MORTAR ) ) {
+								!(meansOfDeath == MOD_MORTAR && g_disableComplaints.integer & TKFL_MORTAR ) &&
+                                !(meansOfDeath == MOD_TRIPMINE && (g_disableComplaints.integer & TKFL_TRIPMINES)) &&
+                                !(meansOfDeath == MOD_DYNAMITE && inflictor && (inflictor->etpro_misc_1 & 1)) ) {
 								trap_SendServerCommand( self-g_entities, va( "complaint %i", attacker->s.number ) );
 								self->client->pers.complaintClient = attacker->s.clientNum;
 								self->client->pers.complaintEndTime = level.time + 20500;
@@ -965,6 +1001,8 @@ void player_die( gentity_t *self, gentity_t *inflictor, gentity_t *attacker, int
 		// the body can still be gibbed
 		self->die = body_die;
 	}
+
+	G_NITMOD_FirstCombatAnnouncement(self, attacker, qfalse);
 
 	if( meansOfDeath == MOD_MACHINEGUN ) {
 		switch( self->client->sess.sessionTeam ) {
@@ -1395,6 +1433,7 @@ void G_Damage( gentity_t *targ, gentity_t *inflictor, gentity_t *attacker,  vec3
 	qboolean	onSameTeam;
 	hitRegion_t	hr = HR_NUM_HITREGIONS;
 	int mdxRegion = G_NITMOD_MDXDamageRegion(attacker,targ);
+	qboolean useTraceRegion;
 
 	if (!targ->takedamage) {
 		return;
@@ -1740,20 +1779,20 @@ void G_Damage( gentity_t *targ, gentity_t *inflictor, gentity_t *attacker,  vec3
 		if(g_friendlyFire.integer & 4)
 			G_Damage(attacker, attacker, attacker, dir, point, take, dflags, mod);
 		if((g_friendlyFire.integer & 2) && mod != MOD_POISON)
-			take = (int)(take * 0.5f);
+			take = G_NITMOD_ScaleDamage(take, 0.5f);
 	}
 	save = 0;
 
 	// adrenaline junkie!
 	if( targ->client && targ->client->ps.powerups[PW_ADRENALINE] ) {
-		take *= .5f;
+		take = G_NITMOD_ScaleDamage(take, 0.5f);
 	}
 
 	/* Original G_HasFlakJacket reads powerup slot2. The spawn/upgrade
 	 * path owns the reward and g_skills gates; Lua may also set the powerup. */
 	if(targ->client && targ->client->ps.powerups[NITMOD_PW_FLAK] &&
 		(G_WeaponIsExplosive(mod) || mod == MOD_TRIPMINE))
-		take = (int)(take * .5f);
+		take = G_NITMOD_ScaleDamage(take, 0.5f);
 
 	/* Original G_Damage 0x69777..0x697cf / 0x6a168..0x6a1d6:
 	 * both weapon options run after adrenaline/flak and before hit-region
@@ -1761,9 +1800,7 @@ void G_Damage( gentity_t *targ, gentity_t *inflictor, gentity_t *attacker,  vec3
 	if( mod == MOD_LANDMINE && (G_NITMOD_ConfiguredWeaponFlags() & 8) ) {
 		if( attacker->client &&
 		    (attacker->client->sess.nitmodSkillMasks[SK_EXPLOSIVES_AND_CONSTRUCTION] & 32u) ) {
-			double boosted = (double)take * 1.5;
-			/* Keep conversion defined for synthetic damage beyond int range. */
-			take = boosted > 2147483647.0 ? 2147483647 : (int)boosted;
+			take = G_NITMOD_ScaleDamage(take, 1.5f);
 		}
 	} else if( mod == MOD_THROWKNIFE && (G_NITMOD_ConfiguredWeaponFlags() & 2048) &&
 	           targ->client && targ->health > 0 ) {
@@ -1775,8 +1812,12 @@ void G_Damage( gentity_t *targ, gentity_t *inflictor, gentity_t *attacker,  vec3
 		targ->client->nitmodPoisonStacks = 1;
 	}
 
-	headShot = dir && point ? (mdxRegion>=0 ? (mdxRegion==HR_HEAD && targ->client && targ->health>0 && IsHeadShotWeapon(mod)) : IsHeadShot(targ, dir, point, mod)) : qfalse;
-	if(headShot && mdxRegion>=0) ++level.totalHeadshots;
+	/* Original flying items retain the attacker's last trace region. */
+	if(mdxRegion<0 && mod==MOD_THROWKNIFE && attacker)
+		mdxRegion=attacker->nitmodLastTraceRegion;
+	useTraceRegion=mdxRegion>=0 || mod==MOD_THROWKNIFE;
+	headShot = dir && point ? (useTraceRegion ? (mdxRegion==HR_HEAD && targ->client && targ->health>0 && IsHeadShotWeapon(mod)) : (!G_NITMOD_LegacyCvarInteger("g_hitboxes",0) && IsHeadShot(targ, dir, point, mod))) : qfalse;
+	if(headShot && useTraceRegion) ++level.totalHeadshots;
 	/* Original G_Damage 0x6a03e: headshot-only restricts client-caused damage
 	 * to clients, including non-headshot weapons; world and objects still work. */
 	if((G_NITMOD_LegacyCvarInteger("g_headshot", 0) & 1) &&
@@ -1832,11 +1873,12 @@ void G_Damage( gentity_t *targ, gentity_t *inflictor, gentity_t *attacker,  vec3
 
 			if( mod != MOD_K43_SCOPE &&
 				mod != MOD_GARAND_SCOPE ) {
-				take *= .8f;	// helmet gives us some protection
+				take = G_NITMOD_ScaleDamage(take, 0.8f); // helmet protection
 			}
 		}
 
 		targ->client->ps.eFlags |= EF_HEADSHOT;
+		G_NITMOD_MDXLoseHelmet(targ);
 
 		G_NITMOD_ApplyScopedHeadshot( targ, attacker, mod, &take, &dflags );
 
@@ -1855,20 +1897,23 @@ void G_Damage( gentity_t *targ, gentity_t *inflictor, gentity_t *attacker,  vec3
 			trap_SendServerCommand( attacker-g_entities, "print \"Head Shot\n\"\n");
 		}
 		G_LogRegionHit( attacker, HR_HEAD );
+		G_NITMOD_FirstCombatAnnouncement(targ, attacker, qtrue);
 		hr = HR_HEAD;
-	} else if ( mdxRegion>=0 ? mdxRegion==HR_LEGS : IsLegShot(targ, dir, point, mod) ) {
+	} else if ( useTraceRegion ? mdxRegion==HR_LEGS : (!G_NITMOD_LegacyCvarInteger("g_hitboxes",0) && IsLegShot(targ, dir, point, mod)) ) {
 		G_LogRegionHit( attacker, HR_LEGS );
 		hr = HR_LEGS;
 		if( g_debugBullets.integer ) {
 			trap_SendServerCommand( attacker-g_entities, "print \"Leg Shot\n\"\n");
 		}
-	} else if ( mdxRegion>=0 ? mdxRegion==HR_ARMS : IsArmShot(targ, attacker, point, mod) ) {
+	} else if ( useTraceRegion ? mdxRegion==HR_ARMS : (!G_NITMOD_LegacyCvarInteger("g_hitboxes",0) && IsArmShot(targ, attacker, point, mod)) ) {
 		G_LogRegionHit( attacker, HR_ARMS );
 		hr = HR_ARMS;
 		if( g_debugBullets.integer ) {
 			trap_SendServerCommand( attacker-g_entities, "print \"Arm Shot\n\"\n");
 		}
-	} else if (targ->client && targ->health > 0 && IsHeadShotWeapon( mod ) ) {
+	} else if (targ->client && targ->health > 0 &&
+		(useTraceRegion ? mdxRegion==HR_BODY :
+		 (!G_NITMOD_LegacyCvarInteger("g_hitboxes",0) && IsHeadShotWeapon(mod))) ) {
 		G_LogRegionHit( attacker, HR_BODY );
 		hr = HR_BODY;
 		if( g_debugBullets.integer ) {
@@ -2112,10 +2157,15 @@ explosions and melee attacks.
 ============
 */
 
-void G_RailTrail( vec_t* start, vec_t* end ) {
-	gentity_t* temp = G_TempEntity( start, EV_RAILTRAIL );
+void G_RailTrail( vec_t* start, vec_t* end, const vec3_t color ) {
+	gentity_t* temp = G_NITMOD_TempEvent( start, EV_RAILTRAIL );
 	VectorCopy( end, temp->s.origin2 );
 	temp->s.dmgFlags = 0;
+	/* Original G_RailTrail: byte-range RGB in angles, density -1. */
+	temp->s.angles[0] = (float)(int)(color[0] * 255.0f);
+	temp->s.angles[1] = (float)(int)(color[1] * 255.0f);
+	temp->s.angles[2] = (float)(int)(color[2] * 255.0f);
+	temp->s.density = -1;
 }
 
 #define MASK_CAN_DAMAGE		(CONTENTS_SOLID | CONTENTS_BODY)

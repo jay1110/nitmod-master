@@ -14,6 +14,15 @@
 
 static int sortedFireTeamClients[MAX_CLIENTS];
 
+/* Original CG_SortClientFireteam and sorted lookup both use sv_maxclients,
+ * so stale roster bits above the server's slot limit cannot enter the HUD. */
+static int CG_FireteamClientLimit(void) {
+    if(!NITMOD_UsesNitmodHud()) return MAX_CLIENTS;
+    if(cgs.maxclients < 0) return 0;
+    if(cgs.maxclients > MAX_CLIENTS) return MAX_CLIENTS;
+    return cgs.maxclients;
+}
+
 fireteamData_t *CG_IsOnFireteam(int clientNum) {
     if(clientNum < 0 || clientNum >= MAX_CLIENTS) return NULL;
     if(NITMOD_UsesNitmodHud() &&
@@ -121,12 +130,13 @@ int QDECL CG_SortFireTeam( const void *a, const void *b ) {
 // Sorts client's fireteam by leader then rank
 void CG_SortClientFireteam() {
 	int i;
+	int clientLimit = CG_FireteamClientLimit();
 
-	for(i = 0; i < MAX_CLIENTS; i++) {
+	for(i = 0; i < clientLimit; i++) {
 		sortedFireTeamClients[i] = i;
 	}
 
-	qsort( sortedFireTeamClients, MAX_CLIENTS, sizeof(sortedFireTeamClients[0]), CG_SortFireTeam );
+	qsort( sortedFireTeamClients, clientLimit, sizeof(sortedFireTeamClients[0]), CG_SortFireTeam );
 
 /*	for(i = 0; i < MAX_CLIENTS; i++) {
 		CG_Printf( "%i ", sortedFireTeamClients[i] );
@@ -236,13 +246,15 @@ clientInfo_t* CG_FireTeamPlayerForPosition(int pos, int max) {
 // Client, sorted by rank, on CLIENT'S fireteam
 clientInfo_t* CG_SortedFireTeamPlayerForPosition(int pos, int max) {
 	int i, cnt = 0;
+	int clientLimit = CG_FireteamClientLimit();
 	fireteamData_t* f = CG_IsOnFireteam(cg.clientNum);
+	if(NITMOD_UsesNitmodHud() && max > 6) max = 6;
 
 	if(!f || pos < 0 || pos >= max) {
 		return NULL;
 	}
 
-	for(i = 0; i < MAX_CLIENTS && cnt < max; i++) {
+	for(i = 0; i < clientLimit && cnt < max; i++) {
 		if(!(f == CG_IsOnFireteam(sortedFireTeamClients[i]))) {
 			return NULL;
 		}

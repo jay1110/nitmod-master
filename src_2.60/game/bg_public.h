@@ -520,6 +520,7 @@ typedef struct {
 	int nitmodStandCrouchUntil;
 	qboolean nitmodCrouchStarted; /* inverse of original firstTime latch */
 	qboolean nitmodWasCrouching;
+	int nitmodPlayDeadTime; /* signed transition time, original pmext+0x84 */
 } pmoveExt_t;	// data used both in client and server - store it here
 				// instead of playerstate to prevent different engine versions of playerstate between XP and MP
 
@@ -1868,6 +1869,9 @@ typedef enum
 	ANIM_ET_NOPOWER,
 	ANIM_ET_FIREWEAPON3,
 	ANIM_ET_FIREWEAPON3PRONE,
+	ANIM_ET_DEATH_FROM_BEHIND,
+	ANIM_ET_SALUTE,
+	ANIM_ET_RAISE,
 
 	NUM_ANIM_EVENTTYPES
 } scriptAnimEventTypes_t;
@@ -1900,12 +1904,13 @@ typedef enum
 	ANIM_COND_ENEMY_TEAM,
 	ANIM_COND_PARACHUTE,
 	ANIM_COND_CHARGING,
-	ANIM_COND_SECONDLIFE,
+	ANIM_COND_PLAYERCLASS,
 	ANIM_COND_HEALTH_LEVEL,
 	ANIM_COND_FLAILING_TYPE,
 	ANIM_COND_GEN_BITFLAG,		// xkan 1/15/2003 - general bit flags (to save some space)
 	ANIM_COND_AISTATE,			// xkan 1/17/2003 - our current ai state (sometimes more convenient than creating a separate section)
 
+	ANIM_COND_HOLDING,
 	NUM_ANIM_CONDITIONS
 } scriptAnimConditions_t;
 
@@ -1921,6 +1926,7 @@ typedef struct
 {
 	int	index;		// reference into the table of possible conditionals
 	int	value[2];		// can store anything from weapon bits, to position enums, etc
+	qboolean negate;	// NOT/MINUS reverses the result of this condition
 } animScriptCondition_t;
 
 typedef struct
@@ -2492,6 +2498,9 @@ typedef enum popupMessageType_e {
 	PM_OBJECTIVE,
 	PM_DESTRUCTION,
 	PM_TEAM,
+	PM_NITMOD_HEALTH,
+	PM_NITMOD_FLAG_AXIS,
+	PM_NITMOD_FLAG_ALLIES,
 	PM_NUM_TYPES
 } popupMessageType_t;
 

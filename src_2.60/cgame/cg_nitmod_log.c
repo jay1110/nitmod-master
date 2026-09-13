@@ -10,7 +10,9 @@ void CG_NitmodLogLine(char *out, int size, const qtime_t *now, const char *text)
         out[0] = '\0';
         return;
     }
-    Com_sprintf(out, size, "[%02d:%02d:%02d] %s", now->tm_hour, now->tm_min, now->tm_sec, text);
+    /* Original CG_WriteToLog: color reset, space-padded hour, zero-padded
+     * minutes/seconds, then one space. No brackets or added newline. */
+    Com_sprintf(out, size, "^7%2d:%02d:%02d %s", now->tm_hour, now->tm_min, now->tm_sec, text);
 }
 
 void CG_NitmodLogInit(void) {
@@ -35,7 +37,8 @@ void CG_NitmodLogText(const char *text) {
     char line[1024];
     qtime_t now;
     int length;
-    if(!nitmodClientLog || !text || !text[0]) return;
+    /* Original callers gate each write, not only the initial file open. */
+    if(!cg_clientLog.integer || !nitmodClientLog || !text || !text[0]) return;
     trap_RealTime(&now);
     CG_NitmodLogLine(line, sizeof(line), &now, text);
     length = strlen(line);

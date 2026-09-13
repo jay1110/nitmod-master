@@ -1,5 +1,6 @@
 #include "g_local.h"
 #include "g_nitmod_config.h"
+#include "g_nitmod_etbot_lifecycle.h"
 #include "g_nitmod_entities.h"
 #include "nitmod_weapon_defaults.h"
 #include "g_nitmod_weapon_definition.h"
@@ -14,7 +15,7 @@ extern void SP_target_smoke (gentity_t *ent);
 
 void M_think (gentity_t *ent);
 void G_ExplodeMissile( gentity_t *ent );
-static void G_NITMOD_CreateMissileCamera(gentity_t *owner, gentity_t *missile);
+void G_NITMOD_CreateMissileCamera(gentity_t *owner, gentity_t *missile);
 
 /*
 ================
@@ -55,7 +56,8 @@ void G_BounceMissile( gentity_t *ent, trace_t *trace ) {
 	}
 */
 	// reflect the velocity on the trace plane
-	hitTime = level.previousTime + ( level.time - level.previousTime ) * trace->fraction;
+	/* Preserve the original intermediate precision until integer truncation. */
+	hitTime = (int)(level.previousTime + ( level.time - level.previousTime ) * (double)trace->fraction);
 	BG_EvaluateTrajectoryDelta( &ent->s.pos, hitTime, velocity, qfalse, ent->s.effect2Time );
 	dot = DotProduct( velocity, trace->plane.normal );
 	VectorMA( velocity, -2*dot, trace->plane.normal, ent->s.pos.trDelta );
@@ -97,8 +99,12 @@ void G_BounceMissile( gentity_t *ent, trace_t *trace ) {
 		//%	if ( trace->plane.normal[2] > 0.2 && VectorLengthSquared( ent->s.pos.trDelta ) < SQR(40) )
 		if( trace->plane.normal[2] > 0.2 && VectorLengthSquared( relativeDelta ) < SQR(40) )
 		{
+			/* Original G_BounceMissile 0x8b92e: settle above the contact plane. */
+			trace->endpos[2] += 1.f;
 //----(SA)	make the world the owner of the dynamite, so the player can shoot it after it stops moving
-			if(ent->s.weapon == WP_DYNAMITE || ent->s.weapon == WP_LANDMINE || ent->s.weapon == WP_POISON_MINE || ent->s.weapon == WP_SATCHEL || ent->s.weapon == WP_TRIPMINE || ent->s.weapon == WP_SMOKE_BOMB)
+			if(ent->s.weapon == WP_GRENADE_LAUNCHER || ent->s.weapon == WP_GRENADE_PINEAPPLE ||
+                ent->s.weapon == WP_SMOKE_MARKER || ent->s.weapon == WP_BOMB || ent->s.weapon == WP_POISON_BOMB ||
+                ent->s.weapon == WP_DYNAMITE || ent->s.weapon == WP_LANDMINE || ent->s.weapon == WP_POISON_MINE || ent->s.weapon == WP_SATCHEL || ent->s.weapon == WP_TRIPMINE || ent->s.weapon == WP_SMOKE_BOMB)
 				ent->r.ownerNum = ENTITYNUM_WORLD;
 //----(SA)	end
 			G_SetOrigin( ent, trace->endpos );
@@ -231,7 +237,7 @@ void G_MissileImpact( gentity_t *ent, trace_t *trace, int impactDamage ) {
 	
 //	G_SetOrigin( ent, trace->endpos );
 
-	temp = G_TempEntity( trace->endpos, event );
+	temp = G_NITMOD_TempEvent( trace->endpos, event );
 	temp->s.otherEntityNum = otherentnum;
 //	temp->r.svFlags |= SVF_BROADCAST;
 	temp->s.eventParm = param;
@@ -450,10 +456,10 @@ void G_ExplodeMissile( gentity_t *ent ) {
 		// give big weapons the shakey shakey
 		if (ent->s.weapon == WP_DYNAMITE || ent->s.weapon == WP_PANZERFAUST || ent->s.weapon == WP_GRENADE_LAUNCHER ||
 			ent->s.weapon == WP_GRENADE_PINEAPPLE || ent->s.weapon == WP_MAPMORTAR || ent->s.weapon == WP_ARTY || ent->s.weapon == WP_SMOKE_MARKER
-			|| ent->s.weapon == WP_LANDMINE || ent->s.weapon == WP_POISON_MINE || ent->s.weapon == WP_SATCHEL || ent->s.weapon == WP_TRIPMINE /*|| ent->s.weapon == WP_SMOKE_BOMB*/
+			|| ent->s.weapon == WP_LANDMINE || ent->s.weapon == WP_BOMB || ent->s.weapon == WP_SATCHEL || ent->s.weapon == WP_TRIPMINE /*|| ent->s.weapon == WP_SMOKE_BOMB*/
 			) {		
 
-			gentity_t* tent = G_TempEntity(ent->r.currentOrigin, EV_SHAKE);
+			gentity_t* tent = G_NITMOD_TempEvent(ent->r.currentOrigin, EV_SHAKE);
 			tent->s.onFireStart = ent->splashDamage * 4;
 			tent->r.svFlags |= SVF_BROADCAST;
 		}
@@ -648,7 +654,7 @@ void G_RunMissile( gentity_t *ent ) {
 	trace_t		tr;
 	int			impactDamage;
 
-	if( ent->s.weapon == WP_LANDMINE || ent->s.weapon == WP_POISON_MINE || ent->s.weapon == WP_DYNAMITE || ent->s.weapon == WP_SATCHEL ) {
+	if( ent->s.weapon == WP_BOMB || ent->s.weapon == WP_LANDMINE || ent->s.weapon == WP_POISON_MINE || ent->s.weapon == WP_DYNAMITE || ent->s.weapon == WP_SATCHEL ) {
 		Landmine_Check_Ground( ent );
 
 		if ( ent->s.groundEntityNum == -1 ) {
@@ -664,7 +670,8 @@ void G_RunMissile( gentity_t *ent ) {
 
 	if( (ent->clipmask & CONTENTS_BODY) && (ent->s.weapon == WP_DYNAMITE || ent->s.weapon == WP_ARTY || ent->s.weapon == WP_SMOKE_MARKER
 		|| ent->s.weapon == WP_GRENADE_LAUNCHER || ent->s.weapon == WP_GRENADE_PINEAPPLE
-		|| ent->s.weapon == WP_LANDMINE || ent->s.weapon == WP_POISON_MINE || ent->s.weapon == WP_SATCHEL || ent->s.weapon == WP_SMOKE_BOMB
+		|| ent->s.weapon == WP_BOMB || ent->s.weapon == WP_POISON_BOMB
+        || ent->s.weapon == WP_LANDMINE || ent->s.weapon == WP_POISON_MINE || ent->s.weapon == WP_SATCHEL || ent->s.weapon == WP_SMOKE_BOMB
 		) ) {
 
 		if( !ent->s.pos.trDelta[0] && !ent->s.pos.trDelta[1] && !ent->s.pos.trDelta[2] ) {
@@ -685,7 +692,7 @@ void G_RunMissile( gentity_t *ent ) {
 				ent->r.currentOrigin[1] < level.mapcoordsMaxs[1] ) {
 				gentity_t *tent;
 
-				tent = G_TempEntity( ent->r.currentOrigin, EV_MORTAR_MISS );
+				tent = G_NITMOD_TempEvent( ent->r.currentOrigin, EV_MORTAR_MISS );
 				tent->s.clientNum = ent->r.ownerNum;
 				tent->r.svFlags |= SVF_BROADCAST;
 				tent->s.density = 1;	// angular
@@ -698,7 +705,7 @@ void G_RunMissile( gentity_t *ent ) {
 				if( origin[2] < BG_GetTracemapGroundFloor() ) {
 					gentity_t *tent;
 
-					tent = G_TempEntity( ent->r.currentOrigin, EV_MORTAR_MISS );
+					tent = G_NITMOD_TempEvent( ent->r.currentOrigin, EV_MORTAR_MISS );
 					tent->s.clientNum = ent->r.ownerNum;
 					tent->r.svFlags |= SVF_BROADCAST;
 					tent->s.density = 0;	// direct
@@ -759,7 +766,7 @@ void G_RunMissile( gentity_t *ent ) {
 
 				impactpos[2] = BG_GetGroundHeightAtPoint(impactpos);
 
-				tent = G_TempEntity( impactpos, EV_MORTAR_IMPACT );
+				tent = G_NITMOD_TempEvent( impactpos, EV_MORTAR_IMPACT );
 				tent->s.clientNum = ent->r.ownerNum;
 				tent->r.svFlags |= SVF_BROADCAST;
 
@@ -820,7 +827,7 @@ void G_RunMissile( gentity_t *ent ) {
 		else
 			impactDamage = 20;	// "grenade"/"dynamite"		// probably adjust this based on velocity
 
-		if( ent->s.weapon == WP_DYNAMITE || ent->s.weapon == WP_LANDMINE || ent->s.weapon == WP_POISON_MINE || ent->s.weapon == WP_SATCHEL ) {
+		if( ent->s.weapon == WP_DYNAMITE || ent->s.weapon == WP_LANDMINE || ent->s.weapon == WP_BOMB || ent->s.weapon == WP_SATCHEL ) {
 			if( ent->s.pos.trType != TR_STATIONARY )
 				G_MissileImpact( ent, &tr, impactDamage );
 		} else {
@@ -828,7 +835,7 @@ void G_RunMissile( gentity_t *ent ) {
 		}
 
 		if ( ent->s.eType != ET_MISSILE ) {
-			gentity_t* tent = G_TempEntity(ent->r.currentOrigin, EV_SHAKE);
+			gentity_t* tent = G_NITMOD_TempEvent(ent->r.currentOrigin, EV_SHAKE);
 			tent->s.onFireStart = ent->splashDamage * 4;
 			tent->r.svFlags |= SVF_BROADCAST;
 			return;		// exploded
@@ -1041,7 +1048,9 @@ void G_BurnTarget( gentity_t *self, gentity_t *body, qboolean directhit )
 	// Non-clients that take damage get damaged here
 	if ( !body->client ) {
 		if ( body->health > 0 )
-			G_Damage( body, self->parent, self->parent, vec3_origin, self->r.currentOrigin, 2, 0, MOD_FLAMETHROWER );
+			/* Original G_FlameDamage 0x8d248 uses the configured flame damage. */
+			G_Damage( body, self->parent, self->parent, vec3_origin, self->r.currentOrigin,
+				G_GetWeaponDamage(WP_FLAMETHROWER), 0, MOD_FLAMETHROWER );
 		return;
 	}
 
@@ -1060,6 +1069,12 @@ void G_BurnTarget( gentity_t *self, gentity_t *body, qboolean directhit )
 	}
 
 	G_BurnMeGood( self, body );
+	/* Original direct and area contacts consume one statistics credit per
+	 * flame chunk, only after accepted client contact with a client owner. */
+	if(self->count && self->parent && self->parent->client) {
+		G_addStats(body, self->parent, G_GetWeaponDamage(WP_FLAMETHROWER), MOD_FLAMETHROWER);
+		self->count = 0;
+	}
 }
 
 void G_FlameDamage( gentity_t *self, gentity_t *ignoreent ) {
@@ -1161,7 +1176,7 @@ void G_RunFlamechunk( gentity_t *ent ) {
 		VectorAdd(b1, temp, b1);
 		VectorSet( temp, size, size, size );
 		VectorAdd(b2, temp, b2);
-		bboxEnt = G_TempEntity( b1, EV_RAILTRAIL );
+		bboxEnt = G_NITMOD_TempEvent( b1, EV_RAILTRAIL );
 		VectorCopy(b2, bboxEnt->s.origin2);
 		bboxEnt->s.dmgFlags = 1;	// ("type")
 	}
@@ -1202,6 +1217,7 @@ gentity_t *fire_flamechunk (gentity_t *self, vec3_t start, vec3_t dir) {
 
 	bolt = G_Spawn();
 	bolt->classname = "flamechunk";
+	bolt->count = 1; /* Original fire_flamechunk 0x8d7aa: pending hit-stat credit. */
 	
 	bolt->timestamp = level.time;
 	bolt->flameQuotaTime = level.time + 50;
@@ -1336,12 +1352,18 @@ void G_FadeItems(gentity_t* ent, int modType) {
 	}
 }
 
+/* Original SetTeam 0x5dae4..0x5daf5 and ClientDisconnect share this cleanup. */
+void G_NITMOD_FadeSupportProjectiles( gentity_t *owner ) {
+    if( !owner ) return;
+    G_NITMOD_FadeAirstrikes( owner, G_FreeEntity );
+    G_FadeItems( owner, MOD_ARTY );
+}
+
 /* Original ClientDisconnect, ELF 0x4f1ee..0x4f228 and 0x4f55d..0x4f5c1. Support fire always
  * expires with its owner; camera projectiles use the live 1/2/4 option bits. */
 void G_NITMOD_FadeDisconnectProjectiles( gentity_t *owner, int cameraOptions ) {
     if( !owner ) return;
-    G_NITMOD_FadeAirstrikes( owner, G_FreeEntity );
-    G_FadeItems( owner, MOD_ARTY );
+    G_NITMOD_FadeSupportProjectiles( owner );
     if( cameraOptions & 2 ) G_FadeItems( owner, MOD_MORTAR );
     if( cameraOptions & 1 ) G_FadeItems( owner, MOD_PANZERFAUST );
     if( cameraOptions & 4 ) {
@@ -1478,21 +1500,23 @@ void G_TripMineThink(gentity_t* ent) {
 	VectorCopy(ent->r.currentOrigin, start);
 	VectorMA(start, 2048, ent->s.origin2, end);
 	if(G_NITMOD_TripmineSmokeBlocks(start, end)) return;
-	G_Trace(ent, &trace, start, NULL, NULL, end, ent->s.number, MASK_SHOT);
+	G_Trace(ent, &trace, start, NULL, NULL, end, ent->s.number, MASK_SHOT, qtrue);
 	if(trace.entityNum < 0 || trace.entityNum >= ENTITYNUM_WORLD) return;
 	hit = &g_entities[trace.entityNum];
 	if(!hit->client) {
-		/* Original classname hashes 0x1cce6 and 0x3bf8a. */
-		if(!Q_stricmp(hit->classname, "func_door") || !Q_stricmp(hit->classname, "func_door_rotating"))
-			ent->think = G_ExplodeMissile;
-		return;
+		/* Original G_TripMineThink 0x8aae8: use the cached class hash and
+		 * the trace result, including non-client hits with a known region. */
+		if(ent->nitmodLastTraceRegion == -1 &&
+		   hit->nitmodClassnameHash != 0x1cce6 &&
+		   hit->nitmodClassnameHash != 0x3bf8a) return;
+	} else {
+		/* Original TripMineThink uses friendly-fire bit 0x80, unlike landmines. */
+		if(ent->parent && (g_friendlyFire.integer & 0x80) &&
+		   hit->client->sess.sessionTeam == G_LandmineTeam(ent) &&
+		   hit->s.clientNum != ent->parent->s.clientNum) return;
+		if(!(g_OmniBotFlags.integer & 0x20) && (hit->r.svFlags & SVF_BOT) &&
+		   hit->client->sess.sessionTeam == G_LandmineTeam(ent)) return;
 	}
-	/* Original TripMineThink uses friendly-fire bit 0x80, unlike landmines. */
-	if(ent->parent && (g_friendlyFire.integer & 0x80) &&
-	   hit->client->sess.sessionTeam == G_LandmineTeam(ent) &&
-	   hit->s.clientNum != ent->parent->s.clientNum) return;
-	if(!(g_OmniBotFlags.integer & 0x20) && (hit->r.svFlags & SVF_BOT) &&
-	   hit->client->sess.sessionTeam == G_LandmineTeam(ent)) return;
 	ent->think = G_ExplodeMissile;
 }
 
@@ -1570,6 +1594,7 @@ void G_LandmineThink( gentity_t *self ) {
 
 		// TAT 11/20/2002 use the unified trigger check to see if we are close enough to prime the mine
 		if( sEntWillTriggerMine( ent, self ) ) {
+			Bot_Event_PreTriggerMine(ent - g_entities, self);
 			trigger = qtrue;
 			break;
 		}
@@ -1611,6 +1636,9 @@ void LandminePostThink( gentity_t *self ) {
 	}
 
 	if(!trigger) {
+		/* Original 0x8b530 uses the last box candidate, not the owner.
+		 * Empty lists have no valid recipient; avoid the original invalid index. */
+		if(cnt > 0) Bot_Event_PostTriggerMine(entityList[cnt - 1], self);
 		LandMinePostTrigger(self);
 	}
 }
@@ -1955,11 +1983,6 @@ gentity_t *fire_grenade (gentity_t *self, vec3_t start, vec3_t dir, int grenadeW
 	// RF, record the time for AI
 	bolt->awaitingHelpTime = level.time;
 
-	if(grenadeWPID == WP_MORTAR_SET || grenadeWPID == WP_GPG40 ||
-		grenadeWPID == WP_M7 || grenadeWPID == WP_KAR98 ||
-		grenadeWPID == WP_CARBINE) {
-		G_NITMOD_CreateMissileCamera(self, bolt);
-	}
 
 	return bolt;
 }
@@ -1977,7 +2000,7 @@ static int G_NITMOD_MissileThinkDelay(void) {
 	return 1000 / fps;
 }
 
-static void G_NITMOD_CreateMissileCamera(gentity_t *owner, gentity_t *missile) {
+void G_NITMOD_CreateMissileCamera(gentity_t *owner, gentity_t *missile) {
 	gentity_t *camera;
 	if(!owner || !owner->client || !missile ||
 		!G_NITMOD_LegacyCvarInteger("g_missileCams", 0)) return;
@@ -2351,7 +2374,7 @@ gentity_t *fire_mortar(gentity_t *self, vec3_t start, vec3_t dir) {
 
 	if(self->spawnflags) {
 		gentity_t	*tent;
-		tent = G_TempEntity (self->s.pos.trBase, EV_MORTAREFX);
+		tent = G_NITMOD_TempEvent (self->s.pos.trBase, EV_MORTAREFX);
 		tent->s.density = self->spawnflags;	// send smoke and muzzle flash flags
 		VectorCopy (self->s.pos.trBase, tent->s.origin);
 		VectorCopy (self->s.apos.trBase, tent->s.angles);

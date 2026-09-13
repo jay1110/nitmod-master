@@ -29,6 +29,7 @@ qboolean CG_NitmodSpreeStart(int actor, int detail, int type);
 void CG_NitmodDrawSpree(void);
 qboolean CG_NitmodSpreeUsesLeft(void);
 void CG_NitmodRegisterSpreeSounds(void);
+void CG_NitmodObjectiveAnnouncement(const char *text);
 qboolean CG_NitmodSpecialAnnouncement(int type, int xp);
 void CG_NitmodHealthBonus(int amount);
 const char *CG_NitmodSpecialText(void);

@@ -86,7 +86,25 @@ vec3_t	muzzleTrace;
 
 // forward dec
 void Bullet_Fire (gentity_t *ent, float spread, int damage, qboolean distance_falloff);
-qboolean Bullet_Fire_Extended(gentity_t *source, gentity_t *attacker, vec3_t start, vec3_t end, float spread, int damage, qboolean distance_falloff);
+/* Original classic bullet traces ignore the corpse queue only when the
+ * attacker's weapon definition disallows gibbing (ELF 0xf998a..0xf9a51).
+ * Apply this to both the solid and water trace, restoring after each trace. */
+static void G_NITMOD_TraceBullet(gentity_t *source, gentity_t *attacker,
+                                trace_t *result, const vec3_t start,
+                                const vec3_t end, int mask) {
+    int i;
+    int mod = GetAmmoTableData(attacker->s.weapon)->mod;
+    qboolean ignoreBodies = !G_NITMOD_WeaponGibAllowed(
+        BG_WeaponForMOD(mod), G_WeaponIsExplosive(mod));
+    if(ignoreBodies) {
+        for(i = 0; i < BODY_QUEUE_SIZE; ++i)
+            if(level.bodyQue[i]) G_TempTraceIgnoreEntity(level.bodyQue[i]);
+    }
+    G_Trace(source, result, start, NULL, NULL, end, source->s.number, mask, !(mask & MASK_WATER));
+    if(ignoreBodies) G_ResetTempTraceIgnoreEnts();
+}
+
+qboolean Bullet_Fire_Extended(gentity_t *source, gentity_t *attacker, vec3_t start, vec3_t end, float spread, int damage, qboolean distance_falloff, qboolean emitImpact);
 
 int G_GetWeaponDamage( int weapon ); // JPW
 float G_GetWeaponSpread( int weapon );
@@ -160,6 +178,8 @@ void G_NITMOD_ThrowKnife(gentity_t *ent) {
 	knife->s.weapon = WP_KNIFE;
 	trap_LinkEntity(knife);
 	ent->client->ps.grenadeTimeLeft = 0;
+	/* Original ThrowKnife counts the throw independently of g_gamestate. */
+	ent->client->sess.aWeaponStats[WS_KNIFE].atts++;
 }
 
 qboolean G_WeaponIsExplosive( meansOfDeath_t mod )
@@ -228,7 +248,8 @@ KNIFE/GAUNTLET (NOTE: gauntlet is now the Zombie melee)
 ======================================================================
 */
 
-#define KNIFE_DIST 48
+/* Original Weapon_Knife 0xf1282 uses 64; the cursor hint remains 48. */
+#define KNIFE_DIST 64
 
 // Let's use the same angle between function we've used before
 extern float sAngleBetweenVectors(vec3_t a, vec3_t b);
@@ -251,19 +272,23 @@ void Weapon_Knife( gentity_t *ent ) {
 	AngleVectors (ent->client->ps.viewangles, forward, right, up);
 	CalcMuzzlePoint ( ent, ent->s.weapon, forward, right, up, muzzleTrace );
 	VectorMA (muzzleTrace, KNIFE_DIST, forward, end);
-	G_HistoricalTrace(ent, &tr, muzzleTrace, NULL, NULL, end, ent->s.number, MASK_SHOT);
+	G_HistoricalTrace(ent, &tr, muzzleTrace, NULL, NULL, end, ent->s.number, MASK_SHOT, qfalse);
 
-	if ( tr.surfaceFlags & SURF_NOIMPACT )
+	if ( tr.surfaceFlags & SURF_NOIMPACT ) {
+		G_NITMOD_MDXEndDamage();
 		return;
+	}
 
 	// no contact
-	if(tr.fraction == 1.0f)
+	if(tr.fraction == 1.0f) {
+		G_NITMOD_MDXEndDamage();
 		return;
+	}
 
 	if(tr.entityNum >= MAX_CLIENTS) {	// world brush or non-player entity (no blood)
-		tent = G_TempEntity( tr.endpos, EV_MISSILE_MISS );
+		tent = G_NITMOD_TempEvent( tr.endpos, EV_MISSILE_MISS );
 	} else {							// other player
-		tent = G_TempEntity( tr.endpos, EV_MISSILE_HIT );
+		tent = G_NITMOD_TempEvent( tr.endpos, EV_MISSILE_HIT );
 	}
 
 	tent->s.otherEntityNum = tr.entityNum;
@@ -271,13 +296,17 @@ void Weapon_Knife( gentity_t *ent ) {
 	tent->s.weapon = ent->s.weapon;
 	tent->s.clientNum = ent->r.ownerNum;
 
-	if(tr.entityNum == ENTITYNUM_WORLD)	// don't worry about doing any damage
+	if(tr.entityNum == ENTITYNUM_WORLD) {
+		G_NITMOD_MDXEndDamage();
 		return;
+	}
 
 	traceEnt = &g_entities[ tr.entityNum ];
 
-	if(!(traceEnt->takedamage))
+	if(!(traceEnt->takedamage)) {
+		G_NITMOD_MDXEndDamage();
 		return;
+	}
 
 	damage = G_GetWeaponDamage(ent->s.weapon); // JPW		// default knife damage for frontal attacks
 
@@ -304,6 +333,7 @@ void Weapon_Knife( gentity_t *ent ) {
 	}
 
 	G_Damage(traceEnt, ent, ent, forward, tr.endpos, damage, DAMAGE_NO_KNOCKBACK, mod);
+	G_NITMOD_MDXEndDamage();
 }
 
 // JPW NERVE
@@ -698,7 +728,7 @@ static void G_NITMOD_RecordReviveSpree( gentity_t *medic, qboolean healing ) {
 	if( !medic || !medic->client ) return;
 	options = G_NITMOD_LegacyCvarInteger("n_reviveSpreeOptions", 1);
 	if( !healing || (options & 2) ) {
-		count = (int)((unsigned int)medic->client->nitmodReviveSpree + 1u);
+		count = NITMOD_SupportSignedTime((uint32_t)medic->client->nitmodReviveSpree + UINT32_C(1));
 		medic->client->nitmodReviveSpree = count;
 		if( count > medic->client->nitmodBestReviveSpree )
 			medic->client->nitmodBestReviveSpree = count;
@@ -708,12 +738,12 @@ static void G_NITMOD_RecordReviveSpree( gentity_t *medic, qboolean healing ) {
 	if( healing && !(options & 16) ) return;
 	window = G_NITMOD_LegacyCvarInteger("n_multiReviveTime", 2000);
 	if( window > 0 ) {
-		if( (int)((unsigned int)level.time -
-		    (unsigned int)medic->client->nitmodLastReviveTime) > window ) {
+		if( NITMOD_SupportSignedTime((uint32_t)level.time -
+		    (uint32_t)medic->client->nitmodLastReviveTime) > window ) {
 			medic->client->nitmodMultiReviveCount = 1;
 		} else {
 			medic->client->nitmodMultiReviveCount =
-				(int)((unsigned int)medic->client->nitmodMultiReviveCount + 1u);
+				NITMOD_SupportSignedTime((uint32_t)medic->client->nitmodMultiReviveCount + UINT32_C(1));
 			if( medic->client->nitmodMultiReviveCount >= 2 &&
 				medic->client->nitmodMultiReviveCount <= 5 )
 				nitmod_Announce(medic->s.number,
@@ -763,6 +793,7 @@ qboolean ReviveEntity(gentity_t *ent, gentity_t *traceEnt)
 	vec3_t		org;
 	trace_t		tr;
 	int			healamt, headshot, oldweapon,oldweaponstate,oldclasstime=0;
+	int         savedReviveFlags;
 	qboolean	usedSyringe = qfalse;		// DHM - Nerve
 	int			ammo[MAX_WEAPONS];		// JPW NERVE total amount of ammo
 	int			ammoclip[MAX_WEAPONS];	// JPW NERVE ammo in clip
@@ -773,6 +804,7 @@ qboolean ReviveEntity(gentity_t *ent, gentity_t *traceEnt)
 	// copy some stuff out that we'll wanna restore
 	VectorCopy(traceEnt->client->ps.origin, org);
 	headshot = traceEnt->client->ps.eFlags & EF_HEADSHOT;
+	savedReviveFlags = traceEnt->client->ps.eFlags & (EF_NODRAW | NITMOD_EF_STRIPPED);
 	if( !ent || (ent->client->sess.nitmodSkillMasks[SK_FIRST_AID] & 8u) )
 		healamt = traceEnt->client->ps.stats[STAT_MAX_HEALTH];
 	else
@@ -789,6 +821,26 @@ qboolean ReviveEntity(gentity_t *ent, gentity_t *traceEnt)
 
 	ClientSpawn(traceEnt, qtrue);
 
+	/* Original ReviveEntity 0xf258c..0xf267c records series and emits
+	 * the optional obituary immediately after ClientSpawn. */
+	if(ent) {
+        G_NITMOD_RecordRevive(ent);
+        /* Original ReviveEntity 0xf266c/0xf2bc0: option4 broadcasts
+         * the revive obituary (original cause23, syringe weapon11). */
+        if(G_NITMOD_LegacyCvarInteger("n_reviveSpreeOptions", 1) & 4) {
+            gentity_t *notice = G_NITMOD_TempEvent(vec3_origin, EV_OBITUARY);
+            notice->s.eventParm = MOD_SYRINGE;
+            notice->s.effect3Time = 0;
+            notice->s.otherEntityNum = traceEnt->s.number;
+            notice->s.otherEntityNum2 = ent->s.number;
+            notice->s.weapon = WP_MEDIC_SYRINGE;
+            notice->r.svFlags = SVF_BROADCAST;
+        }
+    }
+
+	/* Original ReviveEntity 0xf269d notifies bots for every revival,
+	 * including direct callers without a medic, before restoring state. */
+	Bot_Event_Revived(traceEnt - g_entities, ent);
 	traceEnt->client->ps.stats[STAT_PLAYER_CLASS] = traceEnt->client->sess.playerType;
 	memcpy(traceEnt->client->ps.ammo,ammo,sizeof(int)*MAX_WEAPONS);
 	memcpy(traceEnt->client->ps.ammoclip,ammoclip,sizeof(int)*MAX_WEAPONS);
@@ -796,7 +848,11 @@ qboolean ReviveEntity(gentity_t *ent, gentity_t *traceEnt)
 
 	if( headshot ) {
 		traceEnt->client->ps.eFlags |= EF_HEADSHOT;
+		G_NITMOD_MDXLoseHelmet(traceEnt);
 	}
+	/* Original ReviveEntity 0xf2818..0xf283b preserves stripped uniforms
+	 * and hidden players across ClientSpawn. */
+	traceEnt->client->ps.eFlags |= savedReviveFlags;
 	traceEnt->client->ps.weapon = oldweapon;
 	traceEnt->client->ps.weaponstate = oldweaponstate;
 
@@ -821,7 +877,8 @@ qboolean ReviveEntity(gentity_t *ent, gentity_t *traceEnt)
 
 	// DHM - Nerve :: Let the person being revived know about it
 	if(ent) {
-	trap_SendServerCommand( traceEnt-g_entities, va("cp \"You have been revived by [lof]%s[lon] [lof]%s!\n\"", ent->client->sess.sessionTeam == TEAM_ALLIES ? rankNames_Allies[ ent->client->sess.rank ] : rankNames_Axis[ ent->client->sess.rank ], ent->client->pers.netname) );
+	/* Original ReviveEntity 0xf2998 uses the name and ^7 colour reset. */
+	trap_SendServerCommand( traceEnt-g_entities, va("cp \"You have been revived by %s^7!\n\"", ent->client->pers.netname) );
 	traceEnt->client->pers.nitmodLastReviverClient = ent - g_entities;
 	traceEnt->props_frame_state = ent->s.number;
 	}
@@ -842,20 +899,13 @@ qboolean ReviveEntity(gentity_t *ent, gentity_t *traceEnt)
 		traceEnt->client->ps.pm_time = 2100;
 	}
 
-	if(ent) {
-        G_NITMOD_RecordRevive(ent);
-        /* Original ReviveEntity 0xf266c/0xf2bc0: option4 broadcasts
-         * the revive obituary (original cause23, syringe weapon11). */
-        if(G_NITMOD_LegacyCvarInteger("n_reviveSpreeOptions", 1) & 4) {
-            gentity_t *notice = G_TempEntity(vec3_origin, EV_OBITUARY);
-            notice->s.eventParm = MOD_SYRINGE;
-            notice->s.otherEntityNum = traceEnt->s.number;
-            notice->s.otherEntityNum2 = ent->s.number;
-            notice->s.weapon = WP_MEDIC_SYRINGE;
-            notice->r.svFlags = SVF_BROADCAST;
-        }
-    }
 
+	/* Original ReviveEntity 0xf2a31..0xf2a6d republishes session totals
+	 * after both normal and fast revival animations. */
+	traceEnt->client->nitmodLuaPersistant[3] = traceEnt->client->sess.kills;
+	traceEnt->client->ps.persistant[PERS_KILLED] = traceEnt->client->sess.deaths;
+	traceEnt->client->nitmodLuaPersistant[6] = traceEnt->client->sess.nitmodBodyHits;
+	traceEnt->client->nitmodLuaPersistant[5] = traceEnt->client->sess.nitmodHeadHits;
 	// Tell the caller if we actually used a syringe
 	return usedSyringe;
 
@@ -887,10 +937,10 @@ void Weapon_Syringe(gentity_t *ent) {
 	VectorMA(muzzleTrace, ent->client->ps.leanf, right, muzzleTrace);
 	muzzleTrace[2] -= fabs(ent->client->ps.leanf / 3.5f);
 	VectorMA(muzzleTrace, 64, forward, end);
-	G_HistoricalTrace(ent, &tr, muzzleTrace, NULL, NULL, end, ent->s.number, MASK_SHOT);
+	G_HistoricalTrace(ent, &tr, muzzleTrace, NULL, NULL, end, ent->s.number, MASK_SHOT, qfalse);
 	if( tr.startsolid ) {
 		VectorMA(muzzleTrace, 8, forward, end);
-		G_HistoricalTrace(ent, &tr, muzzleTrace, NULL, NULL, end, ent->s.number, MASK_SHOT);
+		G_HistoricalTrace(ent, &tr, muzzleTrace, NULL, NULL, end, ent->s.number, MASK_SHOT, qfalse);
 	}
 
 	if (tr.fraction < 1.0 && tr.entityNum >= 0 && tr.entityNum < MAX_GENTITIES) {
@@ -911,7 +961,6 @@ void Weapon_Syringe(gentity_t *ent) {
 				if( usedSyringe && ent && ent->client ) {
 					G_LogPrintf("Medic_Revive: %d %d\n", ent - g_entities, traceEnt - g_entities);
 					if(!(traceEnt->r.svFlags&SVF_BOT)) G_NITMOD_GlobalStatsEvent(ent->s.number,4);
-					Bot_Event_Revived(traceEnt - g_entities, ent);
 					ent->client->sess.nitmodTeamHits -= 2.0f;
 				}
 
@@ -935,6 +984,7 @@ void Weapon_Syringe(gentity_t *ent) {
 	// DHM - Nerve :: If the medicine wasn't used, give back the ammo
 	if (!usedSyringe)
 		ent->client->ps.ammoclip[BG_FindClipForWeapon(WP_MEDIC_SYRINGE)] += 1;
+	G_NITMOD_MDXEndDamage();
 }
 // jpw
 
@@ -1338,7 +1388,7 @@ static qboolean TryConstructing( gentity_t *ent ) {
 				VectorAdd( constructible->parent->r.absmin, constructible->parent->r.absmax, mid );
 				VectorScale( mid, 0.5f, mid );
 
-				te = G_TempEntity( mid, EV_GENERAL_SOUND );
+				te = G_NITMOD_TempEvent( mid, EV_GENERAL_SOUND );
 				te->s.eventParm = G_SoundIndex( "sound/world/build.wav" );
 			}
 			
@@ -2291,9 +2341,8 @@ evilbanigoto:
 
 				// Gordon: moved down here to prevent two prints when dynamite IS near objective
 
-				trap_SendServerCommand(ent-g_entities,
-					va("cp \"Dynamite is now armed with a %i second timer!\" 1",
-						dynamiteTimer / 1000));
+				/* Original nitmod_cp reason 7 lets cgame select its text. */
+				trap_SendServerCommand(ent-g_entities, "ncp 7");
 				}
 
 				// check if player is in trigger objective field
@@ -2716,7 +2765,7 @@ void weapon_checkAirStrikeThink2( gentity_t *ent ) {
 void weapon_callSecondPlane( gentity_t *ent ) {
 	gentity_t* te;
 	
-	te = G_TempEntity( ent->s.pos.trBase, EV_GLOBAL_SOUND );
+	te = G_NITMOD_TempEvent( ent->s.pos.trBase, EV_GLOBAL_SOUND );
 	te->s.eventParm = G_SoundIndex( "sound/weapons/airstrike/airstrike_plane.wav" );
 	te->r.svFlags |= SVF_BROADCAST;
 
@@ -2796,7 +2845,7 @@ qboolean weapon_checkAirStrike( gentity_t *ent ) {
 	return qtrue;
 }
 
-void G_RailTrail( vec_t* start, vec_t* end );
+void G_RailTrail( vec_t* start, vec_t* end, const vec3_t color );
 
 
 /* Original weapon_callAirStrike ELF 0xef950: g_asblock is a bitmask,
@@ -2821,7 +2870,7 @@ static qboolean G_NITMOD_AirstrikeBlocked(gentity_t *ent, const vec3_t sky, trac
 				start[i] = ent->r.currentOrigin[i] - 8.f;
 				end[i] = ent->r.currentOrigin[i] + 8.f;
 			}
-			box = G_TempEntity(start, EV_RAILTRAIL);
+			box = G_NITMOD_TempEvent(start, EV_RAILTRAIL);
 			VectorCopy(end, box->s.origin2);
 			box->s.dmgFlags = 1;
 		}
@@ -2871,7 +2920,7 @@ void weapon_callAirStrike( gentity_t *ent ) {
 	G_AddAirstrikeToCounters( ent->parent );
 
 	{
-		gentity_t* te = G_TempEntity( ent->s.pos.trBase, EV_GLOBAL_SOUND );
+		gentity_t* te = G_NITMOD_TempEvent( ent->s.pos.trBase, EV_GLOBAL_SOUND );
 		te->s.eventParm = G_SoundIndex( "sound/weapons/airstrike/airstrike_plane.wav");
 		te->r.svFlags |= SVF_BROADCAST;
 	}
@@ -2952,6 +3001,10 @@ void weapon_callAirStrike( gentity_t *ent ) {
 			bomb->accuracy				= 2;
 			bomb->classname				= "air strike";
 			bomb->splashRadius			= 400;
+			/* Original weapon_callAirStrike 0xeffaf..0xeffe8 reads
+			 * smokemarker definition damage, splash damage and radius. */
+			G_NITMOD_WeaponDamageOverrides(WP_SMOKE_MARKER, &bomb->damage,
+				&bomb->splashDamage, &bomb->splashRadius);
 			bomb->methodOfDeath			= MOD_AIRSTRIKE;
 			bomb->splashMethodOfDeath	= MOD_AIRSTRIKE;
 			bomb->clipmask		= MASK_MISSILESHOT;
@@ -3001,7 +3054,6 @@ void weapon_callAirStrike( gentity_t *ent ) {
 // JPW NERVE -- sound effect for spotter round, had to do this as half-second bomb warning
 
 void artilleryThink_real( gentity_t *ent ) {
-	ent->freeAfterEvent = qtrue;
 	trap_LinkEntity(ent);
 	{
 		int sfx = rand()%3;
@@ -3012,6 +3064,9 @@ void artilleryThink_real( gentity_t *ent ) {
 		case 2: G_AddEvent( ent, EV_GENERAL_SOUND, G_SoundIndex( "sound/weapons/artillery/artillery_fly_3.wav" )); break;
 		}
 	}
+	/* Original 0xee5a4: retain this shell until its impact. */
+	ent->nextthink = level.time + 500;
+	ent->think = G_AirStrikeExplode;
 }
 void artilleryThink( gentity_t *ent ) {
 	ent->think = artilleryThink_real;
@@ -3024,6 +3079,21 @@ void artilleryThink( gentity_t *ent ) {
 void artilleryGoAway(gentity_t *ent) {
 	ent->freeAfterEvent = qtrue;
 	trap_LinkEntity(ent);
+}
+
+/* Original nitrox_artillerySpotter_Think 0xee630: the incoming sound
+ * precedes the spotter impact by 500 ms. Native CS sound IDs address the
+ * same assets as original fixed sound IDs 1..3. */
+void artillerySpotterThink( gentity_t *ent );
+static void artillerySpotterWarning( gentity_t *ent ) {
+    static const char *sounds[] = {
+        "sound/weapons/artillery/artillery_fly_1.wav",
+        "sound/weapons/artillery/artillery_fly_2.wav",
+        "sound/weapons/artillery/artillery_fly_3.wav"
+    };
+    G_AddEvent(ent, EV_GENERAL_SOUND, G_SoundIndex(sounds[rand() % 3]));
+    ent->nextthink = level.time + 500;
+    ent->think = artillerySpotterThink;
 }
 
 // JPW NERVE -- generates some smoke debris
@@ -3060,16 +3130,23 @@ void artillerySpotterThink( gentity_t *ent ) {
 		tmpdir[2]			= 1;
 		VectorNormalize( tmpdir );
 		tmpdir[2]			= 1; // extra up
-		VectorScale( tmpdir, 500 + random() * 500, tmpdir );
+		/* Original 0xf7fdf..0xf8071 draws a separate 250..510
+		 * multiplier per axis. A shared 500..1000 scalar changes both
+		 * the plume shape and the random sequence of later effects. */
+		tmpdir[0] *= 250.f + random() * 260.f;
+		tmpdir[1] *= 250.f + random() * 260.f;
+		tmpdir[2] *= 250.f + random() * 260.f;
 		VectorCopy( tmpdir,bomb->s.pos.trDelta );
 		SnapVector( bomb->s.pos.trDelta );			// save net bandwidth
 		VectorCopy( ent->s.pos.trBase, bomb->s.pos.trBase );
 		VectorCopy( ent->s.pos.trBase, bomb->r.currentOrigin );
+		/* Original 0xf811b: create at the spotter impact, after the first puff. */
+		if( i == 0 ) G_NITMOD_SpawnArtilleryHint( ent );
 	}
 }
 
 void G_GlobalClientEvent( int event, int param, int client ) {
-	gentity_t* tent = G_TempEntity( vec3_origin, event );
+	gentity_t* tent = G_NITMOD_TempEvent( vec3_origin, event );
 	tent->s.density = param;
 	tent->r.singleClient = client;
 	tent->r.svFlags = SVF_SINGLECLIENT | SVF_BROADCAST;
@@ -3085,7 +3162,7 @@ void Weapon_Artillery(gentity_t *ent) {
 	int i, count;	
 	vec3_t muzzlePoint, end, bomboffset, pos, fallaxis;
 	float traceheight, bottomtraceheight;
-	gentity_t *bomb, *bomb2;
+	gentity_t *bomb;
 
 	if( ent->client->ps.stats[STAT_PLAYER_CLASS] != PC_FIELDOPS ) {
 		G_Printf("not a fieldops, you can't shoot this!\n");
@@ -3197,7 +3274,7 @@ void Weapon_Artillery(gentity_t *ent) {
 
 	for( i = 0; i < count; i++ ) {
 		bomb				= G_Spawn();
-		bomb->think			= G_AirStrikeExplode;
+		bomb->think			= artilleryThink;
 		bomb->s.eType		= ET_MISSILE;
 		bomb->r.svFlags		= SVF_NOCLIENT;
 		bomb->s.weapon		= WP_ARTY; // might wanna change this
@@ -3207,7 +3284,7 @@ void Weapon_Artillery(gentity_t *ent) {
 		bomb->s.teamNum		= ent->client->sess.sessionTeam;
 
 		if (i == 0) {
-			bomb->nextthink		= level.time + 5000;
+			bomb->nextthink		= level.time + 4500;
 			bomb->r.svFlags		= SVF_BROADCAST;
 			bomb->classname		= "props_explosion"; // was "air strike"
 			bomb->damage		= 0; // maybe should un-hard-code these?
@@ -3218,9 +3295,9 @@ void Weapon_Artillery(gentity_t *ent) {
 			bomb->delay			= 300;
 			bomb->s.otherEntityNum2 = 1;	// first bomb
 
-			bomb->think = artillerySpotterThink;
+			bomb->think = artillerySpotterWarning;
 		} else {
-			bomb->nextthink = level.time + 8950 + 2000 * i + crandom() * 800;
+			bomb->nextthink = level.time + 8950 + 2000 * i + crandom() * 800 - 600;
 
 			// Gordon: for explosion type
 			bomb->accuracy		= 2;
@@ -3228,6 +3305,10 @@ void Weapon_Artillery(gentity_t *ent) {
 			bomb->damage		= 0;
 			bomb->splashDamage  = 400;
 			bomb->splashRadius	= 400;
+			/* Original Weapon_Artillery 0xf87e3/0xf87f5 uses the
+			 * binocular definition; the spotter above keeps fixed 90/50. */
+			G_NITMOD_WeaponDamageOverrides(WP_BINOCULARS, NULL,
+				&bomb->splashDamage, &bomb->splashRadius);
 		}
 		bomb->methodOfDeath			= MOD_ARTY;
 		bomb->splashMethodOfDeath	= MOD_ARTY;
@@ -3259,27 +3340,10 @@ void Weapon_Artillery(gentity_t *ent) {
 		bomb->s.pos.trDelta[2] = 0;
 		SnapVector( bomb->s.pos.trDelta );			// save net bandwidth
 		VectorCopy (bomb->s.pos.trBase, bomb->r.currentOrigin);
-		if( i == 1 ) {
-			G_NITMOD_SpawnArtilleryHint( bomb );
-		}
 
-// build arty falling sound effect in front of bomb drop
-		bomb2 = G_Spawn();
-		bomb2->think = artilleryThink;
-		bomb2->s.eType	= ET_MISSILE;
-		bomb2->r.svFlags	= SVF_NOCLIENT;
-		bomb2->r.ownerNum	= ent->s.number;
-		bomb2->parent		= ent;
-		bomb2->s.teamNum	= ent->s.teamNum;
-		bomb2->damage		= 0;
-		bomb2->nextthink = bomb->nextthink-600;
-		bomb2->classname = "air strike";
-		bomb2->clipmask = MASK_MISSILESHOT;
-		bomb2->s.pos.trType = TR_STATIONARY; // was TR_GRAVITY,  might wanna go back to this and drop from height
-		bomb2->s.pos.trTime = level.time;		// move a bit on the very first frame
-		VectorCopy(bomb->s.pos.trBase,bomb2->s.pos.trBase);
-		VectorCopy(bomb->s.pos.trDelta,bomb2->s.pos.trDelta);
-		VectorCopy(bomb->s.pos.trBase,bomb2->r.currentOrigin);
+/* Original Weapon_Artillery allocates one entity per round. The
+         * regular round itself runs the 100 ms + 500 ms warning stages. */
+
 	}
 
 	// OSP -- weapon stats
@@ -3600,7 +3664,7 @@ void EmitterCheck(gentity_t *ent, gentity_t *attacker, trace_t *tr) {
 	} else if(Q_stricmp(ent->classname, "func_leaky") == 0) {
 
 
-		tent = G_TempEntity (origin, EV_EMITTER);
+		tent = G_NITMOD_TempEvent (origin, EV_EMITTER);
 		VectorCopy (origin, tent->s.origin);
 		tent->s.time = 1234;
 		tent->s.density = 9876;
@@ -3687,7 +3751,7 @@ void Bullet_Fire (gentity_t *ent, float spread, int damage, qboolean distance_fa
 
 	G_HistoricalTraceBegin( ent );
 
-	Bullet_Fire_Extended(ent, ent, muzzleTrace, end, spread, damage, distance_falloff);
+	Bullet_Fire_Extended(ent, ent, muzzleTrace, end, spread, damage, distance_falloff, qtrue);
 
 	G_HistoricalTraceEnd( ent );
 }
@@ -3702,7 +3766,7 @@ Bullet_Fire_Extended
 	uses for this include shooting through entities (windows, doors, other players, etc.) and reflecting bullets
 ==============
 */
-qboolean Bullet_Fire_Extended(gentity_t *source, gentity_t *attacker, vec3_t start, vec3_t end, float spread, int damage, qboolean distance_falloff) {
+qboolean Bullet_Fire_Extended(gentity_t *source, gentity_t *attacker, vec3_t start, vec3_t end, float spread, int damage, qboolean distance_falloff, qboolean emitImpact) {
 	trace_t		tr,mdxWater;
 	int mdxRegion=-1;
 	qboolean mdxTrace=G_NITMOD_LegacyCvarInteger("g_hitboxes",0)!=0;
@@ -3710,7 +3774,6 @@ qboolean Bullet_Fire_Extended(gentity_t *source, gentity_t *attacker, vec3_t sta
 	gentity_t	*traceEnt;
 	qboolean hitClient = qfalse;
 
-	qboolean reducedDamage = qfalse;
 
 	qboolean waslinked = qfalse;
 
@@ -3721,7 +3784,12 @@ qboolean Bullet_Fire_Extended(gentity_t *source, gentity_t *attacker, vec3_t sta
 	}
 
 	if(mdxTrace) mdxRegion=G_NITMOD_MDXTraceBullets(source,&tr,&mdxWater,start,end);
-	else G_Trace(source, &tr, start, NULL, NULL, end, source->s.number, MASK_SHOT);
+	else {
+        /* Original 0xf99e1/0xf9a51: trace both before relinking the shooter;
+         * the water trace must not replace the damage hit region. */
+        G_NITMOD_TraceBullet(source, attacker, &tr, start, end, MASK_SHOT);
+        G_NITMOD_TraceBullet(source, attacker, &mdxWater, start, end, MASK_WATER | MASK_SHOT);
+    }
 
 	//bani - prevent shooting ourselves in the head when prone, firing through a breakable
 	if( waslinked == qtrue ) {
@@ -3730,9 +3798,8 @@ qboolean Bullet_Fire_Extended(gentity_t *source, gentity_t *attacker, vec3_t sta
 
 	// bullet debugging using Q3A's railtrail
 	if(g_debugBullets.integer & 1) {
-		tent = G_TempEntity( start, EV_RAILTRAIL );
-		VectorCopy(tr.endpos, tent->s.origin2);
-		tent->s.otherEntityNum2 = attacker->s.number;
+		vec3_t color = {1.0f, 0.0f, 0.0f};
+		G_RailTrail(start, tr.endpos, color);
 	}
 
 	RubbleFlagCheck (attacker, tr);
@@ -3745,52 +3812,23 @@ qboolean Bullet_Fire_Extended(gentity_t *source, gentity_t *attacker, vec3_t sta
 	SnapVectorTowards( tr.endpos, start );
 
 	if( distance_falloff ) {
-		vec_t dist;
 		vec3_t shotvec;
-		float scale;
-
-		//VectorSubtract( tr.endpos, start, shotvec );
-		VectorSubtract( tr.endpos, muzzleTrace, shotvec );		
-		dist = VectorLengthSquared( shotvec );
-
-#if DO_BROKEN_DISTANCEFALLOFF
-		// ~~~___---___
-		if( dist > Square(1500.f) ) {
-			reducedDamage = qtrue;
-
-			if( dist > Square(2500.f) ) {
-				damage *= 0.5f;
-			} else {
-				float scale = 1.f - 0.5f * (Square(1000.f) / (dist - Square(1000.f)));
-
-				damage *= scale;
-			}
-		}
-#else
-		// ~~~---______
-		// zinx - start at 100% at 1500 units (and before),
-		// and go to 50% at 2500 units (and after)
-
-		// Square(1500) to Square(2500) -> 0.0 to 1.0
-		scale = (dist - Square(1500.f)) / (Square(2500.f) - Square(1500.f));
-		// 0.0 to 1.0 -> 0.0 to 0.5
-		scale *= 0.5f;
-		// 0.0 to 0.5 -> 1.0 to 0.5
-		scale = 1.0f - scale;
-
-		// And, finally, cap it.
-		reducedDamage = qtrue;
-		if (scale >= 1.0f) { scale = 1.0f; reducedDamage = qfalse; }
-		else if (scale < 0.5f) scale = 0.5f;
-
-		damage *= scale;
-#endif
+		double scale;
+		/* Original 0xf9bcd..0xf9c17: linear distance, 1500..2500,
+		 * clamped to 1..0.5, then truncate damage toward zero. */
+		VectorSubtract(tr.endpos, muzzleTrace, shotvec);
+		scale = 1.0 - ((double)VectorLength(shotvec) - 1500.0) / 1000.0 * 0.5;
+		if(scale >= 1.0) scale = 1.0;
+		else if(scale < 0.5) scale = 0.5;
+		damage = (int)((double)damage * scale);
 	}
 
 	// send bullet impact
 	if ( traceEnt->takedamage && traceEnt->client /*&& !(traceEnt->flags & FL_DEFENSE_GUARD)*/ ) {
-		tent = G_TempEntity( tr.endpos, EV_BULLET_HIT_FLESH );
-		tent->s.eventParm = traceEnt->s.number;
+		if(emitImpact) {
+			tent = G_NITMOD_TempEvent( tr.endpos, EV_BULLET_HIT_FLESH );
+			tent->s.eventParm = traceEnt->s.number;
+		}
 
 		if(AccuracyHit( traceEnt, attacker )) {
 			hitClient = qtrue;
@@ -3803,7 +3841,7 @@ qboolean Bullet_Fire_Extended(gentity_t *source, gentity_t *attacker, vec3_t sta
 			VectorCopy(traceEnt->r.currentOrigin, b2);
 			VectorAdd(b1, traceEnt->r.mins, b1);
 			VectorAdd(b2, traceEnt->r.maxs, b2);
-			bboxEnt = G_TempEntity( b1, EV_RAILTRAIL );
+			bboxEnt = G_NITMOD_TempEvent( b1, EV_RAILTRAIL );
 			VectorCopy(b2, bboxEnt->s.origin2);
 			bboxEnt->s.dmgFlags = 1;	// ("type")
 		}
@@ -3820,34 +3858,39 @@ qboolean Bullet_Fire_Extended(gentity_t *source, gentity_t *attacker, vec3_t sta
 			VectorCopy(traceEnt->r.currentOrigin, b2);
 			VectorAdd(b1, traceEnt->r.mins, b1);
 			VectorAdd(b2, traceEnt->r.maxs, b2);
-			bboxEnt = G_TempEntity( b1, EV_RAILTRAIL );
+			bboxEnt = G_NITMOD_TempEvent( b1, EV_RAILTRAIL );
 			VectorCopy(b2, bboxEnt->s.origin2);
 			bboxEnt->s.dmgFlags = 1;	// ("type")
 		}
 
-		tent = G_TempEntity( tr.endpos, EV_BULLET_HIT_WALL );
+		if(emitImpact) {
+			tent = G_NITMOD_TempEvent( tr.endpos, EV_BULLET_HIT_WALL );
 
-		if(mdxTrace) tr2=mdxWater;
-		else G_Trace(source, &tr2, start, NULL, NULL, end, source->s.number, MASK_WATER | MASK_SHOT);
+			tr2=mdxWater;
 
-		if((tr.entityNum != tr2.entityNum && tr2.fraction != 1)) {
-			vec3_t v;
+			if((tr.entityNum != tr2.entityNum && tr2.fraction != 1)) {
+				vec3_t v;
 
-			VectorSubtract( tr.endpos, start, v );
+				VectorSubtract( tr.endpos, start, v );
 
-			tent->s.origin2[0] = (8192 * tr2.fraction) / VectorLength( v );
-		} else {
-			tent->s.origin2[0] = 0;
+				tent->s.origin2[0] = (8192 * tr2.fraction) / VectorLength( v );
+			} else {
+				tent->s.origin2[0] = 0;
+			}
+
+			dot = DotProduct( forward, tr.plane.normal );
+			VectorMA( forward, -2*dot, tr.plane.normal, reflect );
+			VectorNormalize( reflect );
+
+			tent->s.eventParm = DirToByte( reflect );
+			tent->s.otherEntityNum2 = ENTITYNUM_NONE;
 		}
-
-		dot = DotProduct( forward, tr.plane.normal );
-		VectorMA( forward, -2*dot, tr.plane.normal, reflect );
-		VectorNormalize( reflect );
-
-		tent->s.eventParm = DirToByte( reflect );
-		tent->s.otherEntityNum2 = ENTITYNUM_NONE;
 	}
-	tent->s.otherEntityNum = attacker->s.number;
+	/* Original suppresses impact events on recursive penetration only. */
+	if(emitImpact) {
+		tent->s.otherEntityNum = attacker->s.number;
+		tent->s.clientNum = attacker->s.clientNum;
+	}
 
 	if ( traceEnt->takedamage) {
 		if(mdxTrace) G_NITMOD_MDXBeginDamage(attacker,traceEnt,mdxRegion);
@@ -3859,7 +3902,7 @@ qboolean Bullet_Fire_Extended(gentity_t *source, gentity_t *attacker, vec3_t sta
 			if(traceEnt->health <= damage) {
 				// start new bullet at position this hit the bmodel and continue to the end position (ignoring shot-through bmodel in next trace)
 				// spread = 0 as this is an extension of an already spread shot
-				return Bullet_Fire_Extended(traceEnt, attacker, tr.endpos, end, 0, damage, distance_falloff);
+				return Bullet_Fire_Extended(traceEnt, attacker, tr.endpos, end, 0, damage, distance_falloff, qfalse);
 			}
 		}
 	}
@@ -3938,17 +3981,11 @@ gentity_t *weapon_mortar_fire( gentity_t *ent, int grenType ) {
 	// check for valid start spot (so you don't throw through or get stuck in a wall)
 	VectorMA( launchPos, 32, forward, testPos);
 
-	// Gordon: hack so i can do inverse trajectory calcs easily :p
-	if(G_IsSinglePlayerGame() && ent->r.svFlags & SVF_BOT) {
-/*		forward[0] *= 3000;
-		forward[1] *= 3000;
-		forward[2] *= 3000;*/
-		VectorCopy( ent->gDelta, forward );
-	} else {
-		forward[0] *= 3000*1.1f;
-		forward[1] *= 3000*1.1f;
-		forward[2] *= 1500*1.1f;
-	}
+	/* Original weapon_mortar_fire 0xfa370..0xfa39c applies the same
+	 * launch velocity to every shooter, without the ET single-player override. */
+	forward[0] *= 3300.0f;
+	forward[1] *= 3300.0f;
+	forward[2] *= 1650.0f;
 
 	trap_Trace (&tr, testPos, tv(-4.f, -4.f, 0.f), tv(4.f, 4.f, 6.f), launchPos, ent->s.number, MASK_MISSILESHOT);
 
@@ -3958,6 +3995,8 @@ gentity_t *weapon_mortar_fire( gentity_t *ent, int grenType ) {
 	}
 
 	m = fire_grenade( ent, launchPos, forward, grenType );
+	/* Original weapon_mortar_fire 0xfa449 creates the camera here. */
+	G_NITMOD_CreateMissileCamera(ent, m);
 
 	return m;
 }
@@ -4192,6 +4231,14 @@ void Weapon_FlamethrowerFire( gentity_t *ent ) {
 	VectorMA( start, -8, forward, start );
 	VectorMA( start, 10, right, start );
 	VectorMA( start, -6, up, start );
+	/* Original flame launch adjusts only the muzzle for lean; the ground
+	 * safety trace below intentionally retains the unleaned eye origin. */
+	if(ent->client->ps.leanf) {
+		vec3_t leanRight;
+		AngleVectors(ent->client->ps.viewangles, NULL, leanRight, NULL);
+		VectorMA(start, ent->client->ps.leanf, leanRight, start);
+		start[2] -= fabs(ent->client->ps.leanf / 3.5f);
+	}
 	
 	// prevent flame thrower cheat, run & fire while aiming at the ground, don't get hurt
 	// 72 total box height, 18 xy -> 77 trace radius (from view point towards the ground) is enough to cover the area around the feet
@@ -4214,6 +4261,9 @@ void Weapon_FlamethrowerFire( gentity_t *ent ) {
 	}
 
 	traceEnt = fire_flamechunk ( ent, start, forward );
+	/* Original 0xfb179/0xfb186 refreshes visibility even on throttled shots. */
+	ent->r.svFlags |= SVF_BROADCAST;
+	ent->client->nitmodFlameBroadcastUntil = (int)((unsigned int)level.time + 2500u);
 }
 
 //======================================================================
@@ -4285,7 +4335,8 @@ set muzzle location relative to pivoting eye
 */
 void CalcMuzzlePoint ( gentity_t *ent, int weapon, vec3_t forward, vec3_t right, vec3_t up, vec3_t muzzlePoint ) {
 	VectorCopy( ent->r.currentOrigin, muzzlePoint );
-	muzzlePoint[2] += ent->client->ps.viewheight;
+	muzzlePoint[2] += ent->client->ps.viewangles[PITCH] > 30 &&
+		(ent->client->ps.eFlags & EF_CROUCHING) ? 30 : ent->client->ps.viewheight;
 	// Ridah, this puts the start point outside the bounding box, isn't necessary
 //	VectorMA( muzzlePoint, 14, forward, muzzlePoint );
 	// done.
@@ -4294,6 +4345,11 @@ void CalcMuzzlePoint ( gentity_t *ent, int weapon, vec3_t forward, vec3_t right,
 	//----(SA) modified
 	switch(weapon)	// Ridah, changed this so I can predict weapons
 	{
+		case WP_KNIFE:
+		case WP_MEDIC_SYRINGE:
+		case WP_POISON_SYRINGE:
+			/* Original wire IDs 1, 11, 47: no weapon offset. */
+			break;
 		case WP_PANZERFAUST:
 			VectorMA(muzzlePoint,10,right,muzzlePoint);
 			break;
@@ -4302,6 +4358,8 @@ void CalcMuzzlePoint ( gentity_t *ent, int weapon, vec3_t forward, vec3_t right,
 		case WP_GRENADE_LAUNCHER:
 		case WP_SATCHEL:
 		case WP_SMOKE_BOMB:
+		case WP_BOMB:
+		case WP_POISON_BOMB:
 			VectorMA( muzzlePoint, 20, right, muzzlePoint );
 			break;
 		case WP_AKIMBO_COLT:
@@ -4319,26 +4377,28 @@ void CalcMuzzlePoint ( gentity_t *ent, int weapon, vec3_t forward, vec3_t right,
 
 	// done.
 
-	// (SA) actually, this is sort of moot right now since
-	// you're not allowed to fire when leaning.  Leave in
-	// in case we decide to enable some lean-firing.
-	// (SA) works with gl now
-	//AddLean(ent, muzzlePoint);
+	/* Original effect muzzle applies lean before final integer truncation. */
+	if(weapon != WP_NONE && ent->client->ps.leanf) {
+		AddLean(ent, muzzlePoint);
+		muzzlePoint[2] -= fabs(ent->client->ps.leanf / 3.5f);
+	}
 
 	// snap to integer coordinates for more efficient network bandwidth usage
 	SnapVector( muzzlePoint );
 }
 
 // Rafael - for activate
-void CalcMuzzlePointForActivate ( gentity_t *ent, vec3_t forward, vec3_t right, vec3_t up, vec3_t muzzlePoint ) {
-	
-	VectorCopy( ent->s.pos.trBase, muzzlePoint );
-	muzzlePoint[2] += ent->client->ps.viewheight;
-
-	AddLean(ent, muzzlePoint);
-
-	// snap to integer coordinates for more efficient network bandwidth usage
-	SnapVector( muzzlePoint );
+void CalcMuzzlePointForActivate ( gentity_t *ent, vec3_t forward, vec3_t right, vec3_t up, vec3_t muzzlePoint, qboolean useViewHeight ) {
+	VectorCopy(ent->s.pos.trBase, muzzlePoint);
+	if(ent->health <= 0) muzzlePoint[2] += 25;
+	else if(!useViewHeight && ent->client->ps.viewangles[PITCH] > 30 &&
+		(ent->client->ps.eFlags & EF_CROUCHING)) muzzlePoint[2] += 30;
+	else muzzlePoint[2] += ent->client->ps.viewheight;
+	/* Original preserves fractional activation/trace coordinates. */
+	if(ent->client && ent->client->ps.leanf) {
+		AddLean(ent, muzzlePoint);
+		muzzlePoint[2] -= fabs(ent->client->ps.leanf / 3.5f);
+	}
 }
 // done.
 
@@ -4371,13 +4431,23 @@ void CalcMuzzlePoints(gentity_t *ent, int weapon) {
 
 			// rotate 'forward' vector by the sway
 			phase = level.time / 1000.0 * ZOOM_PITCH_FREQUENCY * M_PI * 2;
-			viewang[PITCH] += ZOOM_PITCH_AMPLITUDE * sin( phase ) * (spreadfrac+pitchMinAmp);
+			viewang[PITCH] += ZOOM_PITCH_AMPLITUDE * sin( phase ) * ((double)spreadfrac+pitchMinAmp);
 
 			phase = level.time / 1000.0 * ZOOM_YAW_FREQUENCY * M_PI * 2;
-			viewang[YAW] += ZOOM_YAW_AMPLITUDE * sin( phase ) * (spreadfrac+yawMinAmp);
+			viewang[YAW] += ZOOM_YAW_AMPLITUDE * sin( phase ) * ((double)spreadfrac+yawMinAmp);
 		}
 	}
 
+
+	// Original CalcMuzzlePoints 0xfb7be: poison perturbs the final firing axes,
+	// including scoped sway; the shared player viewangles remain unchanged.
+	if ( ent->client->ps.eFlags & NITMOD_EF_POISONED ) {
+		float phase = level.time / 1000.0 * 0.3 * M_PI;
+		double sway = sin( phase );
+		viewang[ROLL] += 36.0f * sway;
+		viewang[YAW] += 24.0f * sway;
+		viewang[PITCH] += 12.0f * sin( (double)phase * 2.5f );
+	}
 
 	// set aiming directions
 	AngleVectors (viewang, forward, right, up);
@@ -4386,7 +4456,7 @@ void CalcMuzzlePoints(gentity_t *ent, int weapon) {
 //			straight out of the camera (SP5, Mauser right now) can have that accuracy, but
 //			weapons that need an offset effect (bazooka/grenade/etc.) can still look like
 //			they came out of the weap.
-	CalcMuzzlePointForActivate( ent, forward, right, up, muzzleTrace );
+	CalcMuzzlePointForActivate( ent, forward, right, up, muzzleTrace, qtrue );
 	CalcMuzzlePoint ( ent, weapon, forward, right, up, muzzleEffect );
 }
 

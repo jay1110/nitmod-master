@@ -6,11 +6,12 @@
  * FIRE slot for flak; retain reserved wire slots 12/13 without colliding
  * with BLACKOUT/MVCLIENTLIST. All sixteen slots must survive translation. */
 #define NITMOD_PW_FLAK PW_FIRE
+#define NITMOD_PW_ORIGINAL_12 13
 #define NITMOD_POWERUP_COUNT 16
 static const int nitmodPowerupIds[NITMOD_POWERUP_COUNT]={PW_NONE,PW_INVULNERABLE,NITMOD_PW_FLAK,
     PW_BREATHER,PW_NOFATIGUE,PW_REDFLAG,PW_BLUEFLAG,PW_OPS_DISGUISED,
     PW_OPS_CLASS_1,PW_OPS_CLASS_2,PW_OPS_CLASS_3,PW_ADRENALINE,
-    13,PW_ELECTRIC,PW_BLACKOUT,PW_MVCLIENTLIST};
+    NITMOD_PW_ORIGINAL_12,PW_ELECTRIC,PW_BLACKOUT,PW_MVCLIENTLIST};
 static unsigned int NITMOD_NativePowerupBits(unsigned int original) {
     unsigned int native=0;int i;
     for(i=0;i<NITMOD_POWERUP_COUNT;++i) if(original&(1u<<i)) native|=1u<<nitmodPowerupIds[i];

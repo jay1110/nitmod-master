@@ -123,17 +123,35 @@ int G_NITMOD_WeaponHeadshotAllowed(int weapon, int fallback) {
     return choice==1 ? 1 : choice==2 ? 0 : fallback;
 }
 
+int G_NITMOD_ScaleDamage(int damage, float ratio) {
+    int scaled;
+    double product, remainder;
+    /* Original 0x698d9-0x698f2 multiplies the integer by the script
+     * float in x87 precision, then truncates without a float store. */
+    product=(double)damage*(double)ratio;
+    /* x87 FISTP returns integer-indefinite for NaN and overflow. */
+    remainder=fma((double)damage, (double)ratio, -product);
+    if(product==2147483648.0 && remainder<0.0) scaled=INT_MAX;
+    else if(product>=-2147483648.0 && product<2147483648.0) {
+        scaled=(int)product;
+        /* A double may itself round a near-integer product. Preserve the
+         * exact side of that boundary before truncating toward zero. */
+        if(product==(double)scaled) {
+            if(product>0.0 && remainder<0.0) --scaled;
+            else if(product<0.0 && remainder>0.0) ++scaled;
+        }
+    } else scaled=INT_MIN;
+    return scaled;
+}
+
 int G_NITMOD_HeadshotDamage(int weapon, int damage) {
     float ratio=2.f;
     int minimum=50, scaled;
-    double product;
     if(weapon>WP_NONE && weapon<WP_NUM_WEAPONS && pickupDefinitionState[weapon]==1) {
         if(weaponOptions[weapon].headshotRatio) ratio=weaponOptions[weapon].headshotRatio;
         if(weaponOptions[weapon].minHeadshotDamage) minimum=weaponOptions[weapon].minHeadshotDamage;
     }
-    product=(float)damage*ratio;
-    /* Keep conversion defined for extreme parsed settings. */
-    scaled=product>=INT_MAX ? INT_MAX : product<=INT_MIN ? INT_MIN : (int)product;
+    scaled=G_NITMOD_ScaleDamage(damage, ratio);
     return scaled<minimum ? minimum : scaled;
 }
 

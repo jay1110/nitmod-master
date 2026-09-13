@@ -54,7 +54,8 @@ void CG_NitmodObituaryPrintForProtocol(const char *text, qhandle_t shader, const
     nitmodObituaryPlan_t plan;
     if(!event || !text || !*text) return;
     if(!original) { CG_AddPMItem(PM_DEATH, text, shader); return; }
-    if(CG_NitmodPlanGraphicObituary(event, cg_obituary.integer, shader, &plan) &&
+    if((cg_obituary.integer == 3 || cg_obituary.integer == 4) &&
+       CG_NitmodPlanGraphicObituary(event, cg_obituary.integer, shader, &plan) &&
        CG_NitmodAddGraphicObituary(plan.first, plan.second, plan.shader, plan.scale, plan.color)) {
         CG_Printf("%s\n", text);
         return;
@@ -64,7 +65,8 @@ void CG_NitmodObituaryPrintForProtocol(const char *text, qhandle_t shader, const
         CG_Printf("%s\n", text);
     } else if(cg_obituary.integer >= 1 && cg_obituary.integer <= 4) {
         /* Invalid media or an exhausted popup pool retain readable text. */
-        CG_AddPMItem(PM_DEATH, text, shader);
+        CG_NitmodPlanGraphicObituary(event, 1, shader, &plan);
+        CG_NitmodAddColoredPMItem(PM_DEATH, text, shader, plan.color);
     } else CG_Printf("%s\n", text);
 }
 

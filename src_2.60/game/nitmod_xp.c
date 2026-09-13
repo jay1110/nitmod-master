@@ -20,8 +20,8 @@ int NITMOD_XPEncode(const float skills[7],char encoded[1024]) {
     }
     result[out]=0; strcpy(encoded,result); return 1;
 }
-int NITMOD_XPDecode(const char *encoded,float skills[7]) {
-    char text[768],*p,*key,*value,*end; float result[7]={0};
+int NITMOD_XPDecodeTotal(const char *encoded,float skills[7],float *total) {
+    char text[768],*p,*key,*value,*end; float result[7]={0}; int integers[7]={0};
     size_t length; int i,n=0;
     if(!encoded || !skills || !(length=strlen(encoded)) || length>1020 || length%4) return 0;
     for(i=0;i<(int)length;i+=4) {
@@ -43,9 +43,17 @@ int NITMOD_XPDecode(const char *encoded,float skills[7]) {
         if(key[0]=='S' && key[1]>='0' && key[1]<='6' && !key[2]) {
             number=strtod(value,&end);
             if(end==value || *end || !isfinite(number) || number<INT_MIN || number>INT_MAX) return 0;
+            integers[key[1]-'0']=(int)number;
             result[key[1]-'0']=(float)(int)number;
         }
         if(!p) break;
     }
+    /* LoadXP 0x1037fe..0x103819 adds the unrounded integer to the
+     * running float total, storing that total after each skill. */
+    if(total) for(i=0;i<7;++i) *total=(float)((double)*total+integers[i]);
     memcpy(skills,result,sizeof(result)); return 1;
+}
+
+int NITMOD_XPDecode(const char *encoded,float skills[7]) {
+    return NITMOD_XPDecodeTotal(encoded,skills,NULL);
 }

@@ -144,15 +144,21 @@ static void CG_ClipMoveToEntities ( const vec3_t start, const vec3_t mins, const
 			BG_EvaluateTrajectory( &cent->currentState.apos, cg.physicsTime, angles, qtrue, cent->currentState.effect2Time );
 			BG_EvaluateTrajectory( &cent->currentState.pos, cg.physicsTime, origin, qfalse, cent->currentState.effect2Time );
 		} else {
-			// encoded bbox
-			x = (ent->solid & 255);
-			zd = ((ent->solid>>8) & 255);
-			zu = ((ent->solid>>16) & 255) - 32;
+			// Original fake brushes transmit full bounds, bypassing packed solid limits.
+			if (ent->eFlags & EF_SPARE3) {
+				VectorCopy(ent->origin2, bmins);
+				VectorCopy(ent->angles2, bmaxs);
+			} else {
+				// encoded bbox
+				x = (ent->solid & 255);
+				zd = ((ent->solid>>8) & 255);
+				zu = ((ent->solid>>16) & 255) - 32;
 
-			bmins[0] = bmins[1] = -x;
-			bmaxs[0] = bmaxs[1] = x;
-			bmins[2] = -zd;
-			bmaxs[2] = zu;
+				bmins[0] = bmins[1] = -x;
+				bmaxs[0] = bmaxs[1] = x;
+				bmins[2] = -zd;
+				bmaxs[2] = zu;
+			}
 
 			//cmodel = trap_CM_TempCapsuleModel( bmins, bmaxs );
 			cmodel = trap_CM_TempBoxModel( bmins, bmaxs );
@@ -207,17 +213,25 @@ static void CG_ClipMoveToEntities_FT ( const vec3_t start, const vec3_t mins, co
 			BG_EvaluateTrajectory( &cent->currentState.apos, cg.physicsTime, angles, qtrue, cent->currentState.effect2Time );
 			BG_EvaluateTrajectory( &cent->currentState.pos, cg.physicsTime, origin, qfalse, cent->currentState.effect2Time );
 		} else {
-			// encoded bbox
-			x = (ent->solid & 255);
-			zd = ((ent->solid>>8) & 255);
-			zu = ((ent->solid>>16) & 255) - 32;
+			// Original fake brushes transmit full bounds, bypassing packed solid limits.
+			if (ent->eFlags & EF_SPARE3) {
+				VectorCopy(ent->origin2, bmins);
+				VectorCopy(ent->angles2, bmaxs);
+			} else {
+				// encoded bbox
+				x = (ent->solid & 255);
+				zd = ((ent->solid>>8) & 255);
+				zu = ((ent->solid>>16) & 255) - 32;
 
-			bmins[0] = bmins[1] = -x;
-			bmaxs[0] = bmaxs[1] = x;
-			bmins[2] = -zd;
-			bmaxs[2] = zu;
+				bmins[0] = bmins[1] = -x;
+				bmaxs[0] = bmaxs[1] = x;
+				bmins[2] = -zd;
+				bmaxs[2] = zu;
+			}
 
-			cmodel = trap_CM_TempCapsuleModel( bmins, bmaxs );
+			cmodel = (ent->eFlags & EF_SPARE3)
+				? trap_CM_TempBoxModel( bmins, bmaxs )
+				: trap_CM_TempCapsuleModel( bmins, bmaxs );
 
 			VectorCopy( vec3_origin, angles );
 			VectorCopy( cent->lerpOrigin, origin );
@@ -598,14 +612,18 @@ static void CG_TouchTriggerPrediction( void ) {
 			}
 
 			cs = NULL;
-			if( ent->eType == ET_OID_TRIGGER ) {
-				cs = CG_ConfigString( CS_OID_TRIGGERS + ent->teamNum );
-			} else if( ent->eType == ET_CONSTRUCTIBLE ) {
-				cs = CG_ConfigString( CS_OID_TRIGGERS + ent->otherEntityNum2 );
+			if(ent->eType == ET_OID_TRIGGER || ent->eType == ET_CONSTRUCTIBLE) {
+				int objective = ent->eType == ET_OID_TRIGGER ? ent->teamNum : ent->otherEntityNum2;
+				/* Original 0x9d16e reads the objective title from Nitmod's info string. */
+				if(NITMOD_UsesOriginalProtocol()) {
+					cs = objective >= 0 && objective < NITMOD_NCS_OBJECTIVE_COUNT
+						? Info_ValueForKey(NITMOD_ConfigString(NITMOD_NCS_OBJECTIVES + objective), "t") : "";
+				} else {
+					cs = CG_ConfigString(CS_OID_TRIGGERS + objective);
+				}
 			}
-
 			if(cs) {
-				CG_ObjectivePrint( va( "You are near %s\n", cs ), SMALLCHAR_WIDTH );
+				CG_ObjectivePrint( va( NITMOD_UsesNitmodHud() ? "You are near the %s\n" : "You are near %s\n", cs ), SMALLCHAR_WIDTH );
 			}
 
 			continue;

@@ -20,7 +20,8 @@ typedef enum {
 void NITMOD_ClearConfigStore( nitmodConfigStore_t *store );
 void NITMOD_ClearConfigDirty( nitmodConfigStore_t *store );
 /* Failed or identical writes leave both the value and dirty state intact.
- * NULL value means empty. Command delimiters are rejected by the port's
+ * NULL value means empty. Long values are truncated after comparison, as in
+ * the original binary. Command delimiters in the retained prefix are rejected by the port's
  * existing quoted NCS transport policy; the original did not validate them. */
 nitmodConfigResult_t NITMOD_StoreConfig( nitmodConfigStore_t *store, int index, const char *value );
 

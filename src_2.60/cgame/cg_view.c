@@ -712,6 +712,12 @@ static void CG_OffsetFirstPersonView( void ) {
 			cg.refdef_current->vieworg[2] -= cg.duckChange 
 				* (PRONE_TIME - timeDelta) / PRONE_TIME;
 		}
+	} else if( NITMOD_UsesNitmodHud() && cg.duckFromPlayDead ) {
+		/* Original 0xbd360: leaving playdead takes 750 ms; prone wins above. */
+		if( timeDelta < 0 )
+			cg.duckTime = cg.time - 750;
+		if( timeDelta < 750 )
+			cg.refdef_current->vieworg[2] -= cg.duckChange * (750 - timeDelta) / 750.f;
 	} else {
 		if (timeDelta < 0)	// Ridah
 			cg.duckTime = cg.time - DUCK_TIME;

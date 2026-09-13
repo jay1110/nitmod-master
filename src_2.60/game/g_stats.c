@@ -223,12 +223,17 @@ void G_LoseSkillPoints( gentity_t *ent, skillType_t skill, float points ) {
 		G_UpgradeSkill(ent, skill);
 	}
 
+
+	/* Original x87 keeps the integer team score exact before subtracting XP. */
+	level.teamScores[ ent->client->ps.persistant[PERS_TEAM] ] = (int)(
+		(double)level.teamScores[ ent->client->ps.persistant[PERS_TEAM] ] -
+		((double)oldskillpoints - ent->client->sess.skillpoints[skill]));
+	level.teamXP[ skill ][ ent->client->sess.sessionTeam - TEAM_AXIS ] -= oldskillpoints - ent->client->sess.skillpoints[skill];
+	/* Original 0xcf323 reports after both team totals have been updated. */
 	trap_PbStat ( ent - g_entities , "loseskill" , 
 		va ( "%d %d %d %f" , ent->client->sess.sessionTeam , ent->client->sess.playerType , 
 			skill , oldskillpoints - ent->client->sess.skillpoints[skill] ) ) ;
 
-	level.teamScores[ ent->client->ps.persistant[PERS_TEAM] ] -= oldskillpoints - ent->client->sess.skillpoints[skill];
-	level.teamXP[ skill ][ ent->client->sess.sessionTeam - TEAM_AXIS ] -= oldskillpoints - ent->client->sess.skillpoints[skill];
 }
 
 void G_AddSkillPoints( gentity_t *ent, skillType_t skill, float points ) {
@@ -273,8 +278,10 @@ void G_AddSkillPoints( gentity_t *ent, skillType_t skill, float points ) {
 		 * it does not grant a loadout or alter ammunition and charge time. */
 		if( (unsigned int)G_NITMOD_ConfiguredWarMode() - 1u > 3u ) {
 			ent->client->ps.weapons[0] = 0;
-			ent->client->ps.stats[STAT_PLAYER_CLASS] = ent->client->sess.playerType;
-			ent->client->ps.teamNum = ent->client->sess.sessionTeam;
+			if( ent->client->sess.sessionTeam != TEAM_SPECTATOR ) {
+				ent->client->ps.stats[STAT_PLAYER_CLASS] = ent->client->sess.playerType;
+				ent->client->ps.teamNum = ent->client->sess.sessionTeam;
+			}
 		}
 		ClientUserinfoChanged(ent - g_entities);
 		if( maxXP != 0 ) {
@@ -379,79 +386,67 @@ void G_NITMOD_XPDecay( gentity_t *ent, int seconds, qboolean force ) {
 }
 
 void G_LoseKillSkillPoints( gentity_t *tker, meansOfDeath_t mod, hitRegion_t hr, qboolean splash ) {
-	// for evil tkers :E
-
-	if( !tker->client ) {
-		return;
-	}
-
-	switch( mod ) {
-		// light weapons
-		case MOD_KNIFE:
-		case MOD_LUGER:
-		case MOD_THROWKNIFE:
-		case MOD_COLT:
-		case MOD_MP40:
-		case MOD_THOMPSON:
-		case MOD_STEN:
-		case MOD_GARAND:
-		case MOD_SILENCER:
-		case MOD_FG42:
-//		case MOD_FG42SCOPE:
-		case MOD_CARBINE:
-		case MOD_KAR98:
-		case MOD_SILENCED_COLT:
-		case MOD_K43:
-//bani - akimbo weapons lose score now as well
-		case MOD_AKIMBO_COLT:
-		case MOD_AKIMBO_LUGER:
-		case MOD_AKIMBO_SILENCEDCOLT:
-		case MOD_AKIMBO_SILENCEDLUGER:
-		case MOD_GRENADE_LAUNCHER:
-		case MOD_GRENADE_PINEAPPLE:
-//bani - airstrike marker kills
-		case MOD_SMOKEGRENADE:
-			G_LoseSkillPoints( tker, SK_LIGHT_WEAPONS, 3.f ); 
-//			G_DebugAddSkillPoints( attacker, SK_LIGHT_WEAPONS, 2.f, "kill" );
-			break;
-
-		// scoped weapons
-		case MOD_GARAND_SCOPE:
-		case MOD_K43_SCOPE:
-		case MOD_FG42SCOPE:
-		case MOD_SATCHEL:
-			G_LoseSkillPoints( tker, SK_MILITARY_INTELLIGENCE_AND_SCOPED_WEAPONS, 3.f );
-//			G_DebugAddSkillPoints( attacker, SK_LIGHT_WEAPONS, 2.f, "legshot kill" );
-			break;
-
-		case MOD_MOBILE_MG42:
-		case MOD_MACHINEGUN:
-		case MOD_BROWNING:
-		case MOD_MG42:
-		case MOD_PANZERFAUST:
-		case MOD_FLAMETHROWER:
-		case MOD_MORTAR:
-			G_LoseSkillPoints( tker, SK_HEAVY_WEAPONS, 3.f );
-//			G_DebugAddSkillPoints( attacker, SK_HEAVY_WEAPONS, 3.f, "emplaced mg42 kill" );
-			break;
-
-		case MOD_DYNAMITE:
-		case MOD_LANDMINE:
-		case MOD_GPG40:
-		case MOD_M7:
-			G_LoseSkillPoints( tker, SK_EXPLOSIVES_AND_CONSTRUCTION, 3.f );
-//			G_DebugAddSkillPoints( attacker, SK_EXPLOSIVES_AND_CONSTRUCTION, 4.f, "dynamite or landmine kill" );
-			break;
-
-		case MOD_ARTY:
-		case MOD_AIRSTRIKE:
-			G_LoseSkillPoints( tker, SK_SIGNALS, 3.f );
-//			G_DebugAddSkillPoints( attacker, SK_SIGNALS, 4.f, "artillery kill" );
-			break;
-
-		// no skills for anything else
-		default:
-			break;
+	/* Original ELF 0xcf8f0, complete MOD jump table at 0x2480f8. */
+	if (!tker->client) return;
+	switch (mod) {
+	case MOD_MACHINEGUN:
+	case MOD_BROWNING:
+	case MOD_MG42:
+	case MOD_PANZERFAUST:
+	case MOD_FLAMETHROWER:
+	case MOD_MOBILE_MG42:
+	case MOD_MORTAR:
+	case MOD_BOMB:
+		G_LoseSkillPoints(tker, SK_HEAVY_WEAPONS, 4.f);
+		break;
+	case MOD_KNIFE:
+	case MOD_LUGER:
+	case MOD_COLT:
+	case MOD_MP40:
+	case MOD_THOMPSON:
+	case MOD_STEN:
+	case MOD_GARAND:
+	case MOD_SILENCER:
+	case MOD_FG42:
+	case MOD_GRENADE_LAUNCHER:
+	case MOD_GRENADE_PINEAPPLE:
+	case MOD_CARBINE:
+	case MOD_KAR98:
+	case MOD_SILENCED_COLT:
+	case MOD_K43:
+	case MOD_AKIMBO_COLT:
+	case MOD_AKIMBO_LUGER:
+	case MOD_AKIMBO_SILENCEDCOLT:
+	case MOD_AKIMBO_SILENCEDLUGER:
+	case MOD_POISON:
+	case MOD_THROWKNIFE:
+	case MOD_POISON_GAS:
+	case MOD_POISON_GAS_MINE:
+		G_LoseSkillPoints(tker, SK_LIGHT_WEAPONS, 5.f);
+		break;
+	case MOD_FG42SCOPE:
+	case MOD_SATCHEL:
+	case MOD_GARAND_SCOPE:
+	case MOD_K43_SCOPE:
+		G_LoseSkillPoints(tker, SK_MILITARY_INTELLIGENCE_AND_SCOPED_WEAPONS, 3.f);
+		break;
+	case MOD_DYNAMITE:
+	case MOD_GPG40:
+	case MOD_M7:
+	case MOD_LANDMINE:
+	case MOD_TRIPMINE:
+		G_LoseSkillPoints(tker, SK_EXPLOSIVES_AND_CONSTRUCTION, 3.f);
+		break;
+	case MOD_AIRSTRIKE:
+	case MOD_ARTY:
+	case MOD_SMOKEGRENADE:
+		G_LoseSkillPoints(tker, SK_SIGNALS, 5.f);
+		break;
+	case MOD_GOOMBA:
+	case MOD_SHOVE:
+		G_LoseSkillPoints(tker, SK_BATTLE_SENSE, 5.f);
+		break;
+	default: break;
 	}
 }
 

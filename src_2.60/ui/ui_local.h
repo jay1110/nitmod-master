@@ -799,6 +799,8 @@ int UI_GetServerStatusInfo(const char *address, serverStatusInfo_t *info);
 int UI_QueryServerStatus(const char *address, serverStatusInfo_t *info);
 int UI_GetConnectedLocalServerStatus(const char *address, serverStatusInfo_t *info);
 void UI_BuildFindPlayerList(qboolean force);
+int UI_BrowserDroppedCount(void);
+int UI_BrowserHumanTotal(void);
 int UI_ServerHumanCount(const char *status, const char *master);
 void UI_ServerPopulationText(int server, const char *master, char *out, int size);
 qboolean UI_ServerHasNxac(int server);
@@ -810,8 +812,11 @@ void UI_DrawCampaignMapDescription(rectDef_t *rect, float scale, vec4_t color, f
 
 typedef struct {
 	const char *modName;
+	char modDisplayName[64];
 	const char *modDescr;
 } modInfo_t;
+
+void UI_SetModDisplayName(modInfo_t *mod);
 
 typedef enum { UI_CATALOG_MAPS, UI_CATALOG_CAMPAIGNS, UI_CATALOG_MODS } uiCatalog_t;
 const char *UI_CatalogNextString(const char *buffer, int capacity, int *offset);

@@ -32,17 +32,27 @@ static int nitmodScoreFlagsCursor = -1;
 static void CG_ParseScore( team_t team ) {
 	int i, j, count, values[MAX_CLIENTS][7];
 	int first = team == TEAM_AXIS;
+	qboolean original = NITMOD_UsesOriginalProtocol();
 	int offset = first && !NITMOD_UsesOriginalProtocol() ? 4 : 2;
 	int start = first ? 0 : cg.numScores;
 	int teamScores[2];
-	if(start < 0 || start > MAX_CLIENTS ||
-		!NITMOD_ParseProtocolInteger(CG_Argv(offset - 1), &count) ||
-		count < 0 || count > MAX_CLIENTS - start || trap_Argc() != offset + 7 * count) return;
+    /* Original CG_ParseScore resets the list before reading argv(1). */
+    if(first && NITMOD_UsesOriginalProtocol()) {
+        cg.numScores = 0;
+        nitmodScoreFlagsCursor = -1;
+    }
+	if(original) count = NITMOD_ParseOriginalDecimal32(CG_Argv(offset - 1));
+	else if(!NITMOD_ParseProtocolInteger(CG_Argv(offset - 1), &count)) return;
+	if(start < 0 || start > MAX_CLIENTS || count < 0 || count > MAX_CLIENTS - start ||
+		(original ? trap_Argc() < offset + 7 * count : trap_Argc() != offset + 7 * count)) return;
 	if(offset == 4 && (!NITMOD_ParseProtocolSigned(CG_Argv(1), &teamScores[0]) ||
 		!NITMOD_ParseProtocolSigned(CG_Argv(2), &teamScores[1]))) return;
 	for(i = 0; i < count; ++i) {
-		for(j = 0; j < 7; ++j)
-			if(!NITMOD_ParseProtocolSigned(CG_Argv(offset + 7 * i + j), &values[i][j])) return;
+		for(j = 0; j < 7; ++j) {
+			/* Original CG_ParseScore 0xf3720 onward: decimal strtol fields. */
+			if(original) values[i][j] = NITMOD_ParseOriginalDecimal32(CG_Argv(offset + 7 * i + j));
+			else if(!NITMOD_ParseProtocolSigned(CG_Argv(offset + 7 * i + j), &values[i][j])) return;
+		}
 		if(values[i][0] < 0 || values[i][0] >= MAX_CLIENTS) return;
 	}
 	if(offset == 4) { cg.teamScores[0] = teamScores[0]; cg.teamScores[1] = teamScores[1]; }
@@ -95,11 +105,16 @@ CG_ParseTeamInfo
 static void CG_ParseTeamInfo( void ) {
 	int i, j, count, stride = NITMOD_UsesOriginalProtocol() ? 6 : 5;
 	int values[MAX_CLIENTS][6];
-	if(!NITMOD_ParseProtocolInteger(CG_Argv(1), &count) || count < 0 || count > MAX_CLIENTS ||
-	   trap_Argc() != 2 + count * stride) return;
+	if(stride == 6) count = NITMOD_ParseOriginalDecimal32(CG_Argv(1));
+	else if(!NITMOD_ParseProtocolInteger(CG_Argv(1), &count)) return;
+	if(count < 0 || count > MAX_CLIENTS ||
+	   (stride == 6 ? trap_Argc() < 2 + count * stride : trap_Argc() != 2 + count * stride)) return;
 	for(i = 0; i < count; ++i) {
-		for(j = 0; j < stride; ++j)
-			if(!NITMOD_ParseProtocolSigned(CG_Argv(2 + i * stride + j), &values[i][j])) return;
+		for(j = 0; j < stride; ++j) {
+			/* Original 0xa92f0..0xa93eb uses strtol for all six fields. */
+			if(stride == 6) values[i][j] = NITMOD_ParseOriginalDecimal32(CG_Argv(2 + i * stride + j));
+			else if(!NITMOD_ParseProtocolSigned(CG_Argv(2 + i * stride + j), &values[i][j])) return;
+		}
 		if(values[i][0] < 0 || values[i][0] >= MAX_CLIENTS) return;
 	}
 	for(i = 0; i < count; ++i) {
@@ -120,9 +135,9 @@ This is called explicitly when the gamestate is first received,
 and whenever the server updates any serverinfo flagged cvars
 ================
 */
-/* Original token 0x62/0x63 in CG_ParseServerinfo update only present
+/* Original tokens in CG_ParseServerinfo update only present
  * serverinfo pairs. Values belong to the server, never client preferences. */
-static void CG_ParseNitmodFixedPhysics(const char *info) {
+static void CG_ParseNitmodServerSettings(const char *info) {
  const char *cursor=info;
  char key[MAX_INFO_KEY],text[MAX_INFO_VALUE];
  int value;
@@ -133,10 +148,46 @@ static void CG_ParseNitmodFixedPhysics(const char *info) {
  while(*cursor) {
   Info_NextPair(&cursor,key,text);
   if(!*key) break;
-  if(strcmp(key,"g_fixedphysics") && strcmp(key,"g_fixedphysicsfps")) continue;
-  if(!NITMOD_ParseProtocolInteger(text,&value)) value=0;
+  if(!strcmp(key,"g_gametype")) {
+   cg_gameType.integer=cgs.gametype=NITMOD_ParseOriginalDecimal32(text);
+   continue;
+  }
+  if(!strcmp(key,"g_minGameClients")) {
+   cgs.minclients=NITMOD_ParseOriginalDecimal32(text);
+   continue;
+  }
+  if(!strcmp(key,"mapname")) {
+   Q_strncpyz(cgs.rawmapname,text,sizeof(cgs.rawmapname));
+   Com_sprintf(cgs.mapname,sizeof(cgs.mapname),"maps/%s.bsp",text);
+   continue;
+  }
+  /* Original 0xa33e9 converts the present timelimit with strtod. */
+  if(!strcmp(key,"timelimit")) {
+   cgs.timelimit=(float)strtod(text,NULL);
+   continue;
+  }
+  if(!strcmp(key,"voteFlags")) {
+   trap_Cvar_Set("cg_ui_voteFlags",authLevel.integer==RL_NONE?text:"0");
+   continue;
+  }
+  if(!strcmp(key,"g_redlimbotime") || !strcmp(key,"g_bluelimbotime")) {
+   trap_Cvar_Set(key,text);
+   value=NITMOD_ParseOriginalDecimal32(text);
+   if(!strcmp(key,"g_redlimbotime")) cg_redlimbotime.integer=value;
+   else cg_bluelimbotime.integer=value;
+   continue;
+  }
+  if(!strcmp(key,"g_heavyWeaponRestriction")) {
+   cgs.weaponRestrictions=(float)((double)NITMOD_ParseOriginalDecimal32(text)*0.01);
+   continue;
+  }
+  if(strcmp(key,"g_fixedphysics") && strcmp(key,"g_fixedphysicsfps") && strcmp(key,"g_antilag")) continue;
+  /* Original 0xa3332/0xa3352 uses signed i386 strtol, including
+   * prefixes and saturation, rather than an unsigned protocol index. */
+  value=NITMOD_ParseOriginalDecimal32(text);
   if(!strcmp(key,"g_fixedphysics")) cgs.nitmodFixedPhysics=value;
-  else cgs.nitmodFixedPhysicsFps=value;
+  else if(!strcmp(key,"g_fixedphysicsfps")) cgs.nitmodFixedPhysicsFps=value;
+  else cgs.antilag=value;
  }
 }
 
@@ -147,40 +198,51 @@ void CG_ParseServerinfo( void ) {
 	float floatValue;
 
 	info = CG_ConfigString( CS_SERVERINFO );
-	CG_ParseNitmodFixedPhysics(info);
+	CG_ParseNitmodServerSettings(info);
+	if(!NITMOD_UsesNitmodHud()) {
 	if( !NITMOD_ParseProtocolInteger(Info_ValueForKey(info, "g_gametype"), &value) ||
 		value < GT_WOLF || value >= GT_MAX_GAME_TYPE ) value = GT_WOLF;
 	cg_gameType.integer = cgs.gametype = value;
-	if( !NITMOD_ParseProtocolInteger(Info_ValueForKey(info, "g_antilag"), &value) ) value = 0;
-	cg_antilag.integer = cgs.antilag = value;
+	}
+	if(!NITMOD_UsesNitmodHud()) {
+		if(!NITMOD_ParseProtocolInteger(Info_ValueForKey(info,"g_antilag"),&value)) value=0;
+		cgs.antilag=value;
+	}
+	cg_antilag.integer=cgs.antilag;
 	if ( !cgs.localServer ) {
 		trap_Cvar_Set("g_gametype", va("%i", cgs.gametype));
 		trap_Cvar_Set("g_antilag", va("%i", cgs.antilag));
 		trap_Cvar_Update( &cg_antilag );
 		trap_Cvar_Update( &cg_gameType );
 	}
-	if( !NITMOD_ParseProtocolFloat(Info_ValueForKey(info, "timelimit"), &floatValue) || floatValue < 0.f )
-		floatValue = 0.f;
-	cgs.timelimit = floatValue;
+	if(!NITMOD_UsesNitmodHud()) {
+		if(!NITMOD_ParseProtocolFloat(Info_ValueForKey(info,"timelimit"),&floatValue) || floatValue<0.f)
+			floatValue=0.f;
+		cgs.timelimit=floatValue;
+	}
 	if( !NITMOD_ParseProtocolInteger(Info_ValueForKey(info, "sv_maxclients"), &value) ||
 		value < 1 || value > MAX_CLIENTS ) value = MAX_CLIENTS;
 	cgs.maxclients = value;
+	if(!NITMOD_UsesNitmodHud()) {
 	mapname = Info_ValueForKey( info, "mapname" );
 	Q_strncpyz( cgs.rawmapname, mapname, sizeof(cgs.rawmapname) );
 	Com_sprintf( cgs.mapname, sizeof( cgs.mapname ), "maps/%s.bsp", mapname );
+	}
 
 // prolly should parse all CS_SERVERINFO keys automagically, but I don't want to break anything that might be improperly set for wolf SP, so I'm just parsing MP relevant stuff here
+	if(!NITMOD_UsesNitmodHud()) {
 	trap_Cvar_Set("g_redlimbotime",Info_ValueForKey(info,"g_redlimbotime"));
 	cg_redlimbotime.integer = atoi( Info_ValueForKey(info,"g_redlimbotime") );
 	trap_Cvar_Set("g_bluelimbotime",Info_ValueForKey(info,"g_bluelimbotime"));
 	cg_bluelimbotime.integer = atoi( Info_ValueForKey(info,"g_bluelimbotime") );
 	cgs.weaponRestrictions = atoi( Info_ValueForKey( info, "g_heavyWeaponRestriction" ) ) * 0.01f;
+	}
 
 
-	cgs.minclients = atoi( Info_ValueForKey( info, "g_minGameClients" ) );		// NERVE - SMF -- OSP: overloaded for ready counts
+	if(!NITMOD_UsesNitmodHud()) cgs.minclients = atoi( Info_ValueForKey( info, "g_minGameClients" ) );		// NERVE - SMF -- OSP: overloaded for ready counts
 
 	// TTimo - make this available for ingame_callvote	
-	trap_Cvar_Set( "cg_ui_voteFlags", ((authLevel.integer == RL_NONE) ? Info_ValueForKey(info, "voteFlags") : "0"));
+	if(!NITMOD_UsesNitmodHud()) trap_Cvar_Set( "cg_ui_voteFlags", ((authLevel.integer == RL_NONE) ? Info_ValueForKey(info, "voteFlags") : "0"));
 }
 
 /*
@@ -353,28 +415,31 @@ void CG_ParseSpawns( void ) {
 	const char *s;
 	int i;
 	int newteam;
+	qboolean original = NITMOD_UsesOriginalProtocol();
 
 	info = CG_ConfigString( CS_MULTI_INFO );
-	s = Info_ValueForKey( info, NITMOD_UsesOriginalProtocol() ? "n" : "numspawntargets" );
+	s = Info_ValueForKey( info, original ? "n" : "numspawntargets" );
 
 	if ( !s || !strlen( s ) )
 		return;
 
 	// first index is for autopicking
-	Q_strncpyz( cg.spawnPoints[0], CG_TranslateString( "Auto Pick" ), MAX_SPAWNDESC );
+	Q_strncpyz( cg.spawnPoints[0], original ? "Auto Pick" : CG_TranslateString( "Auto Pick" ), MAX_SPAWNDESC );
 
-	if(!NITMOD_ParseProtocolInteger(s, &i) || i > MAX_MULTI_SPAWNTARGETS) return;
+	if(original) i=NITMOD_ParseOriginalDecimal32(s);
+	else if(!NITMOD_ParseProtocolInteger(s, &i)) return;
+	if(i < 0 || i > MAX_MULTI_SPAWNTARGETS) return;
 	cg.spawnCount = i + 1;
 
 	for ( i = 1; i < cg.spawnCount; i++ ) {
 		info = NITMOD_AssetConfigString( CS_MULTI_SPAWNTARGETS + i - 1 );
 
-		s = Info_ValueForKey( info, NITMOD_UsesOriginalProtocol() ? "s" : "spawn_targ" );
+		s = Info_ValueForKey( info, original ? "s" : "spawn_targ" );
 
 		if ( !s || !strlen( s ) )
 			return;
 
-		Q_strncpyz( cg.spawnPoints[i], CG_TranslateString( s ), MAX_SPAWNDESC );
+		Q_strncpyz( cg.spawnPoints[i], original ? s : CG_TranslateString( s ), MAX_SPAWNDESC );
 
 		s = Info_ValueForKey( info, "x" );
 		if ( !s || !strlen( s ) )
@@ -397,7 +462,7 @@ void CG_ParseSpawns( void ) {
 
 		s = Info_ValueForKey( info, "t" );
 
-		newteam = atoi(s);
+		newteam = original ? NITMOD_ParseOriginalDecimal32(s) : atoi(s);
 		if(cg.spawnTeams[i] != newteam) {
 			cg.spawnTeams_old[i] = cg.spawnTeams[i];
 			cg.spawnTeams_changeTime[i] = cg.time;
@@ -405,7 +470,7 @@ void CG_ParseSpawns( void ) {
 		}
 
 		s = Info_ValueForKey( info, "c" );
-		cg.spawnPlayerCounts[i] = atoi(s);
+		cg.spawnPlayerCounts[i] = original ? NITMOD_ParseOriginalDecimal32(s) : atoi(s);
 	}
 }
 
@@ -1517,7 +1582,7 @@ void CG_VoiceChat( int mode ) {
 
 	trap_Argv(4, cmd, sizeof(cmd));
 
-	if (cg_noTaunt.integer != 0) {
+	if (!NITMOD_UsesNitmodHud() && cg_noTaunt.integer != 0) {
 		/* Native ET voice IDs are code-side protocol strings, not definitions
 		 * to add to the original Nitmod asset header. */
 		if (!strcmp(cmd, "kill_insult") || !strcmp(cmd, "taunt") ||
@@ -1531,7 +1596,7 @@ void CG_VoiceChat( int mode ) {
 	 * or the three coordinates for team/fireteam chat. Legacy messages
 	 * without that field retain local selection. */
 	CG_VoiceChatLocal( mode, voiceOnly, clientNum, color, cmd, origin,
-		trap_Argc() > (mode == SAY_ALL ? 5 : 8) ?
+		NITMOD_UsesNitmodHud() || trap_Argc() > (mode == SAY_ALL ? 5 : 8) ?
 		(float)atof(CG_Argv(mode == SAY_ALL ? 5 : 8)) : random() );
 }
 // -NERVE - SMF
@@ -1585,7 +1650,7 @@ const char* CG_LocalizeServerCommand( const char *buf ) {
 			if ( togloc ) {
 				memset( temp, 0, sizeof( temp ) );
 				strncpy( temp, buf + prev, i - prev );
-				strcat( token, CG_TranslateString( temp ) );
+				strcat( token, NITMOD_UsesNitmodHud() ? temp : CG_TranslateString( temp ) );
 			}
 			else {
 				strncat( token, buf + prev, i - prev );
@@ -1605,7 +1670,7 @@ const char* CG_LocalizeServerCommand( const char *buf ) {
 	if ( togloc ) {
 		memset( temp, 0, sizeof( temp ) );
 		strncpy( temp, buf + prev, i - prev );
-		strcat( token, CG_TranslateString( temp ) );
+		strcat( token, NITMOD_UsesNitmodHud() ? temp : CG_TranslateString( temp ) );
 	}
 	else {
 		strncat( token, buf + prev, i - prev );
@@ -1741,6 +1806,11 @@ void CG_topshotsParse_cmd(qboolean doBest)
 
 void CG_ParseWeaponStats( void ) {
 	int arg = 1, shots, hits;
+	if(NITMOD_UsesOriginalProtocol()) {
+		cgs.ccWeaponShots = NITMOD_ParseOriginalDecimal32(CG_Argv(1));
+		cgs.ccWeaponHits = NITMOD_ParseOriginalDecimal32(CG_Argv(2));
+		return;
+	}
 	if( trap_Argc() != 3 || !CG_NitmodStatsArg( &arg, &shots ) ||
 		!CG_NitmodStatsArg( &arg, &hits ) || shots < 0 || hits < 0 ) return;
 	cgs.ccWeaponShots = shots;
@@ -1751,9 +1821,14 @@ void CG_ParsePortalPos( void ) {
 	int i, values[8];
 	/* Original CG_ParsePortalPos (z5) has the same eight integer fields.
 	 * Parse atomically: ccPortalEnt is later used to index cg_entities. */
-	if(trap_Argc() != 9) return;
-	for(i = 0; i < 8; ++i)
-		if(!NITMOD_ParseProtocolSigned(CG_Argv(i + 1), &values[i])) return;
+	if(NITMOD_UsesOriginalProtocol()) {
+		for(i = 0; i < 8; ++i)
+			values[i] = NITMOD_ParseOriginalDecimal32(CG_Argv(i + 1));
+	} else {
+		if(trap_Argc() != 9) return;
+		for(i = 0; i < 8; ++i)
+			if(!NITMOD_ParseProtocolSigned(CG_Argv(i + 1), &values[i])) return;
+	}
 	if(values[0] < -1 || values[7] < -1 || values[7] >= MAX_GENTITIES) return;
 	cgs.ccCurrentCamObjective = values[0];
 	cgs.ccPortalEnt = values[7];
@@ -2255,8 +2330,7 @@ static void CG_ServerCommand( void ) {
 		return;
 	}
 
-	if ( !Q_stricmp( cmd, "cpm" ) ||
-		(NITMOD_UsesOriginalProtocol() && !Q_stricmp( cmd, "cpm_map" )) ) {
+	if ( !Q_stricmp( cmd, "cpm" ) || !strcmp( cmd, "cpm_map" ) ) {
 		CG_AddPMItem( PM_MESSAGE, CG_LocalizeServerCommand( CG_Argv(1) ), cgs.media.voiceChatShader );
 		return;
 	}
@@ -2482,14 +2556,15 @@ static void CG_ServerCommand( void ) {
 		CG_NitmodLogText(va("%s\n", localChat));
 		return;
 	}
-	if ( !strcmp( cmd, "gamechat" ) && NITMOD_UsesOriginalProtocol() ) {
+	if ( !strcmp( cmd, "gamechat" ) ) {
 		char gameChat[150];
-		if(trap_Argc() != 2 || !cg.snap) return;
+		/* Original G_HQSay appends a localization argument. The original
+		 * receiver reads only the text; this command has no snapshot-layout fields. */
+		if(trap_Argc() < 2 || !cg.snap) return;
 		Q_strncpyz(gameChat, CG_LocalizeServerCommand(CG_Argv(1)), sizeof(gameChat));
 		CG_RemoveChatEscapeChar(gameChat);
 		CG_AddToTeamChat(gameChat, cg.snap->ps.clientNum);
 		CG_Printf("%s\n", gameChat);
-		CG_NitmodLogText(va("%s\n", gameChat));
 		return;
 	}
 	if ( !Q_stricmp( cmd, "chat" ) ) {
@@ -2534,7 +2609,7 @@ static void CG_ServerCommand( void ) {
 			NITMOD_DecodeText(decoded);
 			s = decoded;
 		}
-		if(NITMOD_UsesOriginalProtocol() && trap_Argc() >= 7 && clientNum >= 0 && clientNum < MAX_CLIENTS) {
+		if(NITMOD_UsesNitmodHud() && trap_Argc() >= 7 && clientNum >= 0 && clientNum < MAX_CLIENTS) {
 			origin[0] = atoi(CG_Argv(4)); origin[1] = atoi(CG_Argv(5)); origin[2] = atoi(CG_Argv(6));
 			CG_NitmodLocationText(location, sizeof(location), origin, 2);
 			Com_sprintf(text, sizeof(text), "(%s^7)^3(%s):%s", cgs.clientinfo[clientNum].name, location, s);
@@ -2765,7 +2840,7 @@ static void CG_ServerCommand( void ) {
 
 		Q_strncpyz( text, CG_Argv(2), MAX_SAY_TEXT );
 		if(text[0]){
-			fadeTime = atoi(text);
+			fadeTime = NITMOD_ParseOriginalDecimal32(text);
 		}
 
 		trap_S_StartBackgroundTrack( CG_Argv(1), CG_Argv(1), fadeTime );
@@ -2777,7 +2852,7 @@ static void CG_ServerCommand( void ) {
 
 		Q_strncpyz( text, CG_Argv(2), MAX_SAY_TEXT );
 		if(text[0]){
-			fadeTime = atoi(text);
+			fadeTime = NITMOD_ParseOriginalDecimal32(text);
 		}
 
 		trap_S_StartBackgroundTrack( CG_Argv(1), "onetimeonly", fadeTime );
@@ -2789,7 +2864,7 @@ static void CG_ServerCommand( void ) {
 
 		Q_strncpyz( text, CG_Argv(1), MAX_SAY_TEXT );
 		if(text[0]){
-			fadeTime = atoi(text);
+			fadeTime = NITMOD_ParseOriginalDecimal32(text);
 		}
 
 		trap_S_FadeBackgroundTrack(0.0f, fadeTime, 0);
@@ -2797,12 +2872,12 @@ static void CG_ServerCommand( void ) {
 		return;
 	}
 	if ( !Q_stricmp( cmd, "mu_fade" ) ) {
-		trap_S_FadeBackgroundTrack(atof(CG_Argv(1)), atoi(CG_Argv(2)), 0 );
+		trap_S_FadeBackgroundTrack(atof(CG_Argv(1)), NITMOD_ParseOriginalDecimal32(CG_Argv(2)), 0 );
 		return;
 	}
 
 	if ( !Q_stricmp( cmd, "snd_fade" ) ) {
-		trap_S_FadeAllSound(atof(CG_Argv(1)), atoi(CG_Argv(2)), atoi(CG_Argv(3)));
+		trap_S_FadeAllSound(atof(CG_Argv(1)), NITMOD_ParseOriginalDecimal32(CG_Argv(2)), NITMOD_ParseOriginalDecimal32(CG_Argv(3)));
 		return;
 	}
 
@@ -2833,6 +2908,11 @@ static void CG_ServerCommand( void ) {
 	if( !Q_stricmp( cmd, "spawnserver" ) )
 	{
 		// print message informing player the server is restarting with a new map
+		/* Original Nitmod 0xaaa68..0xaaa78 uses ordinary centerprint,
+		 * without the ET priority path's additional two seconds. */
+		if(NITMOD_UsesNitmodHud())
+			CG_CenterPrint("^3Server Restarting", 360, 8);
+		else
 		CG_PriorityCenterPrint( va( "%s", CG_TranslateString( "^3Server Restarting" ) ), SCREEN_HEIGHT - (SCREEN_HEIGHT * 0.25), SMALLCHAR_WIDTH, 999999 );
 		
 		// hack here
@@ -2848,6 +2928,8 @@ static void CG_ServerCommand( void ) {
 		return;
 	}
 	
+	/* Original 0xaaa92: reserved star-prefixed commands are silent. */
+	if(NITMOD_UsesNitmodHud() && cmd[0] == '*') return;
 	CG_Printf( "Unknown client game command: %s\n", cmd );
 }
 

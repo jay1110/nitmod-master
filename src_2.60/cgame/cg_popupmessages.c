@@ -1,7 +1,9 @@
 #include "cg_local.h"
 #include "cg_nitmod_hud.h"
+#include "cg_nitmod_config.h"
 
 vmCvar_t cg_numPopups, cg_popupFadeTime, cg_HUDFlags;
+static sfxHandle_t popupMinesSpotted[2];
 
 float CG_NitmodPopupAlpha(int start, int now, int fade) {
 	double elapsed = (double)now - start - 1500;
@@ -44,6 +46,7 @@ struct pmStackItemBig_s {
 	qhandle_t				shader;
 
 	pmListItemBig_t*		next;
+	vec3_t iconColor;
 };
 
 pmListItem_t		cg_pmStack[NUM_PM_STACK_ITEMS];
@@ -70,6 +73,8 @@ void CG_PMItemBigSound( pmListItemBig_t* item );
 
 
 void CG_InitPMGraphics( void ) {
+	popupMinesSpotted[0] = trap_S_RegisterSound("sound/vo/general/axis/hq_minesspot.wav", qfalse);
+	popupMinesSpotted[1] = trap_S_RegisterSound("sound/vo/general/allies/hq_minesspot.wav", qfalse);
 	cgs.media.pmImages[PM_DYNAMITE] =		trap_R_RegisterShaderNoMip( "gfx/limbo/cm_dynamite" );
 	cgs.media.pmImages[PM_CONSTRUCTION] =	trap_R_RegisterShaderNoMip( "sprites/voiceChat" );
 	cgs.media.pmImages[PM_MINES] =			trap_R_RegisterShaderNoMip( "sprites/voiceChat" );
@@ -78,6 +83,8 @@ void CG_InitPMGraphics( void ) {
 	cgs.media.pmImages[PM_OBJECTIVE] =		trap_R_RegisterShaderNoMip( "sprites/objective" );
 	cgs.media.pmImages[PM_DESTRUCTION] =	trap_R_RegisterShaderNoMip( "sprites/voiceChat" );
 	cgs.media.pmImages[PM_TEAM] =			trap_R_RegisterShaderNoMip( "sprites/voiceChat" );	
+	cgs.media.pmImages[PM_NITMOD_FLAG_AXIS] = trap_R_RegisterShaderNoMip("gfx/limbo/rflag");
+	cgs.media.pmImages[PM_NITMOD_FLAG_ALLIES] = trap_R_RegisterShaderNoMip("gfx/limbo/bflag");
 
 	cgs.media.pmImageAlliesConstruct =		trap_R_RegisterShaderNoMip( "gfx/hud/pm_constallied" );
 	cgs.media.pmImageAxisConstruct =		trap_R_RegisterShaderNoMip( "gfx/hud/pm_constaxis" );
@@ -95,26 +102,7 @@ void CG_InitPM( void ) {
 	cg_pmWaitingListBig =	NULL;
 }
 
-#define PM_FADETIME 2500
-#define PM_WAITTIME 2000
-
-#define PM_FADETIME_BIG 1000
-#define PM_WAITTIME_BIG 3500
-
-int CG_TimeForPopup( popupMessageType_t type ) {
-	switch( type ) {
-		default:
-			return 1000;
-	}
-}
-
-int CG_TimeForBigPopup( popupMessageBigType_t type ) {
-	switch( type ) {
-		default:
-			return 2500;
-	}
-}
-
+/* Original Nitmod advances queued popups on the following frame. */
 void CG_AddToListFront( pmListItem_t** list, pmListItem_t* item ) {
 	item->next = *list;
 	*list = item;
@@ -180,7 +168,7 @@ void CG_UpdatePMLists( void ) {
 
 
 	if ((listItem2 = cg_pmWaitingListBig)) {
-		int t = CG_TimeForBigPopup( listItem2->type ) + listItem2->time;
+		int t = listItem2->time;
 		if( cg.time > t ) {
 			if( listItem2->next ) {
 				// there's another item waiting to come on, so kill us and shove the next one to the front
@@ -192,7 +180,7 @@ void CG_UpdatePMLists( void ) {
 				listItem2->inuse = qfalse;
 				listItem2->next = NULL;
 			} else {
-				if( cg.time > t + PM_WAITTIME + PM_FADETIME ) {
+				if( (double)cg.time > (double)t + 6500 ) {
 					// we're gone completely
 					cg_pmWaitingListBig = NULL;
 					listItem2->inuse = qfalse;
@@ -250,7 +238,7 @@ pmListItem_t* CG_FindFreePMItem( void ) {
 	}
 }
 
-void CG_AddPMItem( popupMessageType_t type, const char* message, qhandle_t shader ) {
+void CG_NitmodAddColoredPMItem( popupMessageType_t type, const char* message, qhandle_t shader, const vec3_t color ) {
 	pmListItem_t* listItem;
 	char* end;
 
@@ -277,6 +265,8 @@ void CG_AddPMItem( popupMessageType_t type, const char* message, qhandle_t shade
 
 	listItem->inuse = qtrue;
 	listItem->type = type;
+	if(color) VectorCopy(color, listItem->iconColor);
+	else VectorSet(listItem->iconColor, 1, 1, 1);
 	Q_strncpyz( listItem->message, message, sizeof( cg_pmStack[0].message ) );
 
 	// rain - moved this: print and THEN chop off the newline, as the
@@ -307,6 +297,10 @@ void CG_AddPMItem( popupMessageType_t type, const char* message, qhandle_t shade
 
 		loop->next = listItem;
 	}
+}
+
+void CG_AddPMItem(popupMessageType_t type, const char *message, qhandle_t shader) {
+    CG_NitmodAddColoredPMItem(type, message, shader, NULL);
 }
 
 qboolean CG_NitmodAddGraphicObituary(const char *first, const char *second, qhandle_t shader,
@@ -370,7 +364,7 @@ void CG_PMItemBigSound( pmListItemBig_t* item ) {
 	}
 }
 
-void CG_AddPMItemBig( popupMessageBigType_t type, const char* message, qhandle_t shader ) {
+void CG_NitmodAddColoredPMItemBig( popupMessageBigType_t type, const char* message, qhandle_t shader, const vec3_t color ) {
 	pmListItemBig_t* listItem = CG_FindFreePMItem2();
 	if( !listItem ) {
 		return;
@@ -382,6 +376,8 @@ void CG_AddPMItemBig( popupMessageBigType_t type, const char* message, qhandle_t
 		listItem->shader = cgs.media.pmImages[type];
 	}
 
+	if(color) VectorCopy(color, listItem->iconColor);
+	else VectorSet(listItem->iconColor, 1, 1, 1);
 	listItem->inuse = qtrue;
 	listItem->type = type;
 	listItem->next = NULL;
@@ -400,6 +396,10 @@ void CG_AddPMItemBig( popupMessageBigType_t type, const char* message, qhandle_t
 
 		loop->next = listItem;
 	}
+}
+
+void CG_AddPMItemBig(popupMessageBigType_t type, const char *message, qhandle_t shader) {
+    CG_NitmodAddColoredPMItemBig(type, message, shader, NULL);
 }
 
 #define PM_ICON_SIZE_NORMAL 20
@@ -431,7 +431,8 @@ static void CG_DrawPMItemsContent(void) {
 	colourText[3] = colour[3] = CG_NitmodPopupAlpha(cg_pmWaitingList->time, cg.time, cg_popupFadeTime.integer);
 
 	if(!CG_NitmodDrawGraphicObituary(cg_pmWaitingList, y, colourText[3])) {
-	trap_R_SetColor( colourText );
+	VectorCopy(cg_pmWaitingList->iconColor, colour);
+	trap_R_SetColor( colour );
 	CG_DrawPic( 4, y, size, size, cg_pmWaitingList->shader );
 	trap_R_SetColor( NULL );
 	CG_Text_Paint_Ext( 4 + size + 2, y + 12, 0.2f, 0.2f, colourText, cg_pmWaitingList->message, 0, 0, 0, &cgs.media.limboFont2 );
@@ -443,7 +444,8 @@ static void CG_DrawPMItemsContent(void) {
 		colourText[3] = colour[3] = CG_NitmodPopupAlpha(listItem->time, cg.time, cg_popupFadeTime.integer);
 		if(CG_NitmodDrawGraphicObituary(listItem, y, colourText[3])) continue;
 
-		trap_R_SetColor( colourText );
+		VectorCopy(listItem->iconColor, colour);
+		trap_R_SetColor( colour );
 		CG_DrawPic( 4, y, size, size, listItem->shader );
 		trap_R_SetColor( NULL );
 		CG_Text_Paint_Ext( 4 + size + 2, y + 12, 0.2f, 0.2f, colourText, listItem->message, 0, 0, 0, &cgs.media.limboFont2 );
@@ -460,7 +462,7 @@ void CG_DrawPMItemsBig(void) {
 static void CG_DrawPMItemsBigContent(void) {
 	vec4_t colour = { 0.f, 0.f, 0.f, 1.f };
 	vec4_t colourText = { 1.f, 1.f, 1.f, 1.f };
-	float t;
+	double elapsed;
 	float y = 270;
 	float w;
 
@@ -468,18 +470,25 @@ static void CG_DrawPMItemsBigContent(void) {
 		return;
 	}
 
-	t = cg_pmWaitingListBig->time + CG_TimeForBigPopup( cg_pmWaitingListBig->type ) + PM_WAITTIME_BIG;
-	if( cg.time > t ) {
-		colourText[3] = colour[3] = 1 - ((cg.time - t) / (float)PM_FADETIME_BIG);
-	}
+	elapsed = (double)cg.time - cg_pmWaitingListBig->time;
+	if(elapsed > 0) colourText[3] = colour[3] = (float)(1.0 - elapsed / 5000.0);
+	VectorCopy(cg_pmWaitingListBig->iconColor, colour);
 
-	trap_R_SetColor( colourText );
+	trap_R_SetColor( colour );
 	CG_DrawPic( 640 - 56, y, 48, 48, cg_pmWaitingListBig->shader );
 	trap_R_SetColor( NULL );
 
 
 	w = CG_Text_Width_Ext( cg_pmWaitingListBig->message, 0.22f, 0, &cgs.media.limboFont2 );
-	CG_Text_Paint_Ext( 640 - 4 - w, y + 56, 0.22f, 0.24f, colourText, cg_pmWaitingListBig->message, 0, 0, 0, &cgs.media.limboFont2 );
+	CG_Text_Paint_Ext( 640 - 4 - w, y + 56, 0.22f, 0.24f, colourText, cg_pmWaitingListBig->message, 0, 0, 7, &cgs.media.limboFont2 );
+}
+
+static const char *CG_PopupObjectiveName(int objective) {
+    if(NITMOD_UsesOriginalProtocol()) {
+        if(objective < 0 || objective >= NITMOD_NCS_OBJECTIVE_COUNT) return "";
+        return Info_ValueForKey(NITMOD_ConfigString(NITMOD_NCS_OBJECTIVES + objective), "t");
+    }
+    return CG_ConfigString(CS_OID_TRIGGERS + objective);
 }
 
 const char* CG_GetPMItemText( centity_t* cent ) {
@@ -487,9 +496,9 @@ const char* CG_GetPMItemText( centity_t* cent ) {
 		case PM_DYNAMITE:
 			switch( cent->currentState.effect2Time ) {
 				case 0:
-					return va( "Planted at %s.", CG_ConfigString( CS_OID_TRIGGERS + cent->currentState.effect3Time ) );
+					return va( "Planted at %s.", CG_PopupObjectiveName(cent->currentState.effect3Time) );
 				case 1:
-					return va( "Defused at %s.", CG_ConfigString( CS_OID_TRIGGERS + cent->currentState.effect3Time ) );
+					return va( "Defused at %s.", CG_PopupObjectiveName(cent->currentState.effect3Time) );
 			}
 			break;
 		case PM_CONSTRUCTION:
@@ -497,23 +506,34 @@ const char* CG_GetPMItemText( centity_t* cent ) {
 				case -1:
 					return CG_ConfigString( CS_STRINGS + cent->currentState.effect3Time );
 				case 0:
-					return va( "%s has been constructed.", CG_ConfigString( CS_OID_TRIGGERS + cent->currentState.effect3Time ) );
+					return va( "%s has been constructed.", CG_PopupObjectiveName(cent->currentState.effect3Time) );
 			}
 			break;
 		case PM_DESTRUCTION:
 			switch( cent->currentState.effect2Time ) {
 				case 0:
-					return va( "%s has been damaged.", CG_ConfigString( CS_OID_TRIGGERS + cent->currentState.effect3Time ) );
+					return va( "%s has been damaged.", CG_PopupObjectiveName(cent->currentState.effect3Time) );
 				case 1:
-					return va( "%s has been destroyed.", CG_ConfigString( CS_OID_TRIGGERS + cent->currentState.effect3Time ) );
+					return va( "%s has been destroyed.", CG_PopupObjectiveName(cent->currentState.effect3Time) );
 			}
 			break;
 		case PM_MINES:
-			if( cgs.clientinfo[cg.clientNum].team == cent->currentState.effect2Time ) {
+			if( cgs.clientinfo[cg.clientNum].team == cent->currentState.effect2Time ||
+                (NITMOD_UsesNitmodHud() && cgs.clientinfo[cg.clientNum].team == TEAM_SPECTATOR) ) {
 				return NULL;
 			}
 			return va( "Spotted by %s^7 at %s", cgs.clientinfo[cent->currentState.effect3Time].name, BG_GetLocationString( cent->currentState.origin ) );
 		case PM_OBJECTIVE:
+			/* Original uses the actor's nonempty name for both pickup and return.
+			 * Foreign protocols do not promise an actor in clientNum. */
+			if( NITMOD_UsesNitmodHud() && cent->currentState.clientNum >= 0 &&
+				cent->currentState.clientNum < MAX_CLIENTS &&
+				cgs.clientinfo[cent->currentState.clientNum].name[0] &&
+				(cent->currentState.density == 0 || cent->currentState.density == 1) ) {
+				return va(cent->currentState.density == 0 ? "%s ^ghas stolen %s!" : "%s ^ghas returned %s!",
+					cgs.clientinfo[cent->currentState.clientNum].name,
+					CG_ConfigString(CS_STRINGS + cent->currentState.effect3Time));
+			}
 			switch( cent->currentState.density ) {
 				case 0:
 					return va( "%s have stolen %s!", cent->currentState.effect2Time == TEAM_ALLIES ? "Allies" : "Axis", CG_ConfigString( CS_STRINGS + cent->currentState.effect3Time ));
@@ -568,6 +588,13 @@ void CG_PlayPMItemSound( centity_t *cent )
 			}
 			break;
 		case PM_MINES:
+            if(NITMOD_UsesNitmodHud()) {
+                int team = cgs.clientinfo[cg.clientNum].team;
+                if(team != TEAM_SPECTATOR && team != cent->currentState.effect2Time)
+                    trap_S_StartSound(NULL, cg.clientNum, CHAN_VOICE,
+                        popupMinesSpotted[cent->currentState.effect2Time == TEAM_AXIS ? 1 : 0]);
+                break;
+            }
 			if( cgs.clientinfo[cg.clientNum].team != cent->currentState.effect2Time ) {
 				// inverted teams
 				if( cent->currentState.effect2Time == TEAM_AXIS ) {

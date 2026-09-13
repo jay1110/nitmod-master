@@ -6,6 +6,7 @@
 */
 
 #include "g_local.h"
+#include "nitmod_protocol.h"
 
 //==========================================================
 
@@ -55,7 +56,7 @@ void Use_target_remove_powerups( gentity_t *ent, gentity_t *other, gentity_t *ac
 	}
 
 	if ( activator->client->ps.powerups[PW_REDFLAG] || activator->client->ps.powerups[PW_BLUEFLAG] ) {
-		Team_ReturnFlag(&g_entities[activator->client->flagParent]);
+		Team_ReturnFlag(&g_entities[activator->client->flagParent], activator);
 	}
 
 	memset( activator->client->ps.powerups, 0, sizeof( activator->client->ps.powerups ) );
@@ -77,7 +78,9 @@ void Think_Target_Delay( gentity_t *ent ) {
 }
 
 void Use_Target_Delay( gentity_t *ent, gentity_t *other, gentity_t *activator ) {
-	ent->nextthink = level.time + ( ent->wait + ent->random * crandom() ) * 1000;
+	/* Original 0xd75e0 retains wide random/delay arithmetic until conversion. */
+	ent->nextthink = (int)((double)level.time + ((double)ent->wait +
+		(double)ent->random * (2.0 * ((rand() & 0x7fff) / 32767.0 - 0.5))) * 1000.0);
 	ent->think = Think_Target_Delay;
 	ent->activator = activator;
 }
@@ -668,8 +671,9 @@ void G_KillEnts( const char* target, gentity_t* ignore, gentity_t* killer, means
 
 		// RF, script_movers should die!
 		if( targ->s.eType == ET_MOVER && !Q_stricmp(targ->classname, "script_mover") && targ->die ) {
-			G_Damage( targ, killer, killer, NULL, NULL, 100000, DAMAGE_NO_PROTECTION, MOD_TELEFRAG );
-//			targ->die(targ, killer, killer, targ->health, 0);
+			/* Original 0xd94c2: zero base damage, no protection plus instant kill. */
+			G_Damage( targ, killer, killer, NULL, NULL, 0,
+				DAMAGE_NO_PROTECTION | DAMAGE_NITMOD_INSTANT_KILL, MOD_TELEFRAG );
 			continue;
 		}
 
@@ -677,7 +681,7 @@ void G_KillEnts( const char* target, gentity_t* ignore, gentity_t* killer, means
 			if( killer ) {
 				G_AddKillSkillPointsForDestruction( killer, mod, &targ->constructibleStats );
 			}
-			targ->die(targ, killer, killer, targ->health, 0);
+			targ->die(targ, killer, killer, targ->health, mod);
 			continue;
 		}
 
@@ -761,19 +765,9 @@ Use_Target_Lock
 */
 void Use_Target_Lock( gentity_t *ent, gentity_t *other, gentity_t *activator )
 {
-	gentity_t	*t = 0;
-
-	while ( (t = G_Find (t, FOFS(targetname), ent->target)) != NULL )
-	{
-//		G_Printf("target_lock locking entity with key: %d\n", ent->count);
-		t->key = ent->key;
-		if (t->key) {
-			G_SetAASBlockingEntity( t, AAS_AREA_DISABLED );
-		} else {
-			G_SetAASBlockingEntity( t, AAS_AREA_ENABLED );
-		}
-	}
-
+ gentity_t *t=NULL;
+ /* Original0xd73d0..0xd7422 changes keys only, without an AAS side effect. */
+ while((t=G_FindByTargetname(t,ent->target))!=NULL) t->key=ent->key;
 }
 
 //==========================================================
@@ -791,7 +785,7 @@ void Use_target_fog( gentity_t *ent, gentity_t *other, gentity_t *activator)
 //		density
 //		r,g,b
 //		time to complete
-	trap_SetConfigstring( CS_FOGVARS, va("%f %f %f %f %f %f %i", 1.0f, (float)ent->s.density, 1.0f, (float)ent->dl_color[0], (float)ent->dl_color[1], (float)ent->dl_color[2], ent->s.time) );
+	trap_SetConfigstring( CS_FOGVARS, va("%f %f %f %f %f %f %i", 1.0f, (double)ent->s.density, 1.0f, (float)ent->dl_color[0], (float)ent->dl_color[1], (float)ent->dl_color[2], ent->s.time) );
 }
 
 /*QUAKED target_fog (1 1 0) (-8 -8 -8) (8 8 8)
@@ -816,7 +810,7 @@ void SP_target_fog( gentity_t *ent ) {
 	if(G_SpawnFloat( "time", "0.5", &ftime ))
 	{
 		if(ftime>=0)
-			ent->s.time = ftime * 1000;	// sec to ms
+			ent->s.time = (int)((double)ftime * 1000.0);	// sec to ms
 	}
 }
 
@@ -1002,7 +996,11 @@ void SP_target_smoke (gentity_t *ent) {
 	ent->r.svFlags = 0;
 	ent->s.eType = ET_SMOKER;
 
-	if (ent->spawnflags & 2)
+	/* Original SP_target_smoke lets an explicit density override spawnflags,
+	 * including an explicit zero. */
+	if (G_SpawnString("density", "", &buffer))
+		ent->s.density = NITMOD_ParseOriginalDecimal32(buffer);
+	else if (ent->spawnflags & 2)
 		ent->s.density = 4;
 	else
 		ent->s.density = 0;
@@ -1162,7 +1160,7 @@ void target_rumble_think (gentity_t * ent)
 	
 	if (validrumble)
 	{
-		tent = G_TempEntity (ent->r.currentOrigin, EV_RUMBLE_EFX);
+		tent = G_NITMOD_TempEvent (ent->r.currentOrigin, EV_RUMBLE_EFX);
 
 		tent->s.angles[0] = dapitch * ratio; 
 		tent->s.angles[1] = dayaw * ratio; 

@@ -1,3 +1,4 @@
+#include "nitmod_xp_snapshot.h"
 #include "g_nitmod_lua.h"
 #include "g_nitmod_accounts.h"
 #include "g_nitmod_admin.h"
@@ -440,7 +441,7 @@ cvarTable_t		gameCvarTable[] = {
 	{ NULL, "Players_Allies", "", CVAR_ROM, 0, qfalse, qfalse },
 
 	{ &refereePassword, "refereePassword", "", 0, 0, qfalse},
-	{ &g_spectatorInactivity, "g_spectatorInactivity", "0", 0, 0, qfalse, qfalse },
+	{ &g_spectatorInactivity, "g_spectatorInactivity", "0", 0, 0, qtrue, qfalse },
 	{ &match_latejoin,		"match_latejoin", "1", 0, 0, qfalse, qfalse },
 	{ &match_minplayers,	"match_minplayers", MATCH_MINPLAYERS, 0, 0, qfalse, qfalse },
 	{ &match_mutespecs,		"match_mutespecs", "0", 0, 0, qfalse, qtrue },
@@ -962,7 +963,8 @@ void G_CheckForCursorHints( gentity_t *ent ) {
 	}
 
 	if( tr->entityNum == ENTITYNUM_WORLD ) {
-		if ((tr->contents & CONTENTS_WATER) && !(ps->powerups[PW_BREATHER])) {
+		/* Original 0x76a48 selects water before ladder, without a powerup gate. */
+		if (tr->contents & CONTENTS_WATER) {
 			hintDist = CH_WATER_DIST;
 			hintType = HINT_WATER;
 		} else if( (tr->surfaceFlags & SURF_LADDER) && !(ps->pm_flags & PMF_LADDER) ) { // ladder
@@ -2095,6 +2097,7 @@ void G_InitGame( int levelTime, int randomSeed, int restart ) {
 	}
 
 	G_NITMOD_LoadMapConfigs();
+	G_InitRemappedShaders();
 	G_InitWorldSession();
 	G_NITMOD_LoadMapCycleConfig();
 
@@ -2151,6 +2154,7 @@ void G_InitGame( int levelTime, int randomSeed, int restart ) {
 	// load level script
 	G_NITMOD_InitMatchConfig();
 	G_Script_ScriptLoad();
+	G_NITMOD_InitEventPool();
 
 	// reserve some spots for dead player bodies
 	InitBodyQue();
@@ -2180,6 +2184,8 @@ void G_InitGame( int levelTime, int randomSeed, int restart ) {
 	InitServerEntities();
 
 	// parse the key/value pairs and spawn gentities
+	G_NITMOD_ResetSpawnEntities();
+	G_NITMOD_ResetDMSpawnTimes();
 	G_SpawnEntitiesFromString();
 
 	// TAT 11/13/2002 - entities are spawned, so now we can do setup
@@ -2409,12 +2415,9 @@ int QDECL SortRanks( const void *a, const void *b ) {
 			return 1;
 		}
 	} else {
-		int i, totalXP[2];
-
-		for( totalXP[0] = totalXP[1] = 0, i = 0; i < SK_NUM_SKILLS; i++ ) {
-			totalXP[0] += ca->sess.skillpoints[i];
-			totalXP[1] += cb->sess.skillpoints[i];
-		}
+        int totalXP[2];
+        totalXP[0] = NITMOD_TotalSkillXP(ca->sess.skillpoints);
+        totalXP[1] = NITMOD_TotalSkillXP(cb->sess.skillpoints);
 
 		// then sort by xp
 		if ( totalXP[0] > totalXP[1] ) {
@@ -2689,14 +2692,15 @@ void FindIntermissionPoint( void ) {
 	vec3_t		dir;
 	char		cs[MAX_STRING_CHARS];		// DHM - Nerve
 	char		*buf;						// DHM - Nerve
+	int cursor = 0;
 	int			winner;						// DHM - Nerve
 
 	// NERVE - SMF - if the match hasn't ended yet, and we're just a spectator
 	if( !level.intermissiontime ) {
 		// try to find the intermission spawnpoint with no team flags set
-		ent = G_Find( NULL, FOFS(classname), "info_player_intermission" );
+		ent = G_NITMOD_NextSpawnEntity(&cursor, 0x527df);
 
-		for( ; ent; ent = G_Find (ent, FOFS(classname), "info_player_intermission") ) {
+		for( ; ent; ent = G_NITMOD_NextSpawnEntity(&cursor, 0x527df) ) {
 			if( !ent->spawnflags )
 				break;
 		}
@@ -2715,13 +2719,14 @@ void FindIntermissionPoint( void ) {
 
 
 	if( !ent ) {
-		ent = G_Find( NULL, FOFS(classname), "info_player_intermission" );
+        cursor = 0;
+		ent = G_NITMOD_NextSpawnEntity(&cursor, 0x527df);
 		while( ent ) {
 			if( ent->spawnflags & winner ) {
 				break;
 			}
 
-			ent = G_Find( ent, FOFS(classname), "info_player_intermission" );
+			ent = G_NITMOD_NextSpawnEntity(&cursor, 0x527df);
 		}
 	}
 
@@ -3120,6 +3125,9 @@ void LogExit( const char *string ) {
 			nitmod_SendMapEndStats( clientNum );
 		}
 	}
+	/* Original LogExit.part.6 emits the retained last-frag name. */
+	if(level.nitmodLastFragName)
+		trap_SendServerCommand(-1,va("chat \"^fLast Frag of the round ^2: ^7%s\" -2",level.nitmodLastFragName));
 	trap_Cvar_Set("g_reset", "0");
 
 }
@@ -3991,6 +3999,7 @@ void G_TagLinkEntity( gentity_t* ent, int msec ) {
 }
 
 void G_RunEntity( gentity_t* ent, int msec ) {
+	if(ent->nitmodEventInactive) return;
 	if( ent->runthisframe ) {
 		return;
 	}
@@ -4050,6 +4059,7 @@ void G_RunEntity( gentity_t* ent, int msec ) {
 			// items that will respawn will hide themselves after their pickup event
 			ent->unlinkAfterEvent = qfalse;
 			trap_UnlinkEntity( ent );
+			if(G_NITMOD_ExpireTempEvent(ent)) return;
 		}
 	}
 
@@ -4188,11 +4198,11 @@ static void G_NITMOD_RunServerAutomation( void ) {
 			int interval = G_NITMOD_LegacyCvarInteger("n_crazyGravityInterval", 30000);
 			int gravity;
 			if( minimum < 0 ) minimum = 0;
-			if( maximum <= minimum ) maximum = (int)((unsigned int)minimum + 1u);
-			gravity = (int)((unsigned int)minimum + (unsigned int)(rand() %
-				(int)((unsigned int)maximum - (unsigned int)minimum)));
+			if( maximum <= minimum ) maximum = NITMOD_SupportSignedTime((uint32_t)minimum + UINT32_C(1));
+			gravity = NITMOD_SupportSignedTime((uint32_t)minimum + (uint32_t)(rand() %
+				NITMOD_SupportSignedTime((uint32_t)maximum - (uint32_t)minimum)));
 			trap_Cvar_Set("g_gravity", va("%d", gravity));
-			nitmodCrazyGravityDeadline = (int)((unsigned int)level.time + (unsigned int)interval);
+			nitmodCrazyGravityDeadline = NITMOD_SupportSignedTime((uint32_t)level.time + (uint32_t)interval);
 			trap_SendServerCommand(-1,
 				va("cpm \"^8crazygravity: ^9gravity changed to ^g%d\"", gravity));
 		}

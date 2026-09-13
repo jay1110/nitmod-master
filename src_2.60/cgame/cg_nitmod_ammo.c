@@ -1,17 +1,41 @@
 #include "cg_local.h"
 #include "cg_nitmod_config.h"
 #include "cg_nitmod_ammo.h"
+#include "../game/nitmod_weapon_ids.h"
+#include <stdint.h>
 
 extern int CG_WeaponIndex(int weapon, int *bank, int *cycle);
 
-/* Original warning thresholds: five reserve rounds clear the warning;
- * empty reserve is state 2, a low nonzero reserve state 1. Do not include
- * magazines or deduplicate aliases: the original counts each owned weapon.
- * Unlike its masked x86 shift, inspect both native ownership words. */
+/* Preserve original Nitmod's descending wire scan, including the x86
+ * shift modulo 32 on the first ownership word. Snapshots are normalized,
+ * so rebuild wire ownership before applying that original decision. */
 void CG_CheckAmmo(void) {
     int weapon, reserve, total=0;
     qboolean owned=qfalse;
     if(!cg.snap) return;
+    if(NITMOD_UsesNitmodHud()) {
+        uint32_t ownership[2] = {0, 0}, sum = 0;
+        int wire;
+        for(wire = 0; wire < 52; ++wire) {
+            weapon = nitmodWireWeapons[wire];
+            if((uint32_t)cg.snap->ps.weapons[weapon / 32] & (1u << (weapon & 31)))
+                ownership[wire / 32] |= 1u << (wire & 31);
+        }
+        if(!(ownership[0] | ownership[1])) return;
+        for(wire = 51; wire >= 0; --wire) {
+            if(!(ownership[0] & (1u << (wire & 31)))) continue;
+            weapon = nitmodWireWeapons[wire];
+            sum += (uint32_t)cg.snap->ps.ammo[BG_FindAmmoForWeapon(weapon)] * 1000u;
+            if(sum <= 0x7fffffffu && sum > 4999u) {
+                cg.lowAmmoWarning = 0;
+                return;
+            }
+        }
+        if(!cg.lowAmmoWarning)
+            trap_S_StartLocalSound(cgs.media.noAmmoSound, CHAN_LOCAL_SOUND);
+        cg.lowAmmoWarning = sum ? 1 : 2;
+        return;
+    }
     for(weapon=0;weapon<WP_NUM_WEAPONS;++weapon) {
         if(!((unsigned int)cg.snap->ps.weapons[weapon/32] & (1u<<(weapon%32)))) continue;
         owned=qtrue;

@@ -112,17 +112,23 @@ void CG_NitmodDrawGlobalAward(void) {
 qboolean CG_NitmodParseGlobalStats(int argc, const char *(*argv)(int),
 	int values[NITMOD_GLOBAL_STAT_COUNT], qboolean *failed) {
 	int next[NITMOD_GLOBAL_STAT_COUNT], i;
-	if(!argv || !values || !failed || argc < 3) return qfalse;
-	if(argc == 3 && (!Q_stricmp(argv(2), "NR") || !strcmp(argv(2), "-"))) {
-		*failed = qtrue;
-		return qtrue;
-	}
-	if(argc != NITMOD_GLOBAL_STAT_COUNT + 2) return qfalse;
-	for(i = 0; i < NITMOD_GLOBAL_STAT_COUNT; ++i)
-		if(!NITMOD_ParseProtocolSigned(argv(i + 2), &next[i])) return qfalse;
-	memcpy(values, next, sizeof(next));
-	*failed = qfalse;
-	return qtrue;
+    if(!argv || !values || !failed) return qfalse;
+    /* Original CG_ServerCommand 0xaafbc..0xab0ee reads fixed fields using
+     * 32-bit strtol; it neither requires an exact argc nor accepts '-' as NR. */
+    if(argc>2 && !Q_stricmp(argv(2), "NR")) {
+        memset(values,0,sizeof(next));
+        values[0]=-1;
+        *failed=qtrue;
+        return qtrue;
+    }
+    for(i=0;i<NITMOD_GLOBAL_STAT_COUNT;++i) {
+        long long value=strtoll(i+2<argc ? argv(i+2) : "",NULL,10);
+        next[i]=value>2147483647LL ? 2147483647 :
+            value<(-2147483647LL-1) ? (-2147483647-1) : (int)value;
+    }
+    memcpy(values,next,sizeof(next));
+    *failed=qfalse;
+    return qtrue;
 }
 
 void CG_NitmodGlobalStats_f(void) {
@@ -147,12 +153,12 @@ qboolean CG_NitmodGlobalStatsCommand(void) {
 	qboolean failed = qfalse;
 	int values[NITMOD_GLOBAL_STAT_COUNT];
 	if(!CG_NitmodParseGlobalStats(trap_Argc(), CG_Argv, values, &failed)) return qtrue;
-	if(!globalStats.visible) return qtrue;
+	/* Replies remain cached when the window closes while a request is in flight. */
 	globalStats.failed = failed;
 	globalStats.received = qtrue;
 	globalStats.requested = qfalse;
 	if(failed) globalStats.deadline = (double)cg.time + 5000;
-	if(!failed) memcpy(globalStats.values, values, sizeof(values));
+	memcpy(globalStats.values, values, sizeof(values));
 	return qtrue;
 }
 

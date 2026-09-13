@@ -18,7 +18,7 @@ nitmodConfigResult_t NITMOD_StoreConfig( nitmodConfigStore_t *store, int index, 
 	if( !value ) {
 		value = "";
 	}
-	for( length = 0; length < NITMOD_CONFIGSTRING_CHARS; length++ ) {
+	for( length = 0; length < NITMOD_CONFIGSTRING_CHARS - 1; length++ ) {
 		if( !value[length] ) {
 			break;
 		}
@@ -29,14 +29,14 @@ nitmodConfigResult_t NITMOD_StoreConfig( nitmodConfigStore_t *store, int index, 
 			return NITMOD_CONFIG_UNSAFE;
 		}
 	}
-	if( length == NITMOD_CONFIGSTRING_CHARS ) {
-		return NITMOD_CONFIG_TOO_LONG;
-	}
 	if( !strcmp( store->values[index], value ) ) {
 		return NITMOD_CONFIG_UNCHANGED;
 	}
 	/* memmove also permits a caller to pass a substring of the same slot. */
-	memmove( store->values[index], value, length + 1 );
+	/* Original nitrox_SetConfigstring compares before Q_strncpyz(size 0x3fa).
+	 * Repeating an overlong input must therefore still mark the slot dirty. */
+	memmove( store->values[index], value, length );
+	store->values[index][length] = '\0';
 	store->dirty[index] = 1;
 	store->hasDirty = 1;
 	return NITMOD_CONFIG_UPDATED;

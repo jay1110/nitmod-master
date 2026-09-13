@@ -66,7 +66,7 @@ static qboolean DebugVector(const vec3_t v) {
 int CG_NitmodDebugEventLines(const entityState_t *es, int event, nitmodDebugLine_t lines[12]) {
     vec3_t corners[8], half;
     const float *axes[3];
-    int i, j, axis, count = 0, color;
+    int i, axis, count = 0, color;
     if(!es || !lines) return 0;
     memset(lines, 0, sizeof(*lines) * 12);
     if(!DebugVector(es->pos.trBase) || !DebugVector(es->origin2) ||
@@ -105,10 +105,8 @@ int CG_NitmodDebugEventLines(const entityState_t *es, int event, nitmodDebugLine
     }
     for(i = 0; i < count; ++i) {
         if(!DebugVector(lines[i].start) || !DebugVector(lines[i].end)) return 0;
-        for(j = 0; j < 3; ++j) {
-            if(lines[i].color[j] < 0) lines[i].color[j] = 0;
-            if(lines[i].color[j] > 1) lines[i].color[j] = 1;
-        }
+        /* Original CG_BotDebugLine 0x5f100..0x5f115 copies RGB verbatim. */
+        if(!DebugVector(lines[i].color)) return 0;
     }
     return count;
 }
@@ -129,7 +127,8 @@ void CG_NitmodDebugEvent(const entityState_t *es, int event) {
         le->leType = LE_FADE_RGB; le->startTime = cg.time; le->endTime = (int)end;
         le->lifeRate = 1.f / (float)((double)le->endTime - le->startTime);
         le->refEntity.reType = RT_RAIL_CORE;
-        le->refEntity.shaderTime = cg.time / 1000.f;
+        /* Original FILD/divide precedes the final float store. */
+        le->refEntity.shaderTime = (float)((double)cg.time / 1000.0);
         le->refEntity.customShader = cgs.media.railCoreShader;
         VectorCopy(lines[i].start, le->refEntity.origin);
         VectorCopy(lines[i].end, le->refEntity.oldorigin);
@@ -156,8 +155,7 @@ void CG_NitmodRailEvent(const entityState_t *es) {
     if(cgs.media.railCoreShader <= 0) return;
     for(j = 0; j < 3; ++j) {
         color[j] = es->angles[j] / 255.f;
-        if(color[j] < 0) color[j] = 0;
-        if(color[j] > 1) color[j] = 1;
+        /* Original CG_RailTrail/CG_RailTrail2 copy RGB without clamping. */
         for(i = 0; i < 8; ++i)
             corners[i][j] = masks[i] & (1 << j) ? es->pos.trBase[j] : es->origin2[j];
     }
@@ -173,7 +171,8 @@ void CG_NitmodRailEvent(const entityState_t *es) {
         le->lifeRate = 1.f / (float)((double)le->endTime - le->startTime);
         memset(&le->refEntity, 0, sizeof(le->refEntity));
         le->refEntity.reType = RT_RAIL_CORE;
-        le->refEntity.shaderTime = cg.time / 1000.f;
+        /* Original FILD/divide precedes the final float store. */
+        le->refEntity.shaderTime = (float)((double)cg.time / 1000.0);
         le->refEntity.customShader = cgs.media.railCoreShader;
         VectorCopy(corners[es->dmgFlags ? edges[i][0] : 0], le->refEntity.origin);
         VectorCopy(corners[es->dmgFlags ? edges[i][1] : 7], le->refEntity.oldorigin);
@@ -226,47 +225,49 @@ void CG_NitmodDebugGeometry(const centity_t *cent, const playerState_t *ps,
     DebugBox(out, origin, mins, maxs);
 }
 
-static void DebugLine(const vec3_t start, const vec3_t end) {
-    refEntity_t line;
-    if(!DebugVector(start) || !DebugVector(end)) return;
-    memset(&line, 0, sizeof(line));
-    line.reType = RT_RAIL_CORE;
-    line.customShader = cgs.media.railCoreShader;
-    line.shaderRGBA[0] = 63; line.shaderRGBA[1] = 127;
-    line.shaderRGBA[2] = line.shaderRGBA[3] = 255;
-    VectorCopy(start, line.origin); VectorCopy(end, line.oldorigin);
-    AxisClear(line.axis);
-    trap_R_AddRefEntityToScene(&line);
+/* Route local diagnostics through the same keyed lifetime path as original
+ * CG_RailTrail/CG_RailTrail2, rather than drawing transient renderer lines. */
+static void DebugRail(const vec3_t start, const vec3_t end, int box, int group) {
+    entityState_t event;
+    memset(&event, 0, sizeof(event));
+    VectorCopy(start, event.origin2);
+    VectorCopy(end, event.pos.trBase);
+    VectorSet(event.angles, 63.75f, 127.5f, 255.f);
+    event.dmgFlags = box;
+    event.effect1Time = group;
+    CG_NitmodRailEvent(&event);
 }
 
 void CG_NitmodDrawPlayerDebug(const centity_t *cent, const refEntity_t *body) {
     nitmodDebugGeometry_t geometry;
-    int b, corner, axis, flags = cg_drawHitbox.integer & 7;
+    int b, axis, firstBody = 0, flags = cg_drawHitbox.integer & 7;
     if(!flags || !cent || !body || !body->hModel || !NITMOD_UsesNitmodHud() ||
        cgs.media.railCoreShader <= 0) return;
     CG_NitmodDebugGeometry(cent, &cg.predictedPlayerState, &cg.pmext, flags, &geometry);
-    for(b = 0; b < geometry.count; ++b) {
-        const nitmodDebugBox_t *box = &geometry.boxes[b];
-        for(corner = 0; corner < 8; ++corner) for(axis = 0; axis < 3; ++axis) {
-            vec3_t start, end;
-            int i;
-            if(corner & (1 << axis)) continue;
-            for(i = 0; i < 3; ++i) start[i] = corner & (1 << i) ? box->maxs[i] : box->mins[i];
-            VectorCopy(start, end); end[axis] = box->maxs[axis];
-            DebugLine(start, end);
-        }
+    if((flags & 4) && cent->currentState.solid && cent->currentState.solid != SOLID_BMODEL && geometry.count) {
+        DebugRail(geometry.boxes[0].mins, geometry.boxes[0].maxs, 1,
+            cent->currentState.number | 0x1000);
+        firstBody = 1;
     }
     if(flags & 2) {
         orientation_t tag;
         vec3_t start, end, axes[3], bodyAxis[3];
         memset(&tag, 0, sizeof(tag));
-        if(trap_R_LerpTag(&tag, body, "tag_head", 0) < 0) return;
-        VectorCopy(body->origin, start);
-        for(axis = 0; axis < 3; ++axis) VectorMA(start, tag.origin[axis], body->axis[axis], start);
-        memcpy(bodyAxis, body->axis, sizeof(bodyAxis));
-        MatrixMultiply(tag.axis, bodyAxis, axes);
-        for(axis = 0; axis < 3; ++axis) {
-            VectorMA(start, 32, axes[axis], end); DebugLine(start, end);
+        if(trap_R_LerpTag(&tag, body, "tag_head", 0) >= 0) {
+            VectorCopy(body->origin, start);
+            for(axis = 0; axis < 3; ++axis) VectorMA(start, tag.origin[axis], body->axis[axis], start);
+            memcpy(bodyAxis, body->axis, sizeof(bodyAxis));
+            MatrixMultiply(tag.axis, bodyAxis, axes);
+            for(axis = 0; axis < 3; ++axis) {
+                VectorMA(start, 32, axes[axis], end);
+                /* Original uses the same (-1,-1) key for all three axes. */
+                DebugRail(start, end, 0, -1);
+            }
         }
+    }
+    for(b = firstBody; b < geometry.count; ++b) {
+        static const int groups[3] = {0x1000, 0x1800, 0x1400};
+        DebugRail(geometry.boxes[b].mins, geometry.boxes[b].maxs, 1,
+            cent->currentState.number | groups[b - firstBody]);
     }
 }

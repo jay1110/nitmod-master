@@ -4,15 +4,6 @@
 #include "g_nitmod_hitboxdebug.h"
 #include "nitmod_entity_ids.h"
 
-/* Original G_EntitiesFree 0xe7160 counts every unallocated entity slot,
- * including the tail beyond level.num_entities; ET's boolean helper does not. */
-static int FreeDebugSlots(void) {
-    int i, used = MAX_CLIENTS;
-    for(i = MAX_CLIENTS; i < level.num_entities && i < MAX_GENTITIES; ++i)
-        if(g_entities[i].inuse) ++used;
-    return MAX_GENTITIES - used;
-}
-
 /* Original G_RailBox 0x6b300. The event encodes two corners and 0..255
  * RGB, not ET's clientinfo color index. Its stable group is entityId+1.
  * Float-to-int color conversion is truncation, including .5*255 -> 127. */
@@ -22,7 +13,7 @@ void G_NITMOD_DebugRailBox(const vec3_t origin, const vec3_t mins,
     gentity_t *event;
     int i;
     VectorAdd(origin, mins, start);
-    event = G_TempEntity(start, EV_RAILTRAIL);
+    event = G_NITMOD_TempEvent(start, EV_RAILTRAIL);
     VectorAdd(origin, maxs, event->s.origin2);
     for(i = 0; i < 3; ++i) event->s.angles[i] = (float)(int)(color[i] * 255.f);
     event->s.dmgFlags = 1;
@@ -37,7 +28,7 @@ void G_NITMOD_DrawEntityHitbox(gentity_t *ent) {
     mode = G_NITMOD_LegacyCvarInteger("g_debugHitboxes", 0);
     G_NITMOD_LegacyCvarString("g_debugHitboxes", selector, sizeof(selector), "0");
     if(!mode && strlen(selector) <= 2) return;
-    if(FreeDebugSlots() <= 63) return;
+    if(G_EntitiesFree() <= 63) return;
     if(selector[0] && Q_isalpha((signed char)selector[0])) {
         if(!ent->classname || strcmp(selector, ent->classname)) return;
         VectorSet(color, .5f, 0, .5f);
@@ -131,4 +122,17 @@ void G_NITMOD_DrawHistoricalHitbox(gentity_t *target) {
  if(color>31) {color>>=1;if(color==32) color=31;}
  if(color<0) color=0;if(color>31) color=31;
  G_NITMOD_DebugRailBox(target->r.currentOrigin,target->r.mins,target->r.maxs,g_color_table[color],target->s.number|0x1000);
+}
+
+/* Original G_AttachBodyParts 0x45c28..0x45d4a: same color for all parts. */
+void G_NITMOD_DrawAttachedHitboxes(gentity_t *target) {
+ int color=target->client->ps.clientNum;
+ gentity_t *part;
+ if(color>31) {color>>=1;if(color==32) color=31;}
+ if(color<0) color=0;if(color>31) color=31;
+ G_NITMOD_DrawHistoricalHitbox(target);
+ part=target->client->tempHead;
+ if(part) G_NITMOD_DebugRailBox(part->r.currentOrigin,part->r.mins,part->r.maxs,g_color_table[color],part->s.number|0x400);
+ part=target->client->tempLeg;
+ if(part) G_NITMOD_DebugRailBox(part->r.currentOrigin,part->r.mins,part->r.maxs,g_color_table[color],part->s.number|0x800);
 }

@@ -652,13 +652,6 @@ static float PM_CmdScale( usercmd_t *cmd ) {
 	float	total;
 	float	scale;
 
-#ifdef CGAMEDLL
-	int gametype = cg_gameType.integer;
-	int movespeed = cg_movespeed.integer;
-#elif GAMEDLL
-	int gametype = g_gametype.integer;
-	int movespeed = g_movespeed.integer;
-#endif
 
 	max = abs( cmd->forwardmove );
 	if ( abs( cmd->rightmove ) > max ) {
@@ -722,11 +715,7 @@ static float PM_CmdScale( usercmd_t *cmd ) {
 	}
 
 
-	if (gametype == GT_SINGLE_PLAYER || gametype == GT_COOP) {
-		// Adjust the movespeed
-		scale *= (((float) movespeed)/(float) 127);
-
-	} // if (gametype == GT_SINGLE_PLAYER)...
+	/* Original qagame/cgame return here without ET single-player scaling. */
 
 	return scale;
 }
@@ -2607,6 +2596,9 @@ void PM_BeginWeaponChange( int oldweapon, int newweapon, qboolean reload ) {	//-
 				PM_AddEvent( EV_CHANGE_WEAPON );
 			}
 			break;
+		case WP_KNIFE:
+		case WP_BOMB:
+		case WP_POISON_BOMB:
 		case WP_DYNAMITE:
 		case WP_GRENADE_LAUNCHER:
 		case WP_GRENADE_PINEAPPLE:
@@ -2719,7 +2711,7 @@ static void PM_FinishWeaponChange( void ) {
 			break;
 	}
 
-	// Nitmod replays the raise phase for reselected knife/smoke bomb as well.
+	// Nitmod replays the raise phase for knife, smoke, bomb and poison bomb.
 	if( !NITMOD_WeaponChangeNeedsRaise(oldweapon, newweapon) )
 		return;
 
@@ -2833,8 +2825,6 @@ void PM_CheckForReload( int weapon ) {
 	int clipWeap, ammoWeap;
 	nitmodWeaponInventorySlots_t slots;
 
-	if(pm->noWeapClips)	// no need to reload
-		return;
 
 	// GPG40 and M7 don't reload
 	if( weapon == WP_GPG40 || weapon == WP_M7 )
@@ -2950,12 +2940,21 @@ PM_SwitchIfEmpty
 */
 static void PM_SwitchIfEmpty(void)
 {
-	// weapon from here down will be a thrown explosive
-	if(	pm->ps->weapon != WP_GRENADE_LAUNCHER &&
-		pm->ps->weapon != WP_GRENADE_PINEAPPLE &&
-		pm->ps->weapon != WP_DYNAMITE &&
-		pm->ps->weapon != WP_SMOKE_BOMB &&
-		pm->ps->weapon != WP_LANDMINE ) {
+	/* Original empty-inventory dispatch includes the Nitmod extensions. */
+	switch( pm->ps->weapon ) {
+	case WP_KNIFE:
+	case WP_GRENADE_LAUNCHER:
+	case WP_GRENADE_PINEAPPLE:
+	case WP_DYNAMITE:
+	case WP_LANDMINE:
+	case WP_SATCHEL_DET:
+	case WP_SMOKE_BOMB:
+	case WP_BOMB:
+	case WP_TRIPMINE:
+	case WP_POISON_BOMB:
+	case WP_POISON_MINE:
+		break;
+	default:
 		return;
 	}
 
@@ -2971,7 +2970,8 @@ static void PM_SwitchIfEmpty(void)
 	switch(pm->ps->weapon) {
 		case WP_GRENADE_LAUNCHER:
 		case WP_GRENADE_PINEAPPLE:
-		case WP_DYNAMITE:
+		case WP_KNIFE:
+		case WP_BOMB:
 			COM_BitClear( pm->ps->weapons, pm->ps->weapon);
 			break;
 		default:
@@ -3001,15 +3001,12 @@ static int PM_WeaponFiringClip( int wp ) {
 
 void PM_WeaponUseAmmo( int wp, int amount ) {
 	nitmodWeaponInventorySlots_t slots;
-	if(!pm->noWeapClips && pm->nitmodReloadEnabled && NITMOD_WeaponInventorySlots(wp,&slots)) {
+	if(pm->nitmodReloadEnabled && NITMOD_WeaponInventorySlots(wp,&slots)) {
 		NITMOD_ConsumeSelectedWeaponClip(pm->ps,wp,amount,pm->nitmodWarMode,
 			pm->nitmodNoReload,ammoTableMP,WP_NUM_WEAPONS);
 		return;
 	}
-	if(pm->noWeapClips)
-		pm->ps->ammo[ BG_FindAmmoForWeapon(wp)] -= amount;
-	else
-		pm->ps->ammoclip[PM_WeaponFiringClip(wp)] -= amount;
+	pm->ps->ammoclip[PM_WeaponFiringClip(wp)] -= amount;
 }
 
 
@@ -3020,8 +3017,7 @@ PM_WeaponAmmoAvailable
 ==============
 */
 int PM_WeaponAmmoAvailable( int wp ) {
-	if(pm->noWeapClips)
-		return pm->ps->ammo[ BG_FindAmmoForWeapon(wp)];
+	/* Original reads the selected firing clip, including akimbo hand choice. */
 	return pm->ps->ammoclip[PM_WeaponFiringClip(wp)];
 }
 
@@ -3032,15 +3028,8 @@ PM_WeaponClipEmpty
 ==============
 */
 int PM_WeaponClipEmpty( int wp ) {
-	if(pm->noWeapClips) {
-		if(!(pm->ps->ammo[ BG_FindAmmoForWeapon(wp)]))
-			return 1;
-	}else{
-		if(!(pm->ps->ammoclip[BG_FindClipForWeapon(wp)]))
-			return 1;
-	}
-
-	return 0;
+    /* Original tests the primary clip, not reserve or the next akimbo hand. */
+    return pm->ps->ammoclip[BG_FindClipForWeapon(wp)] == 0;
 }
 
 
@@ -3065,9 +3054,12 @@ void PM_CoolWeapons( void ) {
 					((pm->nitmodPackSkillMasks[SK_HEAVY_WEAPONS] & 4u) &&
 					 (wp == WP_PANZERFAUST || wp == WP_FLAMETHROWER || wp == WP_MOBILE_MG42 || wp == WP_MORTAR)) :
 					(pm->skill[SK_HEAVY_WEAPONS] >= 2 && pm->ps->stats[STAT_PLAYER_CLASS] == PC_SOLDIER) ) {
-					pm->ps->weapHeat[wp] -= ((float)GetAmmoTableData(wp)->coolRate * 2.f * pml.frametime);
+					pm->ps->weapHeat[wp] -= (pm->nitmodReloadEnabled ?
+						(double)GetAmmoTableData(wp)->coolRate * 1.5 * pml.frametime :
+						(float)GetAmmoTableData(wp)->coolRate * 2.f * pml.frametime);
 				} else {
-					pm->ps->weapHeat[wp] -= ((float)GetAmmoTableData(wp)->coolRate * pml.frametime);
+					/* Preserve the original x87 intermediate precision until the integer store. */
+					pm->ps->weapHeat[wp] -= ((double)GetAmmoTableData(wp)->coolRate * pml.frametime);
 				}
 
 				if(pm->ps->weapHeat[wp] < 0)
@@ -3267,6 +3259,8 @@ static qboolean PM_NitmodThrowKnife(void) {
 
 	if(!pm->nitmodAuthoritativeWeapons || pm->ps->weapon != WP_KNIFE)
 		return qfalse;
+	/* This helper returns before the shared timed-throw condition reset. */
+	BG_ClearConditionBitFlag( pm->ps->clientNum, ANIM_COND_HOLDING, 0 );
 	ammo = BG_FindClipForWeapon(WP_KNIFE);
 	if(pm->ps->weaponstate != WEAPON_FIRINGALT) {
 		if(!(pm->cmd.wbuttons & WBUTTON_ATTACK2) || !(pm->nitmodPackSkillMasks[SK_LIGHT_WEAPONS] & 32u) ||
@@ -3292,8 +3286,10 @@ static qboolean PM_NitmodThrowKnife(void) {
 		pm->cmd.buttons &= ~BUTTON_ATTACK;
 		pm->cmd.wbuttons &= ~WBUTTON_ATTACK2;
 	}
-	if((pm->cmd.wbuttons & WBUTTON_ATTACK2) && !(pm->ps->eFlags & EF_PRONE_MOVING))
+	if((pm->cmd.wbuttons & WBUTTON_ATTACK2) && !(pm->ps->eFlags & EF_PRONE_MOVING)) {
+		BG_SetConditionBitFlag( pm->ps->clientNum, ANIM_COND_HOLDING, 0 );
 		return qtrue;
+	}
 	if(pm->ps->weaponDelay == GetAmmoTableData(WP_KNIFE)->fireDelayTime) {
 		PM_StartWeaponAnim(WEAP_ATTACK_LASTSHOT);
 		BG_AnimScriptEvent(pm->ps, pm->character->animModelInfo,
@@ -3305,11 +3301,11 @@ static qboolean PM_NitmodThrowKnife(void) {
 	if(pm->ps->weaponDelay > 0) return qtrue;
 	pm->ps->weaponDelay = 0;
 	if(pm->ps->ammoclip[ammo] <= 0) return qtrue;
-	pm->ps->ammoclip[ammo]--;
+	PM_WeaponUseAmmo(WP_KNIFE, 1);
 	PM_AddEvent(EV_NITMOD_THROW_KNIFE);
 	pm->ps->lastFireTime = pm->cmd.serverTime;
-	pm->ps->weaponTime = NITMOD_AddWeaponTime32(pm->ps->weaponTime,
-		GetAmmoTableData(WP_KNIFE)->nextShotTime);
+	/* Original alternate knife fire has a fixed 750 ms recovery. */
+	pm->ps->weaponTime = NITMOD_AddWeaponTime32(pm->ps->weaponTime, 750);
 	pm->ps->weaponstate = WEAPON_DROPPING;
 	pm->ps->nextWeapon = pm->cmd.weapon;
 	pm->ps->holdable[1] = 0;
@@ -3384,7 +3380,7 @@ static void PM_Weapon( void ) {
 		case 1:
 //			PM_CoolWeapons(); // Gordon: Arnout says this is how it's wanted ( bleugh ) no cooldown on weaps while using mg42, but need to update heat on mg42 itself
 			if( pm->ps->weapHeat[WP_DUMMY_MG42] ) {
-				pm->ps->weapHeat[WP_DUMMY_MG42] -= (300.f * pml.frametime);
+				pm->ps->weapHeat[WP_DUMMY_MG42] -= (300.0 * pml.frametime);
 
 				if( pm->ps->weapHeat[WP_DUMMY_MG42] < 0 )
 					pm->ps->weapHeat[WP_DUMMY_MG42] = 0;
@@ -3406,19 +3402,11 @@ static void PM_Weapon( void ) {
 			}
 
 			if( pm->cmd.buttons & BUTTON_ATTACK ) {
-				if(PM_IsSinglePlayerGame()) {
-					pm->ps->weapHeat[WP_DUMMY_MG42] += MG42_RATE_OF_FIRE_SP;
-				} else {
-					pm->ps->weapHeat[WP_DUMMY_MG42] += MG42_RATE_OF_FIRE_MP;
-				}
+				pm->ps->weapHeat[WP_DUMMY_MG42] += MG42_RATE_OF_FIRE_MP;
 
 				PM_AddEvent( EV_FIRE_WEAPON_MG42 );
 
-				if(PM_IsSinglePlayerGame()) {
-					pm->ps->weaponTime += MG42_RATE_OF_FIRE_SP;
-				} else {
-					pm->ps->weaponTime += MG42_RATE_OF_FIRE_MP;
-				}
+				pm->ps->weaponTime += MG42_RATE_OF_FIRE_MP;
 
 				BG_AnimScriptEvent( pm->ps, pm->character->animModelInfo, ANIM_ET_FIREWEAPON, qfalse, qtrue );
 				pm->ps->viewlocked = 2;		// this enable screen jitter when firing
@@ -3431,25 +3419,12 @@ static void PM_Weapon( void ) {
 			}
 			return;
 		case 2:
+			/* Original Nitmod only advances the timer in the AAGUN state. */
 			if( pm->ps->weaponTime > 0 ) {
 				pm->ps->weaponTime -= pml.msec;
-				if (pm->ps->weaponTime <= 0) {
-					if ( !(pm->cmd.buttons & BUTTON_ATTACK) ) {
-						pm->ps->weaponTime = 0;
-						return;
-					}
-				} else {
-					return;
+				if( pm->ps->weaponTime <= 0 && !(pm->cmd.buttons & BUTTON_ATTACK) ) {
+					pm->ps->weaponTime = 0;
 				}
-			}
-
-			if( pm->cmd.buttons & BUTTON_ATTACK ) {
-				PM_AddEvent( EV_FIRE_WEAPON_AAGUN );
-
-				pm->ps->weaponTime += AAGUN_RATE_OF_FIRE;
-
-				BG_AnimScriptEvent( pm->ps, pm->character->animModelInfo, ANIM_ET_FIREWEAPON, qfalse, qtrue );
-//				pm->ps->viewlocked = 2;		// this enable screen jitter when firing		
 			}
 			return;
 	}
@@ -3457,7 +3432,7 @@ static void PM_Weapon( void ) {
 	if( pm->ps->eFlags & EF_MOUNTEDTANK ) {
 //		PM_CoolWeapons(); // Gordon: Arnout says this is how it's wanted ( bleugh ) no cooldown on weaps while using mg42, but need to update heat on mg42 itself
 		if( pm->ps->weapHeat[WP_DUMMY_MG42] ) {
-			pm->ps->weapHeat[WP_DUMMY_MG42] -= (300.f * pml.frametime);
+			pm->ps->weapHeat[WP_DUMMY_MG42] -= (300.0 * pml.frametime);
 
 			if( pm->ps->weapHeat[WP_DUMMY_MG42] < 0 )
 				pm->ps->weapHeat[WP_DUMMY_MG42] = 0;
@@ -3596,9 +3571,12 @@ static void PM_Weapon( void ) {
 		}
 	}
 
+	/* Original clears the held-throw condition before processing the fuse. */
+	BG_ClearConditionBitFlag( pm->ps->clientNum, ANIM_COND_HOLDING, 0 );
 	delayedFire = qfalse;
 
-	if(pm->ps->weapon == WP_GRENADE_LAUNCHER || pm->ps->weapon == WP_GRENADE_PINEAPPLE || pm->ps->weapon == WP_DYNAMITE || pm->ps->weapon == WP_SMOKE_BOMB) {
+	/* Original timed-throw table also includes bomb and poison bomb. */
+	if(pm->ps->weapon == WP_GRENADE_LAUNCHER || pm->ps->weapon == WP_GRENADE_PINEAPPLE || pm->ps->weapon == WP_DYNAMITE || pm->ps->weapon == WP_SMOKE_BOMB || pm->ps->weapon == WP_BOMB || pm->ps->weapon == WP_POISON_BOMB) {
 		if( pm->ps->grenadeTimeLeft > 0 ) {
 			qboolean forcethrow = qfalse;
 
@@ -3619,8 +3597,14 @@ static void PM_Weapon( void ) {
 				}
 			}
 
+			if( pm->ps->holdable[1] ) {
+				pm->cmd.buttons &= ~BUTTON_ATTACK;
+				pm->cmd.wbuttons &= ~WBUTTON_ATTACK2;
+			}
+
 			if( !(pm->cmd.buttons & BUTTON_ATTACK) || forcethrow || pm->ps->eFlags & EF_PRONE_MOVING ) {
 				if( pm->ps->weaponDelay == GetAmmoTableData(pm->ps->weapon)->fireDelayTime || forcethrow) {
+					pm->ps->holdable[1] = 1;
 					// released fire button.  Fire!!!
 					if( pm->ps->eFlags & EF_PRONE ) {
 						if( akimboFire ) {
@@ -3637,6 +3621,9 @@ static void PM_Weapon( void ) {
 					}
 				}
 			} else {
+				if( pm->ps->weapon != WP_DYNAMITE ) {
+					BG_SetConditionBitFlag( pm->ps->clientNum, ANIM_COND_HOLDING, 0 );
+				}
 				return;
 			}
 		}
@@ -3916,12 +3903,13 @@ static void PM_Weapon( void ) {
 	// player is zooming - no fire
 	// JPW NERVE in MP, LT needs to zoom to call artillery
 	if(pm->ps->eFlags & EF_ZOOMING) {
-#ifdef GAMEDLL
 		if(pm->ps->stats[STAT_PLAYER_CLASS] == PC_FIELDOPS) {
+			/* Both original modules advance the timer; only the server fires. */
 			pm->ps->weaponTime += 500;
+#ifdef GAMEDLL
 			PM_AddEvent( EV_FIRE_WEAPON );
-		}
 #endif
+		}
 		return;
 	}
 
@@ -4055,6 +4043,7 @@ static void PM_Weapon( void ) {
 		case WP_SMOKE_BOMB:
 			if(!delayedFire) {
 				if(PM_WeaponAmmoAvailable(pm->ps->weapon)) {
+					pm->ps->holdable[1] = 0;
 					if(pm->ps->weapon == WP_DYNAMITE) {
 						pm->ps->grenadeTimeLeft = 50;
 					} else {
@@ -4290,9 +4279,15 @@ static void PM_Weapon( void ) {
 	}
 
 	// JPW NERVE -- in multiplayer, pfaust fires once then switches to pistol since it's useless for a while
-	if ( (pm->ps->weapon == WP_PANZERFAUST) || (pm->ps->weapon == WP_SMOKE_MARKER ) || (pm->ps->weapon == WP_DYNAMITE) || (pm->ps->weapon == WP_BOMB) || (pm->ps->weapon == WP_SMOKE_BOMB) || (pm->ps->weapon == WP_POISON_BOMB) || (pm->ps->weapon == WP_LANDMINE) || (pm->ps->weapon == WP_POISON_MINE) || (pm->ps->weapon == WP_SATCHEL))
+	if ( (pm->ps->weapon == WP_PANZERFAUST) || (pm->ps->weapon == WP_SMOKE_MARKER ) || (pm->ps->weapon == WP_DYNAMITE) || (pm->ps->weapon == WP_BOMB) || (pm->ps->weapon == WP_SMOKE_BOMB) || (pm->ps->weapon == WP_POISON_BOMB) || (pm->ps->weapon == WP_LANDMINE) || (pm->ps->weapon == WP_POISON_MINE) || (pm->ps->weapon == WP_TRIPMINE) || (pm->ps->weapon == WP_SATCHEL))
 		PM_AddEvent( EV_NOAMMO );
 	// jpw
+
+	/* Original rifle-grenade feedback checks reserve after consumption. */
+	if( (pm->ps->weapon == WP_GPG40 || pm->ps->weapon == WP_M7) &&
+		!pm->ps->ammo[BG_FindAmmoForWeapon(pm->ps->weapon)] ) {
+		PM_AddEvent(EV_NOAMMO);
+	}
 
 	if( pm->ps->weapon == WP_SATCHEL ) {
 		pm->ps->ammoclip[WP_SATCHEL_DET] = 1;
@@ -4470,13 +4465,13 @@ static void PM_Weapon( void ) {
 	// JPW: engineers disarm bomb "on the fly" (high sample rate) but medics & LTs throw out health pack/smoke grenades slow
 	// NERVE - SMF
 	case WP_PLIERS:
-		addTime = 50;
+		addTime = GetAmmoTableData(pm->ps->weapon)->nextShotTime;
 		break;
 	case WP_MEDKIT:
-		addTime = 1000;
+		addTime = GetAmmoTableData(pm->ps->weapon)->nextShotTime;
 		break;
 	case WP_SMOKE_MARKER:
-		addTime = 1000;
+		addTime = GetAmmoTableData(pm->ps->weapon)->nextShotTime;
 		break;
 	// -NERVE - SMF
 	default:
@@ -4598,6 +4593,16 @@ recoil_complete:
 	pm->ps->aimSpreadScale = (int)(pm->ps->aimSpreadScaleFloat);
 
 	pm->ps->weaponTime += addTime;
+
+	/* Original clears the release latch after these completed throws. */
+	if( pm->ps->weapon == WP_GRENADE_LAUNCHER ||
+		pm->ps->weapon == WP_GRENADE_PINEAPPLE ||
+		pm->ps->weapon == WP_SMOKE_BOMB ||
+		pm->ps->weapon == WP_BOMB ||
+		pm->ps->weapon == WP_POISON_BOMB ) {
+		pm->ps->weaponstate = WEAPON_DROPPING;
+		pm->ps->holdable[1] = 0;
+	}
 
 	PM_SwitchIfEmpty();
 }
@@ -5375,15 +5380,9 @@ void PM_Sprint( void ) {
 		} else {
 			int rechargebase = 500;
 
-#ifdef GAMEDLL // Gordon: FIXME: predict leadership clientside
-			if( !pm->nitmodReloadEnabled && pm->leadership ) {
-				rechargebase = 1000;
-			} else 
-#endif // GAMEDLL
-			{
-				if( PM_HasWeaponReward(SK_BATTLE_SENSE, 4u, 2) )
-					rechargebase = 800;
-			}
+            /* Original PM_Sprint uses the same recharge rule on both sides. */
+            if( PM_HasWeaponReward(SK_BATTLE_SENSE, 4u, 2) )
+                rechargebase = 800;
 
 			pm->pmext->sprintTime += rechargebase*pml.frametime;		// JPW NERVE adjusted for framerate independence
 			if (pm->pmext->sprintTime > 5000)
@@ -5418,33 +5417,56 @@ real death continues to use EF_DEAD and STAT_HEALTH.
 */
 static void PM_NITMOD_TogglePlayDead( void ) {
 	trace_t trace;
-	vec3_t maxs;
 
 	if( pm->ps->eFlags & EF_SPARE0 ) {
-		/* Leave enough room for a crouched player.  Starting crouched mirrors
-		 * Nitmod's recovery path and prevents standing through a low ceiling. */
-		VectorCopy( pm->ps->maxs, maxs );
-		maxs[2] = pm->ps->crouchMaxZ;
-		pm->trace( &trace, pm->ps->origin, pm->ps->mins, maxs,
-			pm->ps->origin, pm->ps->clientNum, pm->tracemask );
-		if( trace.allsolid || trace.startsolid ) {
+		if( NITMOD_AddWeaponTime32(pm->cmd.serverTime, pm->pmext->nitmodPlayDeadTime) <= 1749 ) {
+			pm->ps->pm_type = PM_DEAD;
+			return;
+		}
+		VectorCopy( pm->ps->mins, pm->mins );
+		VectorCopy( pm->ps->maxs, pm->maxs );
+		pm->maxs[2] = pm->ps->crouchMaxZ;
+		pm->ps->eFlags &= ~EF_SPARE0;
+		PM_TraceAllLegs( &trace, NULL, pm->ps->origin, pm->ps->origin );
+		pm->ps->eFlags |= EF_SPARE0;
+		if( trace.allsolid ) {
 			pm->ps->pm_type = PM_DEAD;
 			return;
 		}
 
-		pm->ps->eFlags &= ~EF_SPARE0;
-		pm->ps->pm_flags |= PMF_DUCKED;
+		pm->ps->pm_flags |= PMF_DUCKED | PMF_TIME_LOCKPLAYER;
+		pm->ps->maxs[2] = pm->maxs[2] = pm->ps->standViewHeight;
+		pm->ps->eFlags &= ~(EF_SPARE0 | EF_DEAD);
+		pm->ps->pm_time = BG_AnimScriptEvent( pm->ps, pm->character->animModelInfo,
+			ANIM_ET_RAISE, qfalse, qtrue );
+		pm->pmext->nitmodPlayDeadTime = pm->cmd.serverTime;
 		pm->ps->pm_type = PM_NORMAL;
-		pm->ps->viewheight = pm->ps->crouchViewHeight;
+		pm->ps->viewangles[PITCH] += SHORT2ANGLE(pm->ps->stats[STAT_DEAD_YAW]);
 		return;
 	}
 
+	/* Original entry 0x3096d..0x30b15. Rejected requests remain normal. */
+	pm->ps->pm_type = PM_NORMAL;
+	if( (pm->ps->pm_flags & PMF_LADDER) || pm->ps->persistant[PERS_HWEAPON_USE] ||
+		(pm->ps->eFlags & EF_MOUNTEDTANK) || pm->waterlevel > 1 ||
+		NITMOD_AddWeaponTime32(pm->cmd.serverTime,
+			NITMOD_AddWeaponTime32(~pm->pmext->nitmodPlayDeadTime, 1)) <= 1749 ) return;
+	VectorCopy( pm->ps->mins, pm->mins );
+	VectorCopy( pm->ps->maxs, pm->maxs );
+	pm->maxs[2] = 0;
+	pm->ps->eFlags |= EF_SPARE0;
+	PM_TraceAllLegs( &trace, NULL, pm->ps->origin, pm->ps->origin );
+	pm->ps->eFlags &= ~EF_SPARE0;
+	if( trace.startsolid || trace.allsolid ) return;
 	pm->ps->eFlags |= EF_SPARE0;
 	pm->ps->pm_type = PM_DEAD;
-	pm->ps->viewheight = pm->ps->deadViewHeight;
-	VectorClear( pm->ps->velocity );
-	BG_AnimScriptEvent( pm->ps, pm->character->animModelInfo,
+	pm->ps->maxs[2] = pm->maxs[2] = pm->ps->crouchMaxZ;
+	BG_UpdateConditionValue( pm->ps->clientNum, ANIM_COND_ENEMY_WEAPON, 0, qtrue );
+	BG_UpdateConditionValue( pm->ps->clientNum, ANIM_COND_ENEMY_POSITION, 0, qtrue );
+	pm->ps->pm_time = BG_AnimScriptEvent( pm->ps, pm->character->animModelInfo,
 		ANIM_ET_DEATH, qfalse, qtrue );
+	pm->pmext->nitmodPlayDeadTime = NITMOD_AddWeaponTime32(~pm->cmd.serverTime, 1);
+	pm->ps->delta_angles[YAW] = NITMOD_AddWeaponTime32(~pm->cmd.angles[YAW], 1);
 }
 
 /* Original PmoveSingle 0x305ac..0x30710: alternate selection is an
@@ -5609,7 +5631,8 @@ void PmoveSingle (pmove_t *pmove) {
 		  (pm->ps->pm_type != PM_INTERMISSION) ) {
 
 		// check for ammo
-		if(PM_WeaponAmmoAvailable(pm->ps->weapon)) {
+		/* Original PM_CheckAttack reads the selected clip even with noWeapClips. */
+        if(pm->ps->ammoclip[PM_WeaponFiringClip(pm->ps->weapon)]) {
 			// check if zooming
 			// DHM - Nerve :: Let's use the same flag we just checked above, Ok?
 			if(!(pm->ps->eFlags & EF_ZOOMING)) {

@@ -1,6 +1,7 @@
 #ifndef G_NITMOD_GLOBAL_STATS_H
 #define G_NITMOD_GLOBAL_STATS_H
 void G_NITMOD_GlobalStatsInit(void);
+int G_NITMOD_GlobalStatsKillDeath(int client,int *kills,int *deaths);
 void G_NITMOD_GlobalStatsShutdown(void);
 void G_NITMOD_GlobalStatsReset(int client);
 void G_NITMOD_GlobalStatsRequest(int client,const char *guid);

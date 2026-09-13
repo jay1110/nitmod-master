@@ -6,16 +6,17 @@ static int searchReplies, searchLastTime;
  * One row is reserved for progress, leaving fourteen server matches. */
 #define NITMOD_FINDPLAYER_ROWS 15
 
-static qboolean UI_StatusHasPlayer(const serverStatusInfo_t *info, const char *needle) {
-    int row;
+static int UI_StatusPlayerMatches(const serverStatusInfo_t *info, const char *needle) {
+    int row, matches=0;
     for(row=0; row<info->numLines; ++row) {
         char name[MAX_NAME_LENGTH+2], *p;
-        /* Only numbered player rows, never the score/ping/name header. */
-        if(info->lines[row][0][0] < '0' || info->lines[row][0][0] > '9' || !info->lines[row][2][0]) continue;
+        /* Original 0x19ea3 checks only the populated ping column; this
+         * intentionally includes the status header when its name matches. */
+        if(!info->lines[row][2] || !info->lines[row][2][0]) continue;
         Q_strncpyz(name,info->lines[row][3],sizeof(name)); Q_CleanStr(name);
-        for(p=name; *p; ++p) if(!Q_stricmpn(p,needle,strlen(needle))) return qtrue;
+        for(p=name; *p; ++p) if(!Q_stricmpn(p,needle,strlen(needle))) { ++matches; break; }
     }
-    return qfalse;
+    return matches;
 }
 
 static void UI_SearchProgress(qboolean done) {
@@ -31,7 +32,7 @@ static void UI_SearchProgress(qboolean done) {
 void UI_BuildFindPlayerList(qboolean force) {
     serverStatusInfo_t info;
     char serverInfo[MAX_STRING_CHARS];
-    int now = uiInfo.uiDC.realTime, i, j, total, active = 0;
+    int now = uiInfo.uiDC.realTime, i, total, active = 0;
     int timeout = ui_serverStatusTimeOut.integer;
     if(timeout < 0) timeout = 0;
     if(force) {
@@ -64,23 +65,26 @@ void UI_BuildFindPlayerList(qboolean force) {
         if(slot->valid) {
             if(UI_QueryServerStatus(slot->adrstr,&info)) {
                 ++searchReplies;
-                if(UI_StatusHasPlayer(&info,uiInfo.findPlayerName)) {
-                    int count = uiInfo.numFoundPlayerServers-1;
-                    for(j=0;j<count;++j) if(!Q_stricmp(uiInfo.foundPlayerServerAddresses[j],slot->adrstr)) break;
-                    if(j==count && count < NITMOD_FINDPLAYER_ROWS-1) {
+                {
+                    int matches=UI_StatusPlayerMatches(&info,uiInfo.findPlayerName);
+                    /* Original 0x1a128-0x1a1c6 appends once per matching
+                     * player row, including repeated server addresses. */
+                    while(matches > 0 && uiInfo.numFoundPlayerServers < NITMOD_FINDPLAYER_ROWS) {
+                        int count=uiInfo.numFoundPlayerServers-1;
+                        --matches;
                         Q_strncpyz(uiInfo.foundPlayerServerAddresses[count],slot->adrstr,MAX_ADDRESSLENGTH);
                         Q_strncpyz(uiInfo.foundPlayerServerNames[count],slot->name,MAX_ADDRESSLENGTH);
                         ++uiInfo.numFoundPlayerServers;
                     }
+                    /* Original 0x1a133-0x1a151 stops assigning new servers
+                     * only when another match exceeds capacity. Existing
+                     * requests still finish or expire normally. */
+                    if(matches > 0) uiInfo.pendingServerStatus.num=total;
                 }
                 UI_QueryServerStatus(slot->adrstr,NULL); slot->valid=qfalse;
             } else if((double)now-slot->startTime > timeout) {
                 UI_QueryServerStatus(slot->adrstr,NULL); slot->valid=qfalse;
             }
-        }
-        if(uiInfo.numFoundPlayerServers >= NITMOD_FINDPLAYER_ROWS) {
-            if(slot->valid) UI_QueryServerStatus(slot->adrstr,NULL);
-            slot->valid=qfalse; continue;
         }
         if(!slot->valid && uiInfo.pendingServerStatus.num >= 0 && uiInfo.pendingServerStatus.num < total) {
             int server = uiInfo.serverStatus.displayServers[uiInfo.pendingServerStatus.num++];
@@ -90,13 +94,6 @@ void UI_BuildFindPlayerList(qboolean force) {
             slot->startTime=now; slot->valid=slot->adrstr[0] ? qtrue : qfalse;
         }
         if(slot->valid) active=1;
-    }
-    if(uiInfo.numFoundPlayerServers >= NITMOD_FINDPLAYER_ROWS) {
-        for(i=0;i<MAX_SERVERSTATUSREQUESTS;++i) if(uiInfo.pendingServerStatus.server[i].valid) {
-            UI_QueryServerStatus(uiInfo.pendingServerStatus.server[i].adrstr,NULL);
-            uiInfo.pendingServerStatus.server[i].valid=qfalse;
-        }
-        active=0; uiInfo.pendingServerStatus.num=total;
     }
     if(uiInfo.pendingServerStatus.num < total) active=1;
     UI_SearchProgress(!active);

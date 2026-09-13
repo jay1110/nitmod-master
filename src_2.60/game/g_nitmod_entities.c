@@ -1,4 +1,5 @@
 #include "g_local.h"
+#include "nitmod_support_time.h"
 #include "g_nitmod_entities.h"
 #include "g_nitmod_legacy_cvars.h"
 #include "nitmod_entity_array.h"
@@ -8,6 +9,7 @@
 static nitmodEntityArray_t satchels;
 static nitmodEntityArray_t landmines;
 static nitmodEntityArray_t airstrikes;
+static nitmodEntityArray_t mg42s;
 
 static void G_NITMOD_ArtilleryHintThink( gentity_t *hint ) {
 	int i;
@@ -16,18 +18,18 @@ static void G_NITMOD_ArtilleryHintThink( gentity_t *hint ) {
 		G_FreeEntity( hint );
 		return;
 	}
-	for( i = MAX_CLIENTS; i < level.num_entities; ++i ) {
+	for( i = 0; i < level.num_entities; ++i ) {
 		gentity_t *shell = &g_entities[i];
 		if( shell->inuse && shell->s.eType == ET_MISSILE && shell->s.weapon == WP_ARTY &&
 			shell->parent == hint->parent && shell->s.pos.trTime == hint->s.pos.trTime ) {
-			hint->nextthink = level.time + 1000;
+			hint->nextthink = NITMOD_SupportSignedTime((uint32_t)level.time + UINT32_C(1000));
 			return;
 		}
 	}
 	/* Preserve the original one-second terminal state before unlink/free so
 	 * every snapshot observes a clean end to the marker's lifetime. */
 	hint->count = 1;
-	hint->nextthink = level.time + 1000;
+	hint->nextthink = NITMOD_SupportSignedTime((uint32_t)level.time + UINT32_C(1000));
 }
 
 void G_NITMOD_SpawnArtilleryHint( gentity_t *shell ) {
@@ -47,9 +49,12 @@ void G_NITMOD_SpawnArtilleryHint( gentity_t *shell ) {
 	VectorCopy( shell->s.pos.trBase, hint->s.pos.trBase );
 	VectorCopy( shell->s.pos.trBase, hint->r.currentOrigin );
 	hint->parent = shell->parent;
+	hint->r.ownerNum = shell->parent->s.number;
+	hint->s.clientNum = shell->parent->s.number;
+	hint->clipmask = MASK_MISSILESHOT;
 	hint->r.svFlags = SVF_BROADCAST;
 	hint->think = G_NITMOD_ArtilleryHintThink;
-	hint->nextthink = level.time + 1;
+	hint->nextthink = NITMOD_SupportSignedTime((uint32_t)level.time + UINT32_C(1));
 	trap_LinkEntity( hint );
 }
 
@@ -126,9 +131,25 @@ void G_NITMOD_FadeAirstrikes( gentity_t *owner, nitmodEntityRelease_t release ) 
 }
 
 void G_NITMOD_ResetEntityLists( void ) {
+	NITMOD_InitEntityArray( &mg42s );
 	NITMOD_InitEntityArray( &satchels );
 	NITMOD_InitEntityArray( &landmines );
 	NITMOD_InitEntityArray( &airstrikes );
+}
+
+void G_NITMOD_RegisterMG42( gentity_t *entity ) {
+	nitmodEntityArrayResult_t result = NITMOD_AddEntityToArray( &mg42s, entity );
+	if( result == NITMOD_ENTITY_ARRAY_FULL ) G_Error( "Entity Array Overflow" );
+	else if( result == NITMOD_ENTITY_ARRAY_INVALID ) G_Error( "Invalid MG42 entity array" );
+}
+
+void G_NITMOD_UnregisterMG42( gentity_t *entity ) {
+	if( NITMOD_RemoveEntityFromArray( &mg42s, entity ) == NITMOD_ENTITY_ARRAY_INVALID )
+		G_Error( "Invalid MG42 entity array" );
+}
+
+gentity_t *G_NITMOD_MG42At( int index ) {
+	return index >= 0 && index < mg42s.count ? mg42s.entities[index] : NULL;
 }
 
 void G_NITMOD_RegisterLandmine( gentity_t *entity ) {
@@ -149,6 +170,10 @@ void G_NITMOD_UnregisterLandmine( gentity_t *entity ) {
 	if( NITMOD_RemoveEntityFromArray( &landmines, entity ) == NITMOD_ENTITY_ARRAY_INVALID ) {
 		G_Error( "Invalid landmine entity array" );
 	}
+}
+
+gentity_t *G_NITMOD_LandmineAt( int index ) {
+	return index >= 0 && index < landmines.count ? landmines.entities[index] : NULL;
 }
 
 int G_NITMOD_CountTeamLandmines( int team, int maximum ) {

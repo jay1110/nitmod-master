@@ -191,24 +191,6 @@ qboolean UI_ConsoleCommand( int realTime ) {
 	}
 
 
-	if ( Q_stricmp (cmd, "ui_cdkey") == 0 ) {
-		//UI_CDKeyMenu_f();
-		return qtrue;
-	}
-
-	if( Q_stricmp( cmd, "iamacheater" ) == 0 ) {
-		int i;
-
-		// unlock all available levels and campaigns for SP
-		for( i = 0; i < uiInfo.campaignCount; i++ ) {
-			if( uiInfo.campaignList[i].typeBits & (1<<GT_SINGLE_PLAYER) ) {
-				uiInfo.campaignList[i].unlocked = qtrue;
-				uiInfo.campaignList[i].progress = uiInfo.campaignList[i].mapCount;
-			}
-		}
-		return qtrue;
-	}
-
 	trap_GetClientState( &cstate );
 	if( cstate.connState == CA_DISCONNECTED ) {
 		if( Q_stricmp( cmd, "campaign" ) == 0 ) {
@@ -249,10 +231,18 @@ void UI_AdjustFrom640( float *x, float *y, float *w, float *h ) {
 	*h *= uiInfo.uiDC.scale;
 #endif
 
-	*x *= UI_NitmodXScale(&uiInfo.uiDC);
+	*x *= uiInfo.uiDC.xscale;
 	*y *= uiInfo.uiDC.yscale;
-	*w *= UI_NitmodXScale(&uiInfo.uiDC);
+	*w *= uiInfo.uiDC.xscale;
 	*h *= uiInfo.uiDC.yscale;
+	/* Original rounds physical coordinates before its wide correction. */
+	{
+		float width = UI_NitmodWideWidth(&uiInfo.uiDC);
+		if(width > 640.f) {
+			*x = (float)((double)*x * (640.0 / width));
+			*w = (float)((double)*w * (640.0 / width));
+		}
+	}
 
 }
 

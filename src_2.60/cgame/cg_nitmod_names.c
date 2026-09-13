@@ -24,9 +24,8 @@ static floatingName_t floatingNames[16];
 static int floatingCount;
 enum { DYNAMITE_NAME_BASE = MAX_CLIENTS + NITMOD_MAX_LOCATIONS,
        WORLD_NAME_KEYS = DYNAMITE_NAME_BASE + MAX_GENTITIES };
-static nitmodNameFade_t nameFades[WORLD_NAME_KEYS];
-static char fadeNames[WORLD_NAME_KEYS][96];
-static int dynamiteStarts[MAX_GENTITIES];
+/* Original stores fade history in the 16 display slots, not by entity. */
+static nitmodNameFade_t nameFades[16];
 
 qboolean CG_NitmodProjectName(const vec3_t origin, float *x, float *y) {
     vec3_t delta, forward, right, up;
@@ -51,17 +50,17 @@ static qboolean CG_NitmodQueueWorldName(int key, const char *text, const vec3_t 
     floatingName_t *entry;
     float x, y, scale;
     if(key < 0 || key >= WORLD_NAME_KEYS || !text || !*text ||
-       floatingCount >= 16 || !CG_NitmodProjectName(origin, &x, &y)) return qfalse;
+       floatingCount >= 16) return qfalse;
+    if(!CG_NitmodProjectName(origin, &x, &y)) {
+        memset(&nameFades[floatingCount], 0, sizeof(nameFades[0]));
+        return qfalse;
+    }
     scale = CG_NitmodFloatNameScale(Distance(origin, cg.refdef_current->vieworg));
     entry = &floatingNames[floatingCount++];
     Q_strncpyz(entry->text, text, sizeof(entry->text));
     entry->x = x - CG_Text_Width_Ext(entry->text, scale, 0, &cgs.media.limboFont1) * .5f;
     entry->y = y - CG_Text_Height_Ext(entry->text, scale, 0, &cgs.media.limboFont1) * .5f;
     entry->scale = scale; entry->client = key; VectorCopy(origin, entry->origin);
-    if(key < DYNAMITE_NAME_BASE && strcmp(fadeNames[key], entry->text)) {
-        memset(&nameFades[key], 0, sizeof(nameFades[key]));
-        Q_strncpyz(fadeNames[key], entry->text, sizeof(fadeNames[key]));
-    }
     return qtrue;
 }
 
@@ -75,28 +74,32 @@ void CG_NitmodNamesBeginFrame(void) { nameCount = floatingCount = 0; }
 
 /* Original CG_DrawOnScreenNames uses last-visible and last-hidden timestamps,
  * and prevents reversals from jumping past the current alpha. */
-float CG_NitmodNameFade(nitmodNameFade_t *fade, qboolean visible, int now) {
+float CG_NitmodNameFade(nitmodNameFade_t *fade, qboolean visible, int now, float alpha) {
+    unsigned int ticks;
     double elapsed;
-    float alpha;
     if(!fade) return 0;
-    if(!fade->initialized || now < fade->lastTime) {
-        memset(fade, 0, sizeof(*fade));
-        fade->visibleTime = fade->hiddenTime = now;
-        fade->initialized = qtrue;
-    }
-    fade->lastTime = now;
     if(visible) {
         fade->visibleTime = now;
-        elapsed = (double)now - fade->hiddenTime;
-        alpha = elapsed >= 250 ? 1 : (float)(elapsed / 250);
-        if(alpha > fade->alpha) fade->alpha = alpha;
+        ticks = (unsigned int)now - (unsigned int)fade->hiddenTime;
     } else {
         fade->hiddenTime = now;
-        elapsed = (double)now - fade->visibleTime;
-        alpha = elapsed >= 250 ? 0 : 1 - (float)(elapsed / 250);
-        if(alpha < fade->alpha) fade->alpha = alpha;
+        ticks = (unsigned int)now - (unsigned int)fade->visibleTime;
     }
-    return fade->alpha;
+    /* Original SUB wraps at 32 bits. Zero elapsed retains the preceding
+     * display slot's alpha (one for the first slot in a frame). */
+    elapsed = ticks <= 2147483647u ? (double)ticks : (double)ticks - 4294967296.0;
+    if(ticks) {
+        if(visible) {
+            alpha = elapsed > 250 ? 1 : (float)(elapsed / 250);
+            if(alpha < fade->alpha) alpha = fade->alpha;
+        } else {
+            alpha = elapsed > 250 ? 0 : (float)(1 - elapsed / 250);
+            if(alpha > fade->alpha) alpha = fade->alpha;
+        }
+    }
+    if(alpha > 1) alpha = 1;
+    fade->alpha = alpha;
+    return alpha;
 }
 
 float CG_NitmodFloatNameScale(float distance) {
@@ -138,10 +141,6 @@ qboolean CG_NitmodQueueDynamiteName(const centity_t *cent) {
     if(es->clientNum == cg.snap->ps.clientNum ? (cg.snap->ps.pm_flags & PMF_DUCKED) : es->animMovetype)
         origin[2] -= 18;
     key = DYNAMITE_NAME_BASE + es->number;
-    if(dynamiteStarts[es->number] != es->effect1Time) {
-        memset(&nameFades[key], 0, sizeof(nameFades[key]));
-        dynamiteStarts[es->number] = es->effect1Time;
-    }
     return CG_NitmodQueueWorldName(key, text, origin);
 }
 
@@ -177,7 +176,7 @@ void CG_NitmodDrawSpectatorNames(void) {
             if(!CG_NitmodDynamiteNamesEnabled()) continue;
         } else if(entry->client < MAX_CLIENTS ? !CG_NitmodSpectatorNamesEnabled() : !(cg_locations.integer & 512)) continue;
         CG_Trace(&trace, cg.refdef_current->vieworg, mins, maxs, entry->origin, -1, CONTENTS_SOLID);
-        color[3] = CG_NitmodNameFade(&nameFades[entry->client], trace.fraction >= 1, cg.time);
+        color[3] = CG_NitmodNameFade(&nameFades[i], trace.fraction >= 1, cg.time, color[3]);
         if(color[3] > 0) CG_Text_Paint_Ext(entry->x, entry->y, entry->scale, entry->scale,
             color, entry->text, 0, 0, 7, &cgs.media.limboFont1);
     }
@@ -187,8 +186,6 @@ void CG_NitmodDrawSpectatorNames(void) {
 void CG_NitmodNamesReset(void) {
     CG_NitmodNamesBeginFrame();
     memset(nameFades, 0, sizeof(nameFades));
-    memset(fadeNames, 0, sizeof(fadeNames));
-    memset(dynamiteStarts, 0, sizeof(dynamiteStarts));
 }
 
 qboolean CG_NitmodQueueWoundedName(const centity_t *cent) {
@@ -225,8 +222,8 @@ qboolean CG_NitmodQueueWoundedName(const centity_t *cent) {
     VectorSubtract(position, cg.refdef_current->vieworg, delta);
     depth = DotProduct(delta, forward);
     if(!(depth >= .01f)) return qfalse;
-    width = CG_Text_Width_Ext(ci->name, .18f, 0, &cgs.media.limboFont1);
-    height = CG_Text_Height_Ext(ci->name, .18f, 0, &cgs.media.limboFont1);
+    width = CG_Text_Width_Ext(ci->name, .18f, 0, &cgs.media.limboFont2);
+    height = CG_Text_Height_Ext(ci->name, .18f, 0, &cgs.media.limboFont2);
     entry = &names[nameCount++];
     /* Original projection constants, not a replacement tan(FOV/2) formula. */
     entry->x = 320 + (96 / cg.refdef_current->fov_x) * (320 / depth) * DotProduct(delta, right) - width * .5f;
@@ -252,7 +249,7 @@ void CG_NitmodDrawWoundedNames(void) {
         CG_Trace(&trace, cg.refdef_current->vieworg, mins, maxs, names[i].traceOrigin, -1, CONTENTS_SOLID);
         if(trace.fraction >= 1)
             CG_Text_Paint_Ext(names[i].x, names[i].y, .18f, .18f, color, names[i].name,
-                0, 0, 7, &cgs.media.limboFont1);
+                0, 0, 7, &cgs.media.limboFont2);
     }
     CG_NitmodHudAnchor(previous);
 }

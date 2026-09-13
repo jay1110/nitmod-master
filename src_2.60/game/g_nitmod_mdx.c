@@ -1449,7 +1449,7 @@ qboolean G_NITMOD_MDXLegsPosition(gentity_t *ent,vec3_t origin) {
  return qtrue;
 }
 static gentity_t *MDXDebugEvent(const vec3_t origin,int event) {
- vec3_t position;gentity_t *e;VectorCopy(origin,position);e=G_TempEntity(position,EV_NITMOD_LUA_FIRST);e->s.event=NITMOD_LuaEventEncode(event);return e;
+ vec3_t position;gentity_t *e;VectorCopy(origin,position);e=G_NITMOD_TempEventOriginal(position,event);return e;
 }
 static void MDXDebugAxes(const vec3_t origin,vec3_t axis[3],const vec3_t size,int color) {
  gentity_t *e=MDXDebugEvent(origin,size?106:105);
@@ -1539,6 +1539,17 @@ void G_NITMOD_MDXStoreMarker(gentity_t *ent,int marker) {
  nitmodMdxMarker_t *m;if(!ent || !ent->client || ent-g_entities>=MAX_CLIENTS || marker<0 || marker>=MAX_CLIENT_MARKERS) return;
  m=&mdx_markers[ent-g_entities][marker];MDXCapture(ent,m);m->time=ent->client->clientMarkers[marker].time;
 }
+/* Original G_ResetMarkers 0x45768 clears only the saved mount flag. */
+void G_NITMOD_MDXInitializeMarker(gentity_t *ent,int marker) {
+ if(!ent || !ent->client || ent<g_entities || ent>=g_entities+MAX_CLIENTS || marker<0 || marker>=MAX_CLIENT_MARKERS) return;
+ G_NITMOD_MDXStoreMarker(ent,marker);
+ mdx_markers[ent-g_entities][marker].eFlags &= ~EF_MOUNTEDTANK;
+}
+/* Original G_ResetMarkers ends with entity+0x5a8 = 0 (0x45a43). */
+void G_NITMOD_MDXFinishMarkerReset(gentity_t *ent) {
+ if(!ent || ent<g_entities || ent>=g_entities+MAX_CLIENTS || !ent->client) return;
+ MDXState(ent)->lerpTime=0;
+}
 void G_NITMOD_MDXRewind(gentity_t *ent,int older,int newer,int time) {
  int n=ent-g_entities,i;nitmodMdxMarker_t *a,*b,*chosen;float frac;
  if(n<0 || n>=MAX_CLIENTS || !ent->client || older<0 || newer<0 || older>=MAX_CLIENT_MARKERS || newer>=MAX_CLIENT_MARKERS) return;
@@ -1549,6 +1560,13 @@ void G_NITMOD_MDXRewind(gentity_t *ent,int older,int newer,int time) {
  *MDXState(ent)=chosen->state;MDXState(ent)->lerpTime=chosen->time;
  for(i=0;i<3;i++) ent->client->ps.viewangles[i]=LerpAngle(a->viewangles[i],b->viewangles[i],frac);
  ent->client->ps.eFlags=chosen->eFlags;ent->client->ps.pm_flags=chosen->pmFlags;ent->client->ps.viewheight=chosen->viewheight;
+}
+/* Original G_Damage 0x6a0e9 and ReviveEntity 0xf280e also latch
+ * helmet loss in the antilag backup, so restoring a trace cannot undo it. */
+void G_NITMOD_MDXLoseHelmet(gentity_t *ent) {
+ int n=ent-g_entities;
+ if(n<0 || n>=MAX_CLIENTS || !ent->client) return;
+ mdx_backups[n].eFlags |= EF_HEADSHOT;
 }
 void G_NITMOD_MDXRestore(gentity_t *ent) {
  int n=ent-g_entities;nitmodMdxMarker_t *m;
@@ -1613,6 +1631,7 @@ int G_NITMOD_MDXTraceBullets(gentity_t *source,trace_t *trace,trace_t *water,
   vec3_t direction;VectorSubtract(end,start,direction);VectorNormalizeFast(direction);
   VectorMA(trace->endpos,-1,direction,trace->endpos);trace->entityNum=winner;
  }
+ source->nitmodLastTraceRegion=region;
  return region;
 }
 /* Scoped damage context avoids stale hit regions leaking to explosions or

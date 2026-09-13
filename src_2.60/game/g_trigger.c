@@ -1,4 +1,4 @@
-#include "g_local.h"
+#include "g_nitmod_etbot_interface.h" /* includes g_local.h once */
 #include "g_nitmod_config.h"
 #include "g_nitmod_legacy_cvars.h"
 
@@ -7,7 +7,8 @@ void InitTrigger( gentity_t *self) {
 	if (!VectorCompare (self->s.angles, vec3_origin))
 		G_SetMovedir (self->s.angles, self->movedir);
 
-	trap_SetBrushModel( self, self->model );
+	/* Original InitTrigger 0xe3bb7 permits triggers without a brush model. */
+	if(self->model) trap_SetBrushModel( self, self->model );
 
 	self->r.contents = CONTENTS_TRIGGER;		// replaces the -1 from trap_SetBrushModel
 	self->r.svFlags = SVF_NOCLIENT;
@@ -461,6 +462,47 @@ void SP_trigger_hurt( gentity_t *self ) {
 		
 }
 
+/* Nitmod's protection trigger removes the spawn shield without damaging the
+ * player. Its cooldown belongs to the trigger, including between clients. */
+static void removeprotection_touch( gentity_t *self, gentity_t *other, trace_t *trace ) {
+	if ( !other->client || self->timestamp > level.time ) {
+		return;
+	}
+	self->timestamp = level.time + ((self->spawnflags & 16) ? 1000 : 100);
+	other->client->ps.powerups[PW_INVULNERABLE] = 0;
+	if ( self->spawnflags & 32 ) {
+		self->touch = NULL;
+	}
+}
+
+static void removeprotection_think( gentity_t *self ) {
+	self->nextthink = level.time + 100;
+	if ( self->wait < (double)level.time ) {
+		G_FreeEntity( self );
+	}
+}
+
+static void removeprotection_use( gentity_t *self, gentity_t *other, gentity_t *activator ) {
+	self->touch = self->touch ? NULL : removeprotection_touch;
+	if ( self->delay ) {
+		self->nextthink = level.time + 50;
+		self->think = removeprotection_think;
+		self->wait = (float)((double)level.time + (double)self->delay * 1000.0);
+	}
+}
+
+void SP_trigger_removeProtection( gentity_t *self ) {
+	char *life;
+
+	InitTrigger( self );
+	self->use = removeprotection_use;
+	if ( !(self->spawnflags & 1) ) {
+		self->touch = removeprotection_touch;
+	}
+	G_SpawnString( "life", "0", &life );
+	self->delay = (float)strtod( life, NULL );
+}
+
 // START	xkan, 9/17/2002
 /*
 ==============================================================================
@@ -542,9 +584,11 @@ void heal_touch( gentity_t *self, gentity_t *other, trace_t *trace ) {
 		}
 
 		touchClients[i]->health += healvalue;
-		G_NITMOD_CurePoisonFromHealth(touchClients[i], NULL, qtrue);
 		// add the medicheal event (to get sound, etc.)
 		G_AddPredictableEvent( other, EV_ITEM_PICKUP, BG_FindItemForClassName("item_health_cabinet")-bg_itemlist );
+		/* Original heal_touch 0xe26e2 cures the touch initiator after its
+		 * pickup event, even when this iteration heals another client. */
+		G_NITMOD_CurePoisonFromHealth(other, NULL, qtrue);
 
 		if (self->health != -9999) {
 			self->health -= healvalue;
@@ -588,6 +632,13 @@ SP_misc_cabinet_health
 /*QUAKED misc_cabinet_health (.5 .5 .5) (-20 -20 0) (20 20 60)
 */
 void SP_misc_cabinet_health( gentity_t* self ) {	
+	/* Original Deathmatch bit 64 removes the cabinet before setup/linking;
+	 * trigger_heal is a separate map entity and is not filtered by this bit. */
+	if( g_gametype.integer == GT_WOLF_DM && (g_DMOptions.integer & 64) ) {
+		G_FreeEntity(self);
+		return;
+	}
+
 	VectorSet (self->r.mins, -20, -20, 0);
 	VectorSet (self->r.maxs, 20, 20, 60);
 
@@ -929,54 +980,17 @@ void SP_trigger_once( gentity_t *ent) {
 // Mad Doc - TDF
 // put this back in and modifyed for single player bots
 
-void trigger_aidoor_stayopen (gentity_t * ent, gentity_t * other , trace_t * trace)
-{
-	gentity_t *door;
- 
-
-	// only use this in single player. It was taken out of multiplayer, and I'm guessing there was a good reason.
-	if(g_gametype.integer != GT_SINGLE_PLAYER && g_gametype.integer != GT_COOP) {
-		return;
-	}
-
-
-	// FIXME: port this code over to moving doors (use MOVER_POSx instead of MOVER_POSxROTATE)
-	if (other->client && other->health > 0)
-	{
-		if(!ent->target || !(strlen(ent->target)))
-		{
-			// ent->target of "" will crash game in Q_stricmp()
-
-	// FIXME: commented out so it can be fixed
-
-//			G_Printf( "trigger_aidoor at loc %s does not have a target door\n", vtos (ent->s.origin) );
-			return;
-		}
-
-		door = G_FindByTargetname( NULL, ent->target );
-
-		if (!door)
-		{
-	// FIXME: commented out so it can be fixed
-//			G_Printf( "trigger_aidoor at loc %s does not have a target door\n", vtos (ent->s.origin) );
-			return;
-		}
-
-		if ( (door->moverState == MOVER_POS2ROTATE) || ( door->moverState == MOVER_POS2 ) )
-		{	// door is in open state waiting to close keep it open
-			door->nextthink = level.time + door->wait + 3000;  
-		}
-
-
-		// what about other move states?
-
-		// for now, don't worry about getting the bots out of the way. this is just for single player, and the bots should have
-		// orders to follow anyway
-
-	}
-
+void trigger_aidoor_stayopen (gentity_t *ent, gentity_t *other, trace_t *trace) {
+ gentity_t *door;
+ /* Original 0xe4d80..0xe4e29 permits contact in every gametype. */
+ if(!other->client || other->health<=0 || !ent->target || !*ent->target) return;
+ door=G_FindByTargetname(NULL,ent->target);
+ if(!door) return;
+ if(door->moverState==MOVER_POS2ROTATE || door->moverState==MOVER_POS2) {
+  /* Original x87 keeps the addition wide until the integer deadline. */
+  door->nextthink=(int)((double)level.time+door->wait+3000.0);
+ }
 }
-
 
 
 void SP_trigger_aidoor (gentity_t *ent)
@@ -1024,6 +1038,8 @@ void Touch_flagonly (gentity_t *ent, gentity_t *other, trace_t *trace) {
 
 		G_Script_ScriptEvent( ent, "death", "" );
 
+		Bot_Util_SendTrigger(ent, NULL, va("Allies captured %s", ent->scriptName), "");
+
 		G_Script_ScriptEvent( &g_entities[other->client->flagParent], "trigger", "captured" );
 
 		ent->parent = tmp;
@@ -1049,6 +1065,7 @@ void Touch_flagonly (gentity_t *ent, gentity_t *other, trace_t *trace) {
 		G_Script_ScriptEvent( ent, "death", "" );
 
 		G_Script_ScriptEvent( &g_entities[other->client->flagParent], "trigger", "captured" );
+		Bot_Util_SendTrigger(ent, NULL, va("Axis captured %s", ent->scriptName), "");
 
 		ent->parent = tmp;
 
@@ -1082,6 +1099,7 @@ void Touch_flagonly_multiple (gentity_t *ent, gentity_t *other, trace_t *trace) 
 		G_Script_ScriptEvent( ent, "death", "" );
 
 		G_Script_ScriptEvent( &g_entities[other->client->flagParent], "trigger", "captured" );
+		Bot_Util_SendTrigger(ent, NULL, va("Allies captured %s", ent->scriptName), "");
 
 		ent->parent = tmp;
 	} else if ( ent->spawnflags & BLUE_FLAG && other->client->ps.powerups[ PW_BLUEFLAG ] ) {
@@ -1099,6 +1117,7 @@ void Touch_flagonly_multiple (gentity_t *ent, gentity_t *other, trace_t *trace) 
 		G_Script_ScriptEvent( ent, "death", "" );
 
 		G_Script_ScriptEvent( &g_entities[other->client->flagParent], "trigger", "captured" );
+		Bot_Util_SendTrigger(ent, NULL, va("Axis captured %s", ent->scriptName), "");
 
 		ent->parent = tmp;
 	}

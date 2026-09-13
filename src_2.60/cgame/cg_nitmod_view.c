@@ -126,10 +126,12 @@ void CG_NitmodZoomSway(int time, float zoom, const playerState_t *state, vec3_t 
     spread = state->aimSpreadScale / 255.0f;
     pitchMinimum = state->weapon == WP_FG42SCOPE ? .4f : .1f;
     yawMinimum = state->weapon == WP_FG42SCOPE ? .8f : .2f;
-    phase = (float)(time / 1000.0 * .24 * M_PI);
-    angles[PITCH] += (spread+pitchMinimum) * (float)sin(phase+phase) * .13f;
-    phase = (float)(time / 1000.0 * .12 * M_PI);
-    angles[YAW] += (spread+yawMinimum) * (float)sin(phase+phase) * .7f;
+    /* Original stores the completed phase as float; constants are float,
+     * while the sine product stays wide until the final angle store. */
+    phase = (float)(time / 1000.0 * .24f * M_PI * 2);
+    angles[PITCH] = (float)(angles[PITCH] + sin(phase) * .13f * ((double)spread+pitchMinimum));
+    phase = (float)(time / 1000.0 * .12f * M_PI * 2);
+    angles[YAW] = (float)(angles[YAW] + sin(phase) * .7f * ((double)spread+yawMinimum));
 }
 
 /* Original CG_Letterbox does not apply the native cg_letterbox multiplier. */
@@ -148,10 +150,10 @@ void CG_NitmodViewOffsets(int time, int flags, int weapons, float lean,
     vec3_t right;
     if(flags & NITMOD_EF_POISONED) {
         float phase = (float)(time / 1000.0 * .3 * M_PI);
-        float wave = (float)sin(phase);
+        double wave = sin(phase);
         angles[ROLL] += wave * 36;
         angles[YAW] += wave * 24;
-        angles[PITCH] += (float)sin(phase * 2.5) * 12;
+        angles[PITCH] += sin(phase * 2.5) * 12;
     }
     if(lean != 0) {
         angles[ROLL] += lean / ((weapons & 256) ? 3.2f : 2.f);

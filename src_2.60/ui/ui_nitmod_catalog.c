@@ -1,5 +1,29 @@
 #include "ui_local.h"
 
+/* Original UI_RunMenuScript LoadMods, ELF 0x221fb..0x22862.
+ * The directory remains the sort/start key; this is presentation only. */
+void UI_SetModDisplayName(modInfo_t *mod) {
+    static const struct { const char *directory, *display; } names[] = {
+        {"nitmod", "^7N^1!^7tmod"},
+        {"jaymod", "^8Jay^4mod"},
+        {"nq", "^?No Quarter"},
+        {"legacy", "^1ET^7:Legacy"},
+        {"etpro", "^7ETPro"},
+        {"comp", "^7Comp^1ET"},
+        {"silent", "^7silEnT"},
+        {"etpub", "^7ETPub"}
+    };
+    int i;
+    mod->modDisplayName[0] = '\0';
+    if(!mod->modName) return;
+    for(i = 0; i < (int)(sizeof(names) / sizeof(names[0])); ++i) {
+        if(!Q_stricmp(mod->modName, names[i].directory)) {
+            Q_strncpyz(mod->modDisplayName, names[i].display, sizeof(mod->modDisplayName));
+            return;
+        }
+    }
+}
+
 /* Read one engine FS_GetFileList string without scanning outside its buffer.
  * Empty strings are valid descriptions in the paired $modlist format. */
 const char *UI_CatalogNextString(const char *buffer, int capacity, int *offset) {

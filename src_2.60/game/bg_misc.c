@@ -10,6 +10,7 @@
 #include "bg_public.h"
 #include "nitmod_ammo_rewards.h"
 #include "nitmod_grenade_rewards.h"
+#include "nitmod_support_time.h"
 #include "../../pak/ui/menudef.h"
 
 #ifdef CGAMEDLL
@@ -3220,7 +3221,14 @@ qboolean BG_CanItemBeGrabbedWar( const entityState_t *ent, const playerState_t *
 		return qtrue;
 
 	case IT_AMMO:
-		return qfalse;
+		/* Original BG_CanItemBeGrabbed 0x25318: test the tagged reserve,
+		 * while magic ammo uses the same zero-clip probe as weapon packs. */
+		if(item->giTag == WP_AMMO)
+			return BG_AddMagicAmmoWar((playerState_t *)ps, skill, teamNum, 0, rewards, adrenalineOptions, war);
+		return ps->ammo[item->giTag] < (rewards ?
+			NITMOD_AmmoRewardCapacity(item->giTag, rewards,
+				GetAmmoTableData(item->giTag)->maxammo, GetAmmoTableData(item->giTag)->maxclip) :
+			BG_MaxAmmoForWeapon(item->giTag, skill));
 
 	case IT_ARMOR:
 		return qfalse;
@@ -4031,7 +4039,7 @@ void BG_AddPredictableEventToPlayerstate( int newEvent, int eventParm, playerSta
 #endif
 	ps->events[ps->eventSequence & (MAX_EVENTS-1)] = newEvent;
 	ps->eventParms[ps->eventSequence & (MAX_EVENTS-1)] = eventParm;
-	ps->eventSequence++;
+	ps->eventSequence = NITMOD_SupportSignedTime((uint32_t)ps->eventSequence + 1u);
 }
 
 /* Landing damage is predicted by both cgame and qagame.  Keep feedback in
@@ -4135,22 +4143,22 @@ void BG_PlayerStateToEntityState( playerState_t *ps, entityState_t *s, qboolean 
 	} else if ( ps->entityEventSequence < ps->eventSequence ) {
 		int		seq;
 
-		if ( ps->entityEventSequence < ps->eventSequence - MAX_EVENTS) {
-			ps->entityEventSequence = ps->eventSequence - MAX_EVENTS;
+		if ( ps->entityEventSequence < NITMOD_SupportSignedTime((uint32_t)ps->eventSequence - MAX_EVENTS)) {
+			ps->entityEventSequence = NITMOD_SupportSignedTime((uint32_t)ps->eventSequence - MAX_EVENTS);
 		}
 		seq = ps->entityEventSequence & (MAX_EVENTS-1);
 		s->event = ps->events[ seq ] | ( ( ps->entityEventSequence & 3 ) << 8 );
 		s->eventParm = ps->eventParms[ seq ];
-		ps->entityEventSequence++;
+		ps->entityEventSequence = NITMOD_SupportSignedTime((uint32_t)ps->entityEventSequence + 1u);
 	}
 // end
 	// Ridah, now using a circular list of events for all entities
 	// add any new events that have been added to the playerState_t
 	// (possibly overwriting entityState_t events)
-	for (i = ps->oldEventSequence; i != ps->eventSequence; i++) {
+	for (i = ps->oldEventSequence; i != ps->eventSequence; i = NITMOD_SupportSignedTime((uint32_t)i + 1u)) {
 		s->events[s->eventSequence & (MAX_EVENTS-1)] = ps->events[i & (MAX_EVENTS-1)];
 		s->eventParms[s->eventSequence & (MAX_EVENTS-1)] = ps->eventParms[i & (MAX_EVENTS-1)];
-		s->eventSequence++;
+		s->eventSequence = NITMOD_SupportSignedTime((uint32_t)s->eventSequence + 1u);
 	}
 	ps->oldEventSequence = ps->eventSequence;
 
@@ -4168,6 +4176,8 @@ void BG_PlayerStateToEntityState( playerState_t *ps, entityState_t *s, qboolean 
 //	s->loopSound = ps->loopSound;
 	s->teamNum = ps->teamNum;
 	s->aiState = ps->aiState;		// xkan, 1/10/2003
+	/* Original transports health for remote animation conditions, excluding spectators. */
+	if( ps->pm_type != PM_SPECTATOR ) s->dl_intensity = ps->stats[STAT_HEALTH];
 }
 
 /*
@@ -4235,22 +4245,22 @@ void BG_PlayerStateToEntityStateExtraPolate( playerState_t *ps, entityState_t *s
 	} else if ( ps->entityEventSequence < ps->eventSequence ) {
 		int		seq;
 
-		if ( ps->entityEventSequence < ps->eventSequence - MAX_EVENTS) {
-			ps->entityEventSequence = ps->eventSequence - MAX_EVENTS;
+		if ( ps->entityEventSequence < NITMOD_SupportSignedTime((uint32_t)ps->eventSequence - MAX_EVENTS)) {
+			ps->entityEventSequence = NITMOD_SupportSignedTime((uint32_t)ps->eventSequence - MAX_EVENTS);
 		}
 		seq = ps->entityEventSequence & (MAX_EVENTS-1);
 		s->event = ps->events[ seq ] | ( ( ps->entityEventSequence & 3 ) << 8 );
 		s->eventParm = ps->eventParms[ seq ];
-		ps->entityEventSequence++;
+		ps->entityEventSequence = NITMOD_SupportSignedTime((uint32_t)ps->entityEventSequence + 1u);
 	}
 
 	// Ridah, now using a circular list of events for all entities
 	// add any new events that have been added to the playerState_t
 	// (possibly overwriting entityState_t events)
-	for (i = ps->oldEventSequence; i != ps->eventSequence; i++) {
+	for (i = ps->oldEventSequence; i != ps->eventSequence; i = NITMOD_SupportSignedTime((uint32_t)i + 1u)) {
 		s->events[s->eventSequence & (MAX_EVENTS-1)] = ps->events[i & (MAX_EVENTS-1)];
 		s->eventParms[s->eventSequence & (MAX_EVENTS-1)] = ps->eventParms[i & (MAX_EVENTS-1)];
-		s->eventSequence++;
+		s->eventSequence = NITMOD_SupportSignedTime((uint32_t)s->eventSequence + 1u);
 	}
 	ps->oldEventSequence = ps->eventSequence;
 
@@ -4267,6 +4277,8 @@ void BG_PlayerStateToEntityStateExtraPolate( playerState_t *ps, entityState_t *s
 	s->nextWeapon = ps->nextWeapon;	// Ridah
 	s->teamNum = ps->teamNum;
 	s->aiState = ps->aiState;		// xkan, 1/10/2003
+	/* Keep the native extrapolated snapshot path consistent with the original converter. */
+	if( ps->pm_type != PM_SPECTATOR ) s->dl_intensity = ps->stats[STAT_HEALTH];
 }
 
 // Gordon: some weapons are duplicated for code puposes.... just want to treat them as a single 

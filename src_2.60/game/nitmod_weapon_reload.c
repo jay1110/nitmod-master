@@ -146,7 +146,8 @@ int NITMOD_ScopeSwitchDuration( int oldWeapon, int newWeapon, int *duration ) {
 }
 
 int NITMOD_WeaponChangeNeedsRaise( int oldWeapon, int newWeapon ) {
-    return oldWeapon != newWeapon || newWeapon == WP_KNIFE || newWeapon == WP_SMOKE_BOMB;
+    return oldWeapon != newWeapon || newWeapon == WP_KNIFE || newWeapon == WP_SMOKE_BOMB ||
+        newWeapon == WP_BOMB || newWeapon == WP_POISON_BOMB;
 }
 
 int NITMOD_CommitWeaponChange( playerState_t *state ) {

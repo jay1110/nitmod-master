@@ -7,6 +7,7 @@
 
 #include "g_local.h"
 #include "g_nitmod_restrictions.h"
+#include "g_nitmod_config.h"
 #include "g_nitmod_omnibot.h"
 #include "g_nitmod_etbot_lifecycle.h"
 #include "g_nitmod_legacy_cvars.h"
@@ -914,10 +915,10 @@ Svcmd_ShuffleTeams_f
 OSP - randomly places players on teams
 ====================
 */
-void Svcmd_ShuffleTeams_f(void)
+static void Svcmd_ShuffleTeamsBy(void (*shuffle)(void))
 {
 	G_resetRoundState();
-	G_shuffleTeams();
+	shuffle();
 
 	if((g_gamestate.integer == GS_INITIALIZE) ||
 	  (g_gamestate.integer == GS_WARMUP) ||
@@ -928,6 +929,15 @@ void Svcmd_ShuffleTeams_f(void)
 	G_resetModeState();
 	Svcmd_ResetMatch_f(qfalse, qtrue);
 }
+
+void Svcmd_ShuffleTeams_f(void) {
+    Svcmd_ShuffleTeamsBy(G_shuffleTeams);
+}
+
+void Svcmd_ShuffleTeamsXP_f(void) {
+    Svcmd_ShuffleTeamsBy(G_shuffleTeamsXP);
+}
+
 
 void Svcmd_Campaign_f(void) {
 	char	str[MAX_TOKEN_CHARS];
@@ -1331,6 +1341,93 @@ static void NITMOD_ConsoleDatabaseReloaded(int ok,const void *context) {
         if(g_entities[clientNum].client && g_entities[clientNum].client->pers.connected!=CON_DISCONNECTED)
             ClientUserinfoChanged(clientNum);
 }
+static char *NITMOD_ConsoleAddCR(char *text) {
+        char *cursor=text;
+        /* Q_AddCR 0x630f0 converts literal backslash-n in place. Other
+         * escape pairs are skipped together; a terminal backslash is kept. */
+        while(*cursor) {
+            if(cursor[0]=='\\' && cursor[1]=='n') {
+                *cursor='\n';
+                memmove(cursor+1,cursor+2,strlen(cursor+2)+1);
+            } else if(cursor[0]=='\\' && cursor[1]) ++cursor;
+            ++cursor;
+        }
+        return text;
+}
+
+/* Original ConsoleCommand 0xd5537..0xd5efd: original numeric slot labels. */
+static const char *NITMOD_ConsoleCSType(int n) {
+ static const char *names[39]={"CS_SERVERINFO","CS_SYSTEMINFO","CS_MUSIC","","","CS_WARMUP","CS_VOTE_TIME","CS_VOTE_STRING","CS_VOTE_YES","CS_VOTE_NO","CS_GAME_VERSION","CS_LEVEL_START_TIME","CS_INTERMISSION","CS_MULTI_INFO","CS_MULTI_MAPWINNER","CS_MULTI_OBJECTIVE","","","CS_FOGVARS","CS_SKYBOXORG","CS_TARGETEFFECT","CS_WOLFINFO","CS_FIRSTBLOOD","CS_ROUNDSCORES1","CS_ROUNDSCORES2","CS_MUSIC_QUEUE","CS_SCRIPT_MOVER_NAMES","CS_CONSTRUCTION_NAMES","CS_REINFSEEDS","CS_SERVERTOGGLES","CS_GLOBALFOGVARS","CS_AXIS_MAPS_XP","CS_ALLIED_MAPS_XP","CS_INTERMISSION_START_TIME","CS_ENDGAME_STATS","CS_CHARGETIMES","CS_NITMODINFO","","CS_SVCVAR"};
+ if(n<39) return names[n];
+ if(n>=689 && n<=752) return "CS_PLAYERS";
+ if(n>=753 && n<=768) return "CS_DLIGHTS";
+ if(n>=769 && n<=776) return "CS_SERVERINFO";
+ if(n>=777 && n<=840) return "CS_TAGCONNECTS";
+ if(n>=841 && n<=847) return "CS_CUSTMOTD";
+ if(n>=848) return "CS_STRINGS";
+ return "";
+}
+static void NITMOD_ConsoleCSInfo(void) {
+ char selector[1024],value[8192],part[239]; int n,total=0;
+ long selected=-1; qboolean detail=trap_Argc()>1,all=qfalse;
+ if(detail) {
+  const char *p;
+  trap_Argv(1,selector,sizeof(selector));
+  for(p=selector;*p>='0' && *p<='9';++p) {}
+  if(*p) {
+   if(Q_stricmp(selector,"dumpall")) { G_Printf("Error: Invalid argument [CS index|dumpall]\n"); return; }
+   all=qtrue;
+  } else {
+   selected=strtol(selector,NULL,10);
+   if((unsigned long)selected>879u) { G_Printf("Error: Bad index\n"); return; }
+  }
+ }
+ G_Printf("CS   Length   Type\n--------------------------------------------\n");
+ for(n=0;n<880;++n) {
+  int length,offset;
+  trap_GetConfigstring(n,value,sizeof(value)); length=strlen(value);total+=length;
+  if(!length || (detail && !all && selected!=n)) continue;
+  G_Printf("%-4i %-8i %s\n",n,length,NITMOD_ConsoleCSType(n));
+  if(detail) {
+   for(offset=0;offset<=length;offset+=238) { Q_strncpyz(part,value+offset,sizeof(part)); G_Printf("%s",part); }
+   G_Printf("\n");
+  }
+ }
+ G_Printf("--------------------------------------------\nTotal CONFIGSTRING Length: %i\n--------------------------------------------\n",total);
+}
+static const char *NITMOD_ConsoleNCSType(int n) {
+ if(n<256) return "NCS_MODELS";
+ if(n<512) return "NCS_SOUNDS";
+ if(n<544) return "NCS_SHADERS";
+ if(n==544) return "NCS_SHADERSTATE";
+ if(n<609) return "NCS_SKINS";
+ if(n<627) return "NCS_TRIGGERS";
+ if(n<643) return "NCS_MULTI_SPAWNTARGETS";
+ return "";
+}
+static void NITMOD_ConsoleDumpNCS(void) {
+ char path[MAX_QPATH+64],value[1024],line[1024];
+ fileHandle_t file=0,probe=0; int suffix,n,total=0,used=0;
+ /* Original nitrox_DumpNCSFull 0x10ff80 overwrites its map-named file.
+  * Preserve prior files as requested: choose the first unused suffix. */
+ for(suffix=0;suffix<10000;++suffix) {
+  if(suffix) Com_sprintf(path,sizeof(path),"DevLogs/DumpNCS_%s_%d.log",level.rawmapname,suffix);
+  else Com_sprintf(path,sizeof(path),"DevLogs/DumpNCS_%s.log",level.rawmapname);
+  probe=0;
+  if(trap_FS_FOpenFile(path,&probe,FS_READ)<0) break;
+  if(probe) trap_FS_FCloseFile(probe);
+ }
+ if(suffix==10000 || trap_FS_FOpenFile(path,&file,FS_WRITE)<0 || !file) { G_Printf("Couldn't open file\n"); return; }
+ for(n=0;n<655;++n) {
+  int length;
+  nitrox_GetConfigstring(n,value,sizeof(value)); length=strlen(value);total+=length;if(length) ++used;
+  Q_strncpyz(line,va("%-3d(%s) [%d] %s\n",n,NITMOD_ConsoleNCSType(n),length,value),sizeof(line));
+  G_Printf("%s",line);trap_FS_Write(line,strlen(line),file);
+ }
+ Q_strncpyz(line,va("***********************************************\nMap: %s\nN!tmod Version: %s\nTotal NGS Size: %d\nUsed NCS: %d/%d\n***********************************************\n",level.rawmapname,"2.3.5",total,used,655),sizeof(line));
+ G_Printf("%s",line);trap_FS_Write(line,strlen(line),file);trap_FS_FCloseFile(file);
+}
+
 qboolean	ConsoleCommand( void ) {
 	char	cmd[MAX_TOKEN_CHARS];
 
@@ -1341,6 +1438,8 @@ qboolean	ConsoleCommand( void ) {
 	if(G_NITMOD_LuaCommand(-1,cmd)) return qtrue;
 	if(G_NITMOD_ShoutcasterCommand(-1,cmd)) return qtrue;
 	if(!Q_stricmp(cmd,"lua_status")) { G_NITMOD_LuaStatus(-1); return qtrue; }
+	if(!Q_stricmp(cmd,"priv")) { G_NITMOD_PrivateMessage_f(NULL); return qtrue; }
+	if(!Q_stricmp(cmd,"clearxp")) { G_NITMOD_AccountsClearXP(); return qtrue; }
 	if(!Q_stricmp(cmd,"writexp")) {
 		int clientNum;
 		G_NITMOD_AccountsSaveAllXP();
@@ -1349,6 +1448,35 @@ qboolean	ConsoleCommand( void ) {
 		return qtrue;
 	}
 	if(G_NITMOD_AdminCommand(-1,cmd)) return qtrue;
+	if(!Q_stricmp(cmd,"csinfo")) { NITMOD_ConsoleCSInfo(); return qtrue; }
+	if(!Q_stricmp(cmd,"dumpncs")) { NITMOD_ConsoleDumpNCS(); return qtrue; }
+	if(!Q_stricmp(cmd,"csdump")) {
+		char number[4], value[8192], part[1024];
+		long index; size_t offset, length;
+		if(trap_Argc()!=2) { G_Printf("usage: csdump [csnum]\n"); return qtrue; }
+		/* Original 0xd5a4d reads three characters, then accepts strtol's
+		 * decimal prefix. Preserve this command's original numeric range. */
+		trap_Argv(1,number,sizeof(number)); index=strtol(number,NULL,10);
+		if((unsigned long)index>879u) { G_Printf("csdump: illegal csnum\n"); return qtrue; }
+		trap_GetConfigstring((int)index,value,sizeof(value)); length=strlen(value);
+		for(offset=0;offset<=length;offset+=1023) {
+			Q_strncpyz(part,value+offset,sizeof(part)); G_Printf("%s",part);
+		}
+		G_Printf("\n");
+		return qtrue;
+	}
+	if(!Q_stricmp(cmd,"dumpallcs")) {
+		char value[8192]; int index;
+		/* Original ConsoleCommand 0xd5b06..d5b5a dumps 880 slots,
+		 * including empty values. Treat their contents as data for logging. */
+		for(index=0;index<880;++index) {
+			trap_GetConfigstring(index,value,sizeof(value));
+			G_LogPrintf("%d : ",index);
+			G_LogPrintf("%s",value);
+			G_LogPrintf("\n");
+		}
+		return qtrue;
+	}
 	if(!Q_stricmp(cmd,"nitmod_nxac_reload")) { G_NITMOD_LoadChecksums(); return qtrue; }
     if(!Q_stricmp(cmd,"nitmod_db_reload")) {
         int length;void *before;
@@ -1406,17 +1534,61 @@ qboolean	ConsoleCommand( void ) {
             if(*selector && strstr(name,selector)) { target=i;++matches; }
         }
         if(matches==1) {
-            vec3_t origin={0,0,0};gentity_t *event=G_TempEntity(origin,EV_GLOBAL_CLIENT_SOUND);
-            event->r.svFlags=SVF_SINGLECLIENT;event->r.singleClient=target;
-            event->s.teamNum=target;event->s.eventParm=G_SoundIndex(sound);
+            G_ClientSound(&g_entities[target],G_SoundIndex(sound));
         } else G_Printf("playsound: No unique player\n");
         return qtrue;
     }
-    if(!Q_stricmp(cmd,"chat")) {
-        char text[MAX_STRING_CHARS-32];int i;
-        Q_strncpyz(text,ConcatArgs(1),sizeof(text));
-        for(i=0;text[i];++i) if(text[i]=='"') text[i]='\'';
-        trap_SendServerCommand(-1,va("chat \"%s\" -2",text));return qtrue;
+    /* Original 0xd47f0/0xd4ad2: svsay is also available on listen servers. */
+    if(!Q_stricmp(cmd,"svsay") || (g_dedicated.integer && !Q_stricmp(cmd,"say"))) {
+        char *text=NITMOD_ConsoleAddCR(ConcatArgs(1));
+        trap_SendServerCommand(-1,va("cpm \"server: %s\n\"",text));
+        return qtrue;
+    }
+    /* Original ConsoleCommand 0xd4db6/0xd4e0c/0xd5184. */
+    if(!Q_stricmp(cmd,"announce") || !Q_stricmp(cmd,"cp") || !Q_stricmp(cmd,"bp")) {
+        const char *kind=!Q_stricmp(cmd,"announce")?"announce":!Q_stricmp(cmd,"cp")?"cp":"bp";
+        trap_SendServerCommand(-1,va("%s \"%s\"",kind,NITMOD_ConsoleAddCR(ConcatArgs(1))));
+        G_LogPrintf("%s: %s\n",kind,NITMOD_ConsoleAddCR(ConcatArgs(1)));
+        return qtrue;
+    }
+    /* Original ConsoleCommand 0xd4d2d: both names share this broadcast. */
+    if(!Q_stricmp(cmd,"cpmsay") || !Q_stricmp(cmd,"cpm")) {
+        trap_SendServerCommand(-1,va("cpm \"%s\" 1",ConcatArgs(1)));
+        G_LogPrintf("cpm: %s\n",ConcatArgs(1));
+        return qtrue;
+    }
+    if(!Q_stricmp(cmd,"chat") || !Q_stricmp(cmd,"qsay") || !Q_stricmp(cmd,"chatclient")) {
+        char line[150], *text; int length=0, target=-1, firstArg=1;
+        qboolean privateChat=!Q_stricmp(cmd,"chatclient");
+        if(privateChat) {
+            char selector[36]; int targets[MAX_CLIENTS], matches;
+            if(trap_Argc()<3) { G_Printf("usage: chatclient [slot#|name] message\n"); return qtrue; }
+            trap_Argv(1,selector,sizeof(selector));
+            matches=G_NITMOD_ClientNumbersFromString(selector,targets);
+            if(matches!=1) {
+                G_Printf(matches>1?"chatclient: more than one player matches.nothing sent.\n":"chatclient: no player found\n");
+                return qtrue;
+            }
+            target=targets[0];firstArg=2;
+        }
+        if(trap_Argc()<2) return qtrue;
+        text=NITMOD_ConsoleAddCR(ConcatArgs(firstArg));
+        /* Original ConsoleChat0xd3e70: the split delimiter (including the
+         * character at the length boundary) is consumed, not replayed. */
+        for(;*text;++text) {
+            if(*text=='\n' || length==149) {
+                line[length]=0;
+                trap_SendServerCommand(target,va("chat \"%s\" -2 0",line));
+                length=0;
+            } else line[length++]=*text;
+        }
+        if(length) {
+            line[length]=0;
+            trap_SendServerCommand(target,va("chat \"%s\" -2 0",line));
+        }
+        if(privateChat) G_LogPrintf("chat(client): %d: %s\n",target,ConcatArgs(1));
+        else G_LogPrintf("chat(client): %s\n",ConcatArgs(1));
+        return qtrue;
     }
 	if (Q_stricmp(cmd, "nitmod_omnibot_status") == 0) {
 		G_NITMOD_OmniBotReportStatus();
@@ -1592,11 +1764,6 @@ qboolean	ConsoleCommand( void ) {
 	// -fretn
 
 	if( g_dedicated.integer ) {
-		if( !Q_stricmp (cmd, "say")) {
-			trap_SendServerCommand( -1, va("cpm \"server: %s\n\"", ConcatArgs(1) ) );
-			return qtrue;
-		}
-
 		// OSP - console also gets ref commands
 		if(!level.fLocalHost && Q_stricmp(cmd, "ref") == 0) {
 			if(!G_refCommandCheck(NULL, cmd)) {

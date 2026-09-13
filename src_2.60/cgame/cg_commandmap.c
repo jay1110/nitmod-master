@@ -79,6 +79,9 @@ vmCvar_t cg_automapZoom;
 
 float CG_NitmodAutomapZoom(void) {
 	float zoom = cg_automapZoom.value;
+	/* Original transformations and scissor geometry read the VM value
+	 * directly; only zoom commands apply their directional limits. */
+	if(NITMOD_UsesNitmodHud()) return zoom;
 	if(!(zoom >= 1 && zoom <= 7.43f)) {
 		if(zoom < 1) return 1;
 		if(zoom > 7.43f) return 7.43f;
@@ -130,9 +133,11 @@ static qboolean CG_ScissorEntIsCulled( mapEntityData_t* mEnt, mapScissor_t *scis
 		distVec[1] = mEnt->automapTransformed[1] - ( scissor->tl[1] + ( 0.5f * ( scissor->br[1] - scissor->tl[1] ) ) );
 		distSquared = distVec[0]*distVec[0] + distVec[1]*distVec[1];
 
-		/* Original map entities/spawns/mortar: mode 2 uses half-width;
-		 * other Nitmod modes use 0.8. Keep stock ET circular clipping. */
-		radius = (NITMOD_UsesNitmodHud() && cg_drawCompass.integer != 2 ? 0.8f : 0.5f) * (scissor->br[0] - scissor->tl[0]);
+		/* Original objective symbols always use half-width. Only players
+		 * and mines use the larger radius outside compass mode 2. */
+		radius = (NITMOD_UsesNitmodHud() && cg_drawCompass.integer != 2 &&
+			(mEnt->type <= ME_PLAYER_DISGUISED || mEnt->type == ME_LANDMINE)
+			? 0.8f : 0.5f) * (scissor->br[0] - scissor->tl[0]);
 		if( distSquared > Square( radius ) )
 			return qtrue;
 	}
@@ -187,7 +192,8 @@ void CG_TransformAutomapEntity( void )
 
 void CG_AdjustAutomapZoom(int zoomIn)
 {
-	float automapZoom = CG_NitmodAutomapZoom();
+	qboolean original = NITMOD_UsesNitmodHud();
+	float automapZoom = original ? cg_automapZoom.value : CG_NitmodAutomapZoom();
 	if (zoomIn) {
 		automapZoom *= 1.2;
 		if (automapZoom > 7.43)  // approximately 1.2^11
@@ -201,7 +207,8 @@ void CG_AdjustAutomapZoom(int zoomIn)
 	}
 	// recalculate the screen coordinates since the zoom changed
 	trap_Cvar_Set("cg_automapZoom", va("%f", automapZoom));
-	trap_Cvar_Update(&cg_automapZoom);
+	/* Original leaves the VM value for the regular cvar update pass. */
+	if(!original) trap_Cvar_Update(&cg_automapZoom);
 	CG_TransformAutomapEntity();
 }
 // END		xkan, 9/19/2002
@@ -1563,6 +1570,9 @@ typedef enum {
 qboolean CG_PlayerSelected( void ) {
 	snapshot_t* snap;
 	int i;
+	int clientCount = NITMOD_UsesNitmodHud() ? cgs.maxclients : MAX_CLIENTS;
+	if(clientCount < 0) clientCount = 0;
+	if(clientCount > MAX_CLIENTS) clientCount = MAX_CLIENTS;
 
 	if ( cg.nextSnap && !cg.nextFrameTeleport && !cg.thisFrameTeleport ) {
 		snap = cg.nextSnap;
@@ -1570,7 +1580,7 @@ qboolean CG_PlayerSelected( void ) {
 		snap = cg.snap;
 	}
 
-	for( i = 0; i < MAX_CLIENTS; i++ ) {
+	for( i = 0; i < clientCount; i++ ) {
 		if( cgs.clientinfo[i].team == snap->ps.persistant[PERS_TEAM] ) {
 			if( cgs.clientinfo[i].ccSelected ) {
 				return qtrue;

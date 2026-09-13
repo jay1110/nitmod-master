@@ -2,6 +2,7 @@
 // active (after loading) gameplay
 
 #include "cg_local.h"
+#include "../game/nitmod_support_time.h"
 #include "cg_nitmod_hud.h"
 #include "cg_nitmod_stats.h"
 #include "cg_nitmod_hints.h"
@@ -682,7 +683,7 @@ static void CG_DrawTeamInfo( void ) {
 }
 
 const char* CG_PickupItemText( int item ) {
-	if( bg_itemlist[ item ].giType == IT_HEALTH ) {
+	if( bg_itemlist[ item ].giType == IT_HEALTH && bg_itemlist[ item ].quantity > 0 ) {
 		if(bg_itemlist[ item ].world_model[2])	{	// this is a multi-stage item
 			// FIXME: print the correct amount for multi-stage
 			return va( "a %s", bg_itemlist[ item ].pickup_name );
@@ -790,6 +791,7 @@ typedef struct {
 	int		snapshotFlags[LAG_SAMPLES];
 	int		snapshotSamples[LAG_SAMPLES];
 	int		snapshotCount;
+	int snapshotAdjusted[LAG_SAMPLES];
 } lagometer_t;
 
 lagometer_t		lagometer;
@@ -820,16 +822,23 @@ Pass NULL for a dropped packet.
 ==============
 */
 void CG_AddLagometerSnapshotInfo( snapshot_t *snap ) {
-	// dropped packet
-	if ( !snap ) {
-		lagometer.snapshotSamples[ lagometer.snapshotCount & ( LAG_SAMPLES - 1) ] = -1;
-		lagometer.snapshotCount++;
-		return;
+	static int lastDemoTime;
+	int index = lagometer.snapshotCount & (LAG_SAMPLES - 1);
+	if(!snap) {
+		lagometer.snapshotSamples[index] = lagometer.snapshotAdjusted[index] = -1;
+	} else {
+		/* Original 0x44100: demos measure snapshot intervals; live games
+		 * subtract the server's antiwarp delay (original ps +0xec). */
+		if(NITMOD_UsesNitmodHud() && cg.demoPlayback) {
+			lagometer.snapshotSamples[index] = lagometer.snapshotAdjusted[index] = snap->serverTime - lastDemoTime;
+			lastDemoTime = snap->serverTime;
+		} else {
+			int delay = snap->ps.stats[STAT_CAPTUREHOLD_BLUE];
+			lagometer.snapshotSamples[index] = snap->ping;
+			lagometer.snapshotAdjusted[index] = snap->ping - (delay > 0 ? delay : 0);
+		}
+		lagometer.snapshotFlags[index] = snap->snapFlags;
 	}
-
-	// add this snapshot's info
-	lagometer.snapshotSamples[ lagometer.snapshotCount & ( LAG_SAMPLES - 1) ] = snap->ping;
-	lagometer.snapshotFlags[ lagometer.snapshotCount & ( LAG_SAMPLES - 1) ] = snap->snapFlags;
 	lagometer.snapshotCount++;
 }
 
@@ -983,9 +992,31 @@ void CG_DrawLagometer( float y ) {
 	range = ah / 2;
 	vscale = range / MAX_LAGOMETER_PING;
 
+	if(nitmod) {
+		qboolean adjustedSeen = qfalse;
+		vec4_t delayColor = {0, 1, 0, .5f};
+		for(a = 0; a < aw; ++a) {
+			float adjusted, raw;
+			i = (lagometer.snapshotCount - 1 - a) & (LAG_SAMPLES - 1);
+			adjusted = lagometer.snapshotAdjusted[i];
+			raw = lagometer.snapshotSamples[i];
+			if(adjusted > 0 && adjusted < raw) adjustedSeen = qtrue;
+			else raw = adjusted;
+			if(adjustedSeen && raw > 0) {
+				trap_R_SetColor(delayColor);
+				v = raw * vscale;
+				if(v > range) v = range;
+				trap_R_DrawStretchPic(ax + aw - a, ay + ah - v, 1, v, 0, 0, 0, 0, cgs.media.whiteShader);
+			}
+		}
+		color = -1;
+	}
+
 	for ( a = 0 ; a < aw ; a++ ) {
 		i = ( lagometer.snapshotCount - 1 - a ) & (LAG_SAMPLES - 1);
 		v = lagometer.snapshotSamples[i];
+		if(nitmod && lagometer.snapshotAdjusted[i] > 0 && lagometer.snapshotAdjusted[i] < v)
+			v = lagometer.snapshotAdjusted[i];
 		if ( v > 0 ) {
 			if ( lagometer.snapshotFlags[i] & SNAPFLAG_RATE_DELAYED ) {
 				if ( color != 5 ) {
@@ -3064,20 +3095,18 @@ void CG_DrawFlashFade( void ) {
 	vec4_t col;
 	qboolean fBlackout = ((NITMOD_UsesNitmodHud() || !CG_IsSinglePlayer()) && int_ui_blackout.integer > 0);
 
-	if (cgs.fadeStartTime + cgs.fadeDuration < cg.time) {
+	if (NITMOD_SupportSignedTime((uint32_t)cgs.fadeStartTime + (uint32_t)cgs.fadeDuration) < cg.time) {
 		cgs.fadeAlphaCurrent = cgs.fadeAlpha;
 	} else if (cgs.fadeAlphaCurrent != cgs.fadeAlpha) {
-		elapsed = (time = trap_Milliseconds()) - lastTime;	// we need to use trap_Milliseconds() here since the cg.time gets modified upon reloading
+		elapsed = NITMOD_SupportSignedTime((uint32_t)(time = trap_Milliseconds()) - (uint32_t)lastTime);	// we need to use trap_Milliseconds() here since the cg.time gets modified upon reloading
 		lastTime = time;
 		if (elapsed < 500 && elapsed > 0) {
 			if (cgs.fadeAlphaCurrent > cgs.fadeAlpha) {
-				cgs.fadeAlphaCurrent -= ((float)elapsed/(float)cgs.fadeDuration);
-				if (cgs.fadeAlphaCurrent < cgs.fadeAlpha)
-					cgs.fadeAlphaCurrent = cgs.fadeAlpha;
+				double next = (double)cgs.fadeAlphaCurrent - (double)elapsed / cgs.fadeDuration;
+				cgs.fadeAlphaCurrent = (float)(next < cgs.fadeAlpha ? cgs.fadeAlpha : next);
 			} else {
-				cgs.fadeAlphaCurrent += ((float)elapsed/(float)cgs.fadeDuration);
-				if (cgs.fadeAlphaCurrent > cgs.fadeAlpha)
-					cgs.fadeAlphaCurrent = cgs.fadeAlpha;
+				double next = (double)cgs.fadeAlphaCurrent + (double)elapsed / cgs.fadeDuration;
+				cgs.fadeAlphaCurrent = (float)(next > cgs.fadeAlpha ? cgs.fadeAlpha : next);
 			}
 		}
 	}
@@ -3297,7 +3326,8 @@ void CG_ObjectivePrint( const char *str, int charWidth ) {
 		return;
 	}
 
-	s = CG_TranslateString( str );
+	/* Original CG_ObjectivePrint copies the supplied text without translation. */
+	s = NITMOD_UsesNitmodHud() ? (char *)str : CG_TranslateString( str );
 
 	Q_strncpyz( cg.oidPrint, s, sizeof(cg.oidPrint) );
 
@@ -4604,9 +4634,10 @@ static void CG_Draw2D( void ) {
 			CG_NitmodDrawSpecial();
 		}
 
+		/* Original 0x4c621: banners precede centerprint and announcements. */
+		NITMOD_DrawBanner();
 		CG_DrawCenterString();
 		CG_NitmodDrawAnnouncement();
-		NITMOD_DrawBanner();
 		CG_NitmodDrawNotification();
 		CG_NitmodDrawGlobalAward();
 		CG_NitmodDrawKillPrint();

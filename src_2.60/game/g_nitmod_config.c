@@ -268,10 +268,10 @@ void nitrox_stripLeadingSpaces( char *text ) {
 void NITMOD_PlaySoundEvent( gentity_t *source, int soundIndex ) {
 	gentity_t *event;
 
-	if( !source || soundIndex <= 0 ) {
+	if( !source || soundIndex < 0 ) {
 		return;
 	}
-	event = G_TempEntity( source->r.currentOrigin, EV_NITMOD_SOUND );
+	event = G_NITMOD_TempEvent( source->r.currentOrigin, EV_NITMOD_SOUND );
 	event->s.eventParm = soundIndex;
 }
 
@@ -280,13 +280,12 @@ void NITMOD_PlaySoundEvent( gentity_t *source, int soundIndex ) {
 void nitmod_Sound_Global( int soundIndex ) {
 	gentity_t *event;
 
-	if( soundIndex <= 0 ) {
+	if( soundIndex < 0 ) {
 		return;
 	}
-	event = G_TempEntity( vec3_origin, EV_NITMOD_LUA_FIRST );
-	event->s.event = NITMOD_LuaEventEncode(103);
+	event = G_NITMOD_TempEventOriginal( NULL, 103 );
 	event->s.eventParm = soundIndex;
-	event->r.svFlags |= SVF_BROADCAST;
+	event->r.svFlags = SVF_BROADCAST;
 }
 
 /* The reference encodes this tuple in a custom event value that collides with
@@ -571,10 +570,6 @@ void G_NITMOD_ResyncEngineConfigStrings( void ) {
 
 	for( index = 0; index < MAX_CONFIGSTRINGS; index++ ) {
 		trap_GetConfigstring( index, value, sizeof( value ) );
-		if( strlen( value ) >= NITMOD_CONFIGSTRING_CHARS ) {
-			G_Printf( "Nitmod: skipping oversized engine configstring %i during NCS resync\n", index );
-			continue;
-		}
 		G_NITMOD_MirrorEngineConfigString( index, value );
 	}
 }
@@ -726,7 +721,9 @@ void nitmod_RefreshBaseSettings( void ) {
 	simple.noReload = G_NITMOD_ConfiguredNoReload();
 	simple.misc = G_NITMOD_LegacyCvarInteger( "g_misc", 0 );
 	simple.proneDelay = G_NITMOD_LegacyCvarInteger( "n_proneDelay", 0 );
-	simple.dynamiteTimer = G_NITMOD_DynamiteTimer();
+	/* Original nitmod_SimpleCS publishes the raw value; only the
+	 * arming path clamps the actual fuse to 5000..60000 ms. */
+	simple.dynamiteTimer = G_NITMOD_LegacyCvarInteger("n_dynamiteTimer", 30000);
 	simple.crouchStandDelay = G_NITMOD_LegacyCvarInteger( "n_crouchStandDelay", 0 );
 	simple.standCrouchDelay = G_NITMOD_LegacyCvarInteger( "n_standCrouchDelay", 0 );
 	state.doubleJumpHeight = g_DJHeight.value;
@@ -927,7 +924,10 @@ void nitmod_ObjectiveEvent( int type, int detail, int objective, int actor, int 
 	for ( clientNum = 0; clientNum < MAX_CLIENTS; clientNum++ ) {
 		if ( G_NITMOD_ClientSupports( clientNum, NITMOD_FEATURE_OBJECTIVES ) ) {
 			trap_SendServerCommand( clientNum, va( "ob %i %i %i %i %i",
-				type, detail, objective, actor, meansOfDeath ) );
+				/* Original 0x10c400 sends the actor's team, not the MOD.
+				 * MOD is used only by the objective counters above. */
+				type, detail, objective, actor,
+				g_entities[actor].client ? g_entities[actor].client->sess.sessionTeam : TEAM_FREE ) );
 		}
 	}
 }

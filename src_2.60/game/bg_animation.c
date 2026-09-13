@@ -9,6 +9,7 @@
 //
 //===========================================================================
 
+#include <stdint.h>
 #include "q_shared.h"
 #include "bg_public.h"
 
@@ -125,6 +126,9 @@ static animStringItem_t animEventTypesStr[] =
 	{"NOPOWER", -1},
 	{"FIREWEAPON3", -1},
 	{"FIREWEAPON3PRONE", -1},
+	{"DEATH_FROM_BEHIND", -1},
+	{"SALUTE", -1},
+	{"RAISE", -1},
 
 	{NULL, -1},
 };
@@ -266,13 +270,23 @@ static animStringItem_t animConditionsStr[] =
 	{"ENEMY_TEAM", -1},
 	{"PARACHUTE", -1},
 	{"CHARGING", -1},
-	{"SECONDLIFE", -1},
+	{"PLAYERCLASS", -1},
 	{"HEALTH_LEVEL", -1},
 	{"FLAILING_TYPE", -1},
 	{"GEN_BITFLAG", -1},
 	{"AISTATE", -1},
+	{"HOLDING", -1},
 
 	{NULL, -1},
+};
+
+static animStringItem_t animPlayerClassStr[] = {
+    {"SOLDIER", -1}, {"MEDIC", -1}, {"ENGINEER", -1},
+    {"FIELDOPS", -1}, {"COVERTOPS", -1}, {NULL, -1}
+};
+/* Original HOLDING table runs into the adjacent ZOOMING entry before NULL. */
+static animStringItem_t animHoldingStr[] = {
+    {"HOLDING", -1}, {"ZOOMING", -1}, {NULL, -1}
 };
 
 static animConditionTable_t animConditionsTable[NUM_ANIM_CONDITIONS] =
@@ -293,11 +307,12 @@ static animConditionTable_t animConditionsTable[NUM_ANIM_CONDITIONS] =
 	{ANIM_CONDTYPE_VALUE,			animEnemyTeamsStr},
 	{ANIM_CONDTYPE_VALUE,			NULL},
 	{ANIM_CONDTYPE_VALUE,			NULL},
-	{ANIM_CONDTYPE_VALUE,			NULL},
+	{ANIM_CONDTYPE_VALUE,			animPlayerClassStr},
 	{ANIM_CONDTYPE_VALUE,			animHealthLevelStr},
 	{ANIM_CONDTYPE_VALUE,			animFlailTypeStr},
 	{ANIM_CONDTYPE_BITFLAGS,		animGenBitFlagStr},
 	{ANIM_CONDTYPE_VALUE,			animAIStateStr},
+	{ANIM_CONDTYPE_BITFLAGS,		animHoldingStr},
 };
 
 //------------------------------------------------------------
@@ -308,28 +323,18 @@ return a hash value for the given string
 ================
 */
 long BG_StringHashValue( const char *fname ) {
-	int		i;
-	long	hash;
+    uint32_t hash = 0, weight = 119;
+    int ch;
+    if ( !fname ) return -1;
 
-	if( !fname ) {
-		return -1;
-	}
-
-	hash = 0;
-	i = 0;
-	while (fname[i] != '\0') {
-		if( Q_isupper( fname[i] ) ) {
-			hash += (long)(fname[i] + ('a' - 'A'))*(i+119);
-		} else {
-			hash += (long)(fname[i])*(i+119);
-		}
-
-		i++;
-	}
-	if (hash == -1) {
-		hash = 0;	// never return -1
-	}
-	return hash;
+    /* Original ELF32: sign-extend bytes and wrap each multiply/add at 32 bits. */
+    while ( *fname ) {
+        ch = (signed char)*fname++;
+        if ( Q_isupper(ch) ) ch += 'a' - 'A';
+        hash += (uint32_t)ch * weight++;
+    }
+    if ( hash == UINT32_MAX ) return 0;
+    return hash & UINT32_C(0x80000000) ? -1L - (long)(UINT32_MAX - hash) : (long)hash;
 }
 
 /*
@@ -338,19 +343,16 @@ return a hash value for the given string (make sure the strings and lowered firs
 ================
 */
 long BG_StringHashValue_Lwr( const char *fname ) {
-	int		i;
-	long	hash;
+    uint32_t hash = 0, weight = 119;
+    int ch;
 
-	hash = 0;
-	i = 0;
-	while (fname[i] != '\0') {
-		hash+=(long)(fname[i])*(i+119);
-		i++;
-	}
-	if (hash == -1) {
-		hash = 0;	// never return -1
-	}
-	return hash;
+    /* Original ELF32: sign-extend bytes and wrap each multiply/add at 32 bits. */
+    while ( *fname ) {
+        ch = (signed char)*fname++;
+        hash += (uint32_t)ch * weight++;
+    }
+    if ( hash == UINT32_MAX ) return 0;
+    return hash & UINT32_C(0x80000000) ? -1L - (long)(UINT32_MAX - hash) : (long)hash;
 }
 
 /*
@@ -671,6 +673,7 @@ BG_ParseConditions
 qboolean BG_ParseConditions( char **text_pp, animScriptItem_t *scriptItem )
 {
 	int conditionIndex, conditionValue[2];
+	qboolean negate;
 	char	*token;
 
 	conditionValue[0] = 0;
@@ -686,6 +689,14 @@ qboolean BG_ParseConditions( char **text_pp, animScriptItem_t *scriptItem )
 		// special case, "default" has no conditions
 		if ( !Q_stricmp( token, "default" ) ) {
 			return qtrue;
+		}
+
+		/* Original accepts one case-insensitive NOT or MINUS prefix per
+		 * condition; it negates the result, not the individual value bits. */
+		negate = !Q_stricmp(token, "NOT") || !Q_stricmp(token, "MINUS");
+		if( negate ) {
+			token = COM_ParseExt(text_pp, qfalse);
+			if( !token || !token[0] ) break;
 		}
 
 		conditionIndex = BG_IndexForString( token, animConditionsStr, qfalse );
@@ -717,6 +728,7 @@ qboolean BG_ParseConditions( char **text_pp, animScriptItem_t *scriptItem )
 		scriptItem->conditions[scriptItem->numConditions].index = conditionIndex;
 		scriptItem->conditions[scriptItem->numConditions].value[0] = conditionValue[0];
 		scriptItem->conditions[scriptItem->numConditions].value[1] = conditionValue[1];
+		scriptItem->conditions[scriptItem->numConditions].negate = negate;
 		scriptItem->numConditions++;
 	}
 
@@ -1225,25 +1237,24 @@ BG_EvaluateConditions
 qboolean BG_EvaluateConditions( int client, animScriptItem_t *scriptItem )
 {
 	int i;
+	qboolean matches;
 	animScriptCondition_t *cond;
 	
 	for (i=0, cond=scriptItem->conditions; i<scriptItem->numConditions; i++, cond++)
 	{
+		matches = qtrue;
 		switch (animConditionsTable[cond->index].type) {
 		case ANIM_CONDTYPE_BITFLAGS:
-			if (!(globalScriptData->clientConditions[client][cond->index][0] & cond->value[0]) &&
-				!(globalScriptData->clientConditions[client][cond->index][1] & cond->value[1])) {
-				return qfalse;
-			}
+			matches = (globalScriptData->clientConditions[client][cond->index][0] & cond->value[0]) ||
+				(globalScriptData->clientConditions[client][cond->index][1] & cond->value[1]);
 			break;
 		case ANIM_CONDTYPE_VALUE:
-			if (!(globalScriptData->clientConditions[client][cond->index][0] == cond->value[0])) {
-				return qfalse;
-			}
+			matches = globalScriptData->clientConditions[client][cond->index][0] == cond->value[0];
 			break;
     default: // TTimo NUM_ANIM_CONDTYPES not handled
       break;
 		}
+		if( matches == (cond->negate != qfalse) ) return qfalse;
 	}
 	//
 	// all conditions must have passed
@@ -1431,8 +1442,11 @@ int BG_AnimScriptAnimation( playerState_t *ps, animModelInfo_t *animModelInfo, s
 	animScriptCommand_t	*scriptCommand = NULL;
 	int					state = ps->aiState;
 
-	// Allow fallen movetype while dead
-	if( ps->eFlags & EF_DEAD && movetype != ANIM_MT_FALLEN && movetype != ANIM_MT_FLAILING )
+	/* Original 0x1e7f6..0x1e830: slot 22 is an unnamed exception.
+	 * Keep its numeric meaning; the original name table ends before it. */
+	if( ((ps->eFlags & EF_SPARE0) && movetype != 22) ||
+		((ps->eFlags & EF_DEAD) && movetype != ANIM_MT_FALLEN &&
+		 movetype != ANIM_MT_FLAILING && movetype != 22) )
 		return -1;
 
 #ifdef DBGANIMS
@@ -1495,7 +1509,7 @@ int	BG_AnimScriptCannedAnimation( playerState_t *ps, animModelInfo_t *animModelI
 	animScriptCommand_t	*scriptCommand;
 	scriptAnimMoveTypes_t movetype;
 
-	if( ps->eFlags & EF_DEAD )
+	if( ps->eFlags & (EF_DEAD | EF_SPARE0) )
 		return -1;
 
 	movetype = globalScriptData->clientConditions[ ps->clientNum ][ ANIM_COND_MOVETYPE ][0];
@@ -1531,7 +1545,9 @@ int	BG_AnimScriptEvent( playerState_t *ps, animModelInfo_t *animModelInfo, scrip
 	animScriptItem_t	*scriptItem;
 	animScriptCommand_t	*scriptCommand;
 
-	if( event != ANIM_ET_DEATH && ps->eFlags & EF_DEAD ) {
+	/* Original event dispatch permits both death events while dead or playing dead. */
+	if( event != ANIM_ET_DEATH && event != ANIM_ET_DEATH_FROM_BEHIND &&
+		(ps->eFlags & (EF_DEAD | EF_SPARE0)) ) {
 		return -1;
 	}
 
@@ -1792,6 +1808,11 @@ void BG_AnimUpdatePlayerStateConditions( pmove_t *pmove )
 		BG_UpdateConditionValue( ps->clientNum, ANIM_COND_WEAPON, ps->weapon, qtrue );
 		BG_ClearConditionBitFlag( ps->clientNum, ANIM_COND_GEN_BITFLAG, ANIM_BITFLAG_ZOOMING );
 	}
+
+	// Original Nitmod updates these scalar conditions from player state.
+	BG_UpdateConditionValue( ps->clientNum, ANIM_COND_PLAYERCLASS, ps->stats[STAT_PLAYER_CLASS], qtrue );
+	BG_UpdateConditionValue( ps->clientNum, ANIM_COND_HEALTH_LEVEL,
+		ps->stats[STAT_HEALTH] > 65 ? 3 : (ps->stats[STAT_HEALTH] > 32 ? 2 : 1), qtrue );
 
 	// MOUNTED
 	if (ps->eFlags & EF_MG42_ACTIVE || ps->eFlags & EF_MOUNTEDTANK) {

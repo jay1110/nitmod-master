@@ -1,18 +1,9 @@
 #include "ui_local.h"
 extern displayContextDef_t *DC;
 
-/* The ui_*GameType cvars store rows in gameTypes[], never protocol enum
- * values.  Keep description selection on the same catalog contract used by
- * host, vote and map-selection code. */
-static qboolean UI_DescriptionGameType(qboolean net, int *game, int *row) {
-    int selected=net ? ui_netGameType.integer : ui_gameType.integer;
-    if(!game || !row || uiInfo.numGameTypes<=0 || uiInfo.numGameTypes>MAX_GAMETYPES ||
-       selected<0 || selected>=uiInfo.numGameTypes) return qfalse;
-    *row=selected;
-    *game=uiInfo.gameTypes[selected].gtEnum;
-    return *game>=0 && *game<GT_MAX_GAME_TYPE;
-}
-
+/* Original ELF UI_DrawCampaignDescription (0x1e515) reads the raw
+ * ui_netGameType value, including for the local map panel. The description
+ * lookup at 0x1e929 searches gtEnum; this is not a catalog row lookup. */
 /* Shared original description layout: explicit breaks, last-word wrapping,
  * alignment and five-pixel leading. Bound long words before writing, and
  * always consume input even when a word cannot fit the requested width. */
@@ -59,12 +50,8 @@ void UI_DrawDescriptionText(const rectDef_t *rect, float scale, vec4_t color,
 void UI_DrawCampaignDescription(rectDef_t *rect, float scale, vec4_t color,
     float textX, float textY, int style, int align, qboolean net) {
     const char *text=NULL;
-    int game, row;
+    int game=ui_netGameType.integer;
     int index=net ? ui_currentNetMap.integer : ui_currentMap.integer;
-    if(!UI_DescriptionGameType(net,&game,&row)) {
-        UI_DrawDescriptionText(rect,scale,color,textX,0,style,align,"^1No text supplied",1);
-        return;
-    }
     if(game==GT_WOLF_CAMPAIGN) {
         if(uiInfo.campaignCount>=0 && uiInfo.campaignCount<=MAX_CAMPAIGNS &&
            index>=0 && index<uiInfo.campaignCount) text=uiInfo.campaignList[index].campaignDescription;
@@ -78,10 +65,16 @@ void UI_DrawCampaignDescription(rectDef_t *rect, float scale, vec4_t color,
 
 void UI_DrawGametypeDescription(rectDef_t *rect, float scale, vec4_t color,
     float textX, float textY, int style, int align, qboolean net) {
-    int game, row;
+    int row;
     const char *text="Unknown";
-    if(UI_DescriptionGameType(net,&game,&row) && uiInfo.gameTypes[row].gameTypeDescription)
-        text=uiInfo.gameTypes[row].gameTypeDescription;
+    if(uiInfo.numGameTypes<0 || uiInfo.numGameTypes>MAX_GAMETYPES) return;
+    for(row=0;row<uiInfo.numGameTypes;++row) {
+        if(uiInfo.gameTypes[row].gtEnum==ui_netGameType.integer) {
+            text=uiInfo.gameTypes[row].gameTypeDescription;
+            if(!text) return;
+            break;
+        }
+    }
     UI_DrawDescriptionText(rect,scale,color,textX,0,style,align,text,2);
 }
 
@@ -89,6 +82,13 @@ void UI_DrawCampaignMapDescription(rectDef_t *rect, float scale, vec4_t color,
     float textX, float textY, int style, int align, qboolean net, int number) {
     const char *text="No information is available for this region.";
     int index=net ? ui_currentNetCampaign.integer : ui_currentCampaign.integer;
+    /* Original 0x18543/0x18551 and 0x18808: repair a stale local
+     * campaign selection in both the cached cvar and the engine. */
+    if(!net && (index<0 || index>uiInfo.campaignCount)) {
+        index=0;
+        ui_currentCampaign.integer=0;
+        trap_Cvar_Set("ui_currentCampaign", "0");
+    }
     if(uiInfo.campaignCount>=0 && uiInfo.campaignCount<=MAX_CAMPAIGNS &&
        index>=0 && index<uiInfo.campaignCount && number>=0 && number<MAX_MAPS_PER_CAMPAIGN) {
         const campaignInfo_t *campaign=&uiInfo.campaignList[index];

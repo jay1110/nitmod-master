@@ -14,6 +14,12 @@ static int Total(int n,int index) {
     if(stats[n].ready && index<15) value+=(unsigned int)stats[n].values[index];
     return value<=INT_MAX ? (int)value : -1-(int)(UINT_MAX-value);
 }
+/* Original nitrox_SortByKDRatio uses global totals only after receipt. */
+int G_NITMOD_GlobalStatsKillDeath(int n,int *kills,int *deaths) {
+    if(n<0 || n>=MAX_CLIENTS || !stats[n].ready) return 0;
+    *kills=Total(n,0); *deaths=Total(n,1);
+    return 1;
+}
 void G_NITMOD_GlobalStatsEvent(int n,int statistic) {
     int i,total;
     if(!*endpoint || n<0 || n>=level.maxclients || n>=MAX_CLIENTS ||
@@ -76,7 +82,7 @@ void G_NITMOD_GlobalStatsUpload(int n) {
         memset(stats[n].local,0,sizeof(stats[n].local));stats[n].uploaded=1;
     }
 }
-void G_NITMOD_GlobalStatsShutdown(void) { int i;for(i=0;i<MAX_CLIENTS;++i) { G_NITMOD_GlobalStatsUpload(i);G_NITMOD_GlobalStatsReset(i); } *endpoint=0; }
+void G_NITMOD_GlobalStatsShutdown(void) { int i;for(i=0;i<MAX_CLIENTS;++i) { G_NITMOD_GlobalStatsUpload(i);G_NITMOD_GlobalStatsReset(i); } NITMOD_StatsShutdown(); *endpoint=0; }
 void G_NITMOD_GlobalStatsInit(void) {
     G_NITMOD_GlobalStatsShutdown();
     trap_Cvar_VariableStringBuffer("n_globalStatsBridge",endpoint,sizeof(endpoint));
@@ -98,20 +104,22 @@ void G_NITMOD_GlobalStatsRequest(int n,const char *guid) {
 }
 static int Parse(int n,char *packet,int *values,const char **raw) {
     char *p=packet,*end;int i;
-    if(strlen(packet)<34 || !isspace((unsigned char)packet[32])) return 0;
+    if(strlen(packet)<33 || !isspace((unsigned char)packet[32])) return 0;
     packet[32]=0;
     if(Q_stricmp(packet,stats[n].guid)) return 0;
     p=packet+33;*raw=p;
+    memset(values,0,15*sizeof(*values));
     for(i=0;i<15;++i) {
         long value;
         while(isspace((unsigned char)*p)) ++p;
-        if(!*p) return 0;
-        errno=0;value=strtol(p,&end,10);
-        if(end==p || errno==ERANGE || value<INT_MIN || value>INT_MAX || (*end && !isspace((unsigned char)*end))) return 0;
+        if(!*p) break;
+        /* Original master reply uses sscanf %i (automatic numeric base). */
+        errno=0;value=strtol(p,&end,0);
+        if(end==p) break;
+        if(errno==ERANGE || value<INT_MIN || value>INT_MAX) return 0;
         values[i]=(int)value;p=end;
     }
-    while(isspace((unsigned char)*p)) ++p;
-    return !*p;
+    return 1;
 }
 void G_NITMOD_GlobalStatsFrame(void) {
     int n;
@@ -125,15 +133,22 @@ void G_NITMOD_GlobalStatsFrame(void) {
     }
 }
 int G_NITMOD_GlobalStatsCommand(int client,const char *command) {
-    char arg[32],message[256];int target=0,i;
+    char arg[256],message[256];int target,i;long long parsed;
     if(Q_stricmp(command,"ggs")) return 0;
-    if(client<0 || client>=level.maxclients || trap_Argc()!=2) return 1;
-    trap_Argv(1,arg,sizeof(arg));if(!*arg) return 1;
-    for(i=0;arg[i];++i) { if(arg[i]<'0' || arg[i]>'9') return 1; target=target*10+arg[i]-'0';if(target>=MAX_CLIENTS) return 1; }
+    /* Original 0x61659..0x61661 ignores ggs while stats are disabled. */
+    if(!*endpoint || client<0 || client>=level.maxclients) return 1;
+    /* Original 0x61682..0x616a1: decimal strtol then unsigned slot bound. */
+    trap_Argv(1,arg,sizeof(arg));
+    parsed=strtoll(arg,NULL,10);
+    if(parsed<0 || parsed>=MAX_CLIENTS) return 1;
+    target=(int)parsed;
     if(target>=level.maxclients || !g_entities[target].client || (g_entities[target].r.svFlags&SVF_BOT)) {
         trap_SendServerCommand(client,"glstats 0 NR\n");return 1;
     }
     Com_sprintf(message,sizeof(message),"glstats %i",stats[target].awards);
-    for(i=0;i<15;++i) Q_strcat(message,sizeof(message),va(" %i",Total(target,i)));
+    /* Original array at 0x2b8922c holds LOCAL upload counters; client
+     * +0xb48 holds received totals. Before ready, send local counters only. */
+    for(i=0;i<15;++i) Q_strcat(message,sizeof(message),
+        va(" %i",Total(target,i)));
     Q_strcat(message,sizeof(message),"\n");trap_SendServerCommand(client,message);return 1;
 }

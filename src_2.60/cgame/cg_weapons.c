@@ -517,9 +517,11 @@ CG_GetWindVector
 ==========================
 */
 void CG_GetWindVector(vec3_t dir) {
-	dir[0] = random()*0.25;
-	dir[1] = cgs.smokeWindDir; // simulate a little wind so it looks natural
-	dir[2] = random(); // one direction (so smoke goes side-like)
+	/* Original cgame 0xc3980: wind varies with client time, including
+	 * demo playback. Keep the two random draws and round only at stores. */
+	dir[0] = (float)((double)(rand() & 0x7fff) / 32767.0 * 0.25);
+	dir[1] = (float)sin((double)cg.time * 0.00001);
+	dir[2] = (float)((double)(rand() & 0x7fff) / 32767.0);
 	VectorNormalize(dir);
 }
 // jpw
@@ -2535,7 +2537,18 @@ void CG_AddPlayerWeapon( refEntity_t *parent, playerState_t *ps, centity_t *cent
 				}
 			}
 		}
-		CG_AddWeaponWithPowerups( &gun, cent->currentState.powerups, ps, cent );
+		{
+			refEntity_t bloodGun = gun;
+			CG_AddWeaponWithPowerups( &gun, cent->currentState.powerups, ps, cent );
+			/* Original 0xcb514: overlay uses the unmodified base weapon entity. */
+			if( NITMOD_UsesNitmodHud() && weaponNum == WP_KNIFE && cg.nitmodKnifeBlood ) {
+				int stage = cg.nitmodKnifeBlood > 200 ? 4 :
+					cg.nitmodKnifeBlood > 150 ? 3 : cg.nitmodKnifeBlood > 100 ? 2 :
+					cg.nitmodKnifeBlood > 50 ? 1 : 0;
+				bloodGun.customShader = weapon->modModels[stage];
+				trap_R_AddRefEntityToScene( &bloodGun );
+			}
+		}
 	}
 	
 	if( (!ps || cg.renderingThirdPerson) &&
@@ -6064,6 +6077,12 @@ qboolean CG_CalcMuzzlePoint( int entityNum, vec3_t muzzle ) {
 			} else {
 				VectorMA( muzzle, 14, forward, muzzle );
 			}
+			/* Original local muzzle uses snapshot lean, not predicted lean. */
+			if(NITMOD_UsesNitmodHud() && cg.snap->ps.leanf != 0) {
+				AngleVectors(cg.snap->ps.viewangles, NULL, right, NULL);
+				VectorMA(muzzle, cg.snap->ps.leanf, right, muzzle);
+				muzzle[2] -= (float)fabs((double)cg.snap->ps.leanf / 3.5);
+			}
 		}
 		return qtrue;
 	}
@@ -6149,6 +6168,12 @@ qboolean CG_CalcMuzzlePoint( int entityNum, vec3_t muzzle ) {
 		} else {
 			muzzle[2] += DEFAULT_VIEWHEIGHT;
 			VectorMA( muzzle, 14, forward, muzzle );
+			/* Original remote standing muzzle uses interpolated player lean. */
+			if(NITMOD_UsesNitmodHud() && cent->nitmodLean.amount != 0) {
+				AngleVectors(cent->lerpAngles, NULL, right, NULL);
+				VectorMA(muzzle, cent->nitmodLean.amount, right, muzzle);
+				muzzle[2] -= (float)fabs((double)cent->nitmodLean.amount / 3.5);
+			}
 		}
 	}
 
@@ -6418,6 +6443,17 @@ void CG_Bullet( vec3_t end, int sourceEntityNum, vec3_t normal, qboolean flesh, 
 				VectorSubtract( end, start, dir );
 				VectorNormalizeFast( dir );
 				VectorMA( end, 4, dir, end );
+
+				/* Original CG_Bullet 0xd38a6..0xd394c: the server already
+				 * supplies waterfraction. This branch traces solid/corpse
+				 * surfaces once, without living-player or water interception. */
+				if(NITMOD_UsesNitmodHud()) {
+					CG_Trace(&trace, start, NULL, NULL, end, 0,
+					         CONTENTS_SOLID | CONTENTS_CORPSE);
+					VectorSubtract(vec3_origin, dir, dir);
+					CG_MissileHitWall(fromweap, 1, trace.endpos, dir, trace.surfaceFlags);
+					return;
+				}
 
 				//CG_RailTrail2( NULL, start, end );
 

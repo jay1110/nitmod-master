@@ -39,49 +39,66 @@ static float CG_NitmodMessageAlpha(double start) {
     return remaining >= FADE_TIME ? 1 : (float)(remaining / FADE_TIME);
 }
 
+/* Preserve the original announcement/centerprint coupling (ELF 0x46190,
+ * 0x3dfb0), including its persistent announcement timestamp after expiry. */
+static int CG_NitmodAnnouncementSigned(unsigned int value) {
+    return value <= INT_MAX ? (int)value : -1 - (int)(UINT_MAX - value);
+}
+
+static float CG_NitmodAnnouncementAlpha(void) {
+    double durationValue = (double)cg_centertime.value * 1000.0;
+    int duration = durationValue >= INT_MIN && durationValue < (double)INT_MAX + 1.0
+        ? (int)durationValue : INT_MIN;
+    int start = (int)nitmodAnnouncement.start;
+    int elapsed = CG_NitmodAnnouncementSigned((unsigned int)cg.time - (unsigned int)start);
+    int remaining;
+    if(!start || elapsed >= duration) return 0;
+    remaining = CG_NitmodAnnouncementSigned((unsigned int)duration - (unsigned int)elapsed);
+    return remaining < FADE_TIME ? (float)((double)remaining / FADE_TIME) : 1;
+}
+
 const char *CG_NitmodAnnouncementText(void) {
-    if(nitmodAnnouncement.active && !CG_NitmodMessageAlpha(nitmodAnnouncement.start))
-        nitmodAnnouncement.active = qfalse;
-    return nitmodAnnouncement.active ? nitmodAnnouncement.text : "";
+    return nitmodAnnouncement.start ? nitmodAnnouncement.text : "";
 }
 
 void CG_NitmodPrintAnnouncement(const char *text, int y, int charWidth, int priority) {
-    int i;
+    int i, length;
     qboolean wrap = qfalse;
-    if(!text || charWidth < 1 || charWidth > 64) return;
-    CG_NitmodAnnouncementText();
-    if(priority < 0 && nitmodAnnouncement.active) return;
+    if(!text) return;
+    if(priority < 0 && nitmodAnnouncement.start) return;
     Q_strncpyz(nitmodAnnouncement.text, text, sizeof(nitmodAnnouncement.text));
-    nitmodAnnouncement.lines = 1;
-    for(i = 0; nitmodAnnouncement.text[i]; ++i) {
+    length = strlen(nitmodAnnouncement.text);
+    for(i = 0; i < length; ++i) {
         if(i > 0 && i % 36 == 0) wrap = qtrue;
-        if(wrap && nitmodAnnouncement.text[i] == ' ') { nitmodAnnouncement.text[i] = '\n'; wrap = qfalse; }
-        if(nitmodAnnouncement.text[i] == '\n') ++nitmodAnnouncement.lines;
+        if(wrap && cg.centerPrint[i] == ' ') { cg.centerPrint[i] = '\n'; wrap = qfalse; }
     }
+    nitmodAnnouncement.lines = 1;
+    for(i = 0; i < length; ++i)
+        if(nitmodAnnouncement.text[i] == '\n') ++cg.centerPrintLines;
     nitmodAnnouncement.y = y; nitmodAnnouncement.charWidth = charWidth;
-    nitmodAnnouncement.start = (double)cg.time + 2000;
+    nitmodAnnouncement.start = CG_NitmodAnnouncementSigned((unsigned int)cg.time + 2000u);
     nitmodAnnouncement.active = qtrue;
 }
 
-/* Two distinct original channels. Never let announce replace a centerprint. */
 void CG_NitmodDrawAnnouncement(void) {
     const char *cursor = CG_NitmodAnnouncementText();
     char line[57];
-    float y, x;
-    int length;
+    int y, x, length;
     vec4_t color = {1, 1, 1, 1};
     nitmodHudAnchor_t previous;
-    if(!NITMOD_UsesNitmodHud() || !*cursor) return;
-    color[3] = CG_NitmodMessageAlpha(nitmodAnnouncement.start);
-    y = nitmodAnnouncement.y - nitmodAnnouncement.lines * 8.f;
+    if(!NITMOD_UsesNitmodHud() || !nitmodAnnouncement.start) return;
     previous = CG_NitmodHudAnchor(NITMOD_HUD_CENTER);
+    color[3] = CG_NitmodAnnouncementAlpha();
+    if(!color[3]) { cg.centerPrintTime = 0; CG_NitmodHudAnchor(previous); return; }
+    trap_R_SetColor(color);
+    y = nitmodAnnouncement.y - nitmodAnnouncement.lines * 8;
     do {
         for(length = 0; length < 56 && cursor[length] && cursor[length] != '\n'; ++length) line[length] = cursor[length];
         line[length] = 0;
-        x = (640 - CG_DrawStrlen(line) * nitmodAnnouncement.charWidth) * .5f;
-        CG_DrawStringExt((int)x, (int)y, line, color, qfalse, qtrue,
-            nitmodAnnouncement.charWidth, (int)(nitmodAnnouncement.charWidth * 1.5f), 0);
-        y += nitmodAnnouncement.charWidth * 1.5f;
+        x = (int)((640.0 - CG_DrawStrlen(line) * (double)nitmodAnnouncement.charWidth) * .5);
+        CG_DrawStringExt(x, y, line, color, qfalse, qtrue,
+            cg.centerPrintCharWidth, (int)(cg.centerPrintCharWidth * 1.5), 0);
+        y = (int)(y + nitmodAnnouncement.charWidth * 1.5);
         while(*cursor && *cursor != '\n') ++cursor;
         if(!*cursor) break;
         ++cursor;
@@ -510,9 +527,9 @@ void CG_NitmodDrawActivePowerups(void) {
             ps->persistant[PERS_TEAM] == TEAM_AXIS ? statusUniformAllies : statusUniformAxis);
         disguiseClass = (ps->powerups[PW_OPS_CLASS_1] != 0) | ((ps->powerups[PW_OPS_CLASS_2] != 0) << 1) |
             ((ps->powerups[PW_OPS_CLASS_3] != 0) << 2);
-        if(disguiseClass < NUM_PLAYER_CLASSES)
-            CG_DrawStringExt(578, 390, BG_ShortClassnameForNumber(disguiseClass),
-                colorWhite, qfalse, qtrue, 4, 12, 0);
+        /* Original 0x4878e also displays the class helper's fallback for 5..7. */
+        CG_DrawStringExt(578, 390, BG_ShortClassnameForNumber(disguiseClass),
+            colorWhite, qfalse, qtrue, 4, 12, 0);
     }
     if(ps->stats[1] & 64) CG_DrawPic(560, 409, 15, 15, statusBinoculars);
     if(!(ps->eFlags & EF_HEADSHOT)) CG_DrawPic(580, 410, 15, 15, statusHelmet);
@@ -584,6 +601,10 @@ static void SpecialStart(const char *text, float r, float g, float b, int xp) {
     Q_strncpyz(specialText, text, sizeof(specialText));
     Vector4Set(specialColor, r, g, b, 1);
     specialStart = cg.time; specialXP = xp;
+}
+
+void CG_NitmodObjectiveAnnouncement(const char *text) {
+    SpecialStart(text, 1, 1, 1, 0);
 }
 
 qboolean CG_NitmodSpecialAnnouncement(int type, int xp) {

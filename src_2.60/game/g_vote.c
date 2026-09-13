@@ -125,6 +125,13 @@ static const vote_reference_t aVoteInfo[] = {
 	{ 0, 0, NULL, 0 }
 };
 
+void G_NITMOD_TeamVoteUsage(gentity_t *ent,unsigned int index,const char *arg,qboolean referee) {
+    if(index>=sizeof(aVoteInfo)/sizeof(aVoteInfo[0]) || !aVoteInfo[index].pszVoteHelp) return;
+    G_refPrintf(ent,"Usage: ^3%s %s%s\n",referee ? "\\ref" : "\\callvote",
+        arg,aVoteInfo[index].pszVoteHelp);
+}
+
+
 
 // Checks for valid custom callvote requests from the client.
 int G_voteCmdCheck(gentity_t *ent, char *arg, char *arg2, qboolean fRefereeCmd)
@@ -819,7 +826,7 @@ int G_ShuffleTeams_v(gentity_t *ent, unsigned int dwVoteIndex, char *arg, char *
 	// Vote action (vote has passed)
 	} else {
 		// Swap the teams!
-		Svcmd_ShuffleTeams_f();
+		Svcmd_ShuffleTeamsXP_f();
 	}
 
 	return(G_OK);

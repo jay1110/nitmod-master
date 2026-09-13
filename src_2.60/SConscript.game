@@ -144,6 +144,10 @@ local_env = g_env.Copy()
 
 local_env.Append( CPPDEFINES = [ 'GAMEDLL' ] )
 
+# Native statistics bridge uses the Windows HTTP system library.
+if g_os == 'win32':
+    local_env.Append( LIBS = [ 'winhttp' ] )
+
 local_env['LINK'] = local_env['CC']
 
 source_list = botai_list

@@ -721,7 +721,8 @@ static void CG_Item( centity_t *cent ) {
 			ent.nonNormalizedAxes = qtrue;
 
 		} else {								// then default to laying it on it's side
-			if( weaponInfo->droppedAnglesHack ) {
+			if( weaponInfo->droppedAnglesHack &&
+                (es->pos.trType == TR_STATIONARY || es->pos.trType == TR_GRAVITY_PAUSED) ) {
 				cent->lerpAngles[2] += 90;
 			}
 

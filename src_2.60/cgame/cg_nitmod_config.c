@@ -555,31 +555,47 @@ static int nitmodBannerTime;
 /* Original CG_BannerPrint: escaped newlines, soft wrap at 55 visible
  * characters and a hard word break at 65. Color escapes have zero width. */
 void NITMOD_FormatBanner(const char *text, char *out, int size) {
+	char source[1024];
 	int used = 0, visible = 0;
+	int scanned = 0, scanLimit;
+	qboolean pendingBreak = qfalse;
 	if(!out || size <= 0) return;
 	if(!text) text = "";
-	while(*text && used < size - 1) {
+	/* Original CG_BannerPrint 0x49371..0x493aa truncates before replacing
+	 * escaped newlines and inserting breaks, not only at output time. */
+	Q_strncpyz(source, text, sizeof(source));
+	text = source;
+	scanLimit = (int)strlen(source);
+	if(size > sizeof(source)) size = sizeof(source);
+	/* Original keeps the initial byte count as its scan limit even when
+	 * inserting breaks (0x49503..0x49509). Preserve the unscanned tail. */
+	while(*text && used < size - 1 && scanned < scanLimit) {
+		++scanned;
 		if(*text == '\n' || (text[0] == '\\' && text[1] == 'n')) {
 			text += *text == '\n' ? 1 : 2;
-			out[used++] = '\n'; visible = 0;
+			/* Original CG_BannerPrint counts the break as the first column
+			 * of the following line (0x49580/0x495e0). */
+			out[used++] = '\n'; visible = 1;
 			continue;
 		}
-		if(Q_IsColorString(text)) {
+		/* Original scans each byte, subtracting the two colour bytes at
+		 * the caret. A pending word break survives intervening colours. */
+		if(Q_IsColorString(text)) visible -= 2;
+		if(visible > 0 && visible % 55 == 0) pendingBreak = qtrue;
+		if(*text == ' ' && pendingBreak) {
+			out[used++] = '\n'; ++text; visible = 1;
+			pendingBreak = qfalse;
+			continue;
+		}
+		if(visible > 0 && visible % 65 == 0) {
 			if(size - used < 3) break;
-			out[used++] = *text++; out[used++] = *text++;
+			out[used++] = '\n'; visible = 1;
+			pendingBreak = qfalse;
 			continue;
-		}
-		if(visible >= 55 && *text == ' ') {
-			out[used++] = '\n'; ++text; visible = 0;
-			continue;
-		}
-		if(visible >= 65) {
-			/* Keep room for the character as well as the inserted break. */
-			if(size - used < 3) break;
-			out[used++] = '\n'; visible = 0;
 		}
 		out[used++] = *text++; ++visible;
 	}
+	while(*text && used < size - 1) out[used++] = *text++;
 	out[used] = 0;
 }
 /* Original G_UpdateSvCvars/CG_UpdateSvCvars uses a single InfoString:
@@ -708,9 +724,10 @@ static void NITMOD_ForceCvarCommand(void) {
 	static const char *protectedNames[] = { "cl_profile", "x", "name", "sensitivity", "n_guid" };
 	char name[256], value[256];
 	int i;
-	if(cg.demoPlayback || trap_Argc() != 3 || nitmodForcedCvarCount >= 64) return;
-	if(!*CG_Argv(1) || strlen(CG_Argv(1)) >= sizeof(name) || strlen(CG_Argv(2)) >= sizeof(value)) return;
+	if(cg.demoPlayback || trap_Argc() < 3 || nitmodForcedCvarCount >= 64) return;
+	if(!*CG_Argv(1) || strlen(CG_Argv(1)) >= sizeof(name)) return;
 	Q_strncpyz(name, CG_Argv(1), sizeof(name));
+	/* Original 0xaa2ef..0xaa30a copies at most 255 value bytes. */
 	Q_strncpyz(value, CG_Argv(2), sizeof(value));
 	for(i = 0; name[i]; ++i) {
 		unsigned char c = name[i];
@@ -792,15 +809,16 @@ qboolean NITMOD_DisplayCommand(const char *command) {
 		return qtrue;
 	}
 	if(!strcmp(command, "gsnd")) {
-		char path[MAX_QPATH];
+		const char *path;
 		sfxHandle_t sound;
-		if(trap_Argc() != 2 || !cg.snap || cg.snap->ps.clientNum < 0 ||
+		if(trap_Argc() < 2 || !cg.snap || cg.snap->ps.clientNum < 0 ||
 			cg.snap->ps.clientNum >= MAX_CLIENTS) return qtrue;
 		trap_Cvar_Update(&cg_noGreetingSounds);
 		if(cg_noGreetingSounds.integer) return qtrue;
-		/* Do not truncate server paths into a different asset name. */
-		if(!*CG_Argv(1) || strlen(CG_Argv(1)) >= sizeof(path)) return qtrue;
-		Q_strncpyz(path, CG_Argv(1), sizeof(path));
+		/* Original 0xaa89d..0xaa8b4 passes argv(1) directly to the engine.
+		 * No client-side MAX_QPATH truncation or extra-argument rejection. */
+		path = CG_Argv(1);
+		if(!*path) return qtrue;
 		sound = trap_S_RegisterSound(path, qfalse);
 		if(sound > 0) trap_S_StartSound(NULL, cg.snap->ps.clientNum, CHAN_VOICE, sound);
 		return qtrue;
@@ -815,7 +833,12 @@ qboolean NITMOD_DisplayCommand(const char *command) {
 		return qtrue;
 	}
 	if(!strcmp(command, "bp")) {
-		if(trap_Argc() != 3 || !NITMOD_ParseProtocolInteger(CG_Argv(1), &kind) || kind < 0 || kind > 2) return qtrue;
+		long bannerPosition;
+		/* Original CG_ServerCommand 0xa9772 parses a decimal prefix and
+		 * ignores extra arguments. Check before narrowing on 64-bit hosts. */
+		bannerPosition = strtol(CG_Argv(1), NULL, 10);
+		if(bannerPosition < 0 || bannerPosition > 2) return qtrue;
+		kind = (int)bannerPosition;
 		trap_Cvar_Update(&cg_drawBanners);
 		if(!cg_drawBanners.integer) return qtrue;
 		if(kind == 2) {
@@ -835,16 +858,19 @@ qboolean NITMOD_DisplayCommand(const char *command) {
 qboolean NITMOD_KDCommand(const char *command) {
 	int count, start, i, kills[MAX_CLIENTS], deaths[MAX_CLIENTS];
 	if(!command || (strcmp(command, "kd0") && strcmp(command, "kd1"))) return qfalse;
-	start = !strcmp(command, "kd0") ? 0 : nitmodKDCursor;
-	if(!NITMOD_ParseProtocolInteger(CG_Argv(1), &count) || count < 0 || count > MAX_CLIENTS ||
+	/* Original 0xf39f8..0xf3a06 resets before parsing the count. */
+	if(!strcmp(command, "kd0")) nitmodKDCursor = 0;
+	start = nitmodKDCursor;
+	count = NITMOD_ParseOriginalDecimal32(CG_Argv(1));
+	if(count < 0 || count > MAX_CLIENTS ||
 		start < 0 || start > cg.numScores || count > cg.numScores - start ||
-		start + count > MAX_CLIENTS || trap_Argc() != 2 + count * 3) return qtrue;
+		start + count > MAX_CLIENTS || trap_Argc() < 2 + count * 3) return qtrue;
 	for(i = 0; i < count; ++i) {
 		int client = cg.scores[start + i].client;
 		/* Original consumes only kills/deaths at 3+3*i, 4+3*i and uses score order. */
-		if(client < 0 || client >= MAX_CLIENTS ||
-			!NITMOD_ParseProtocolSigned(CG_Argv(3 + i * 3), &kills[i]) ||
-			!NITMOD_ParseProtocolSigned(CG_Argv(4 + i * 3), &deaths[i])) return qtrue;
+		if(client < 0 || client >= MAX_CLIENTS) return qtrue;
+		kills[i] = NITMOD_ParseOriginalDecimal32(CG_Argv(3 + i * 3));
+		deaths[i] = NITMOD_ParseOriginalDecimal32(CG_Argv(4 + i * 3));
 	}
 	for(i = 0; i < count; ++i) {
 		clientInfo_t *client = &cgs.clientinfo[cg.scores[start + i].client];
@@ -1428,7 +1454,8 @@ static const char *NITMOD_ObjectiveName( int objective ) {
 }
 
 void NITMOD_ObjectiveEventCommand( void ) {
-	const char *verb;
+	const char *verb = NULL;
+	popupMessageType_t popupType = PM_MESSAGE;
 	const char *actorName;
 	const char *objectiveName;
 	char message[MAX_STRING_CHARS];
@@ -1447,13 +1474,14 @@ void NITMOD_ObjectiveEventCommand( void ) {
 	objectiveName = NITMOD_ObjectiveName( nitmodLastObjectiveEvent.objective );
 
 	if ( nitmodLastObjectiveEvent.type == 0 ) {
+		popupType = PM_DYNAMITE;
 		switch ( nitmodLastObjectiveEvent.detail ) {
 		case 0: verb = "Dynamite Planted"; break;
 		case 1: verb = "Dynamite Defused"; break;
 		default: return;
 		}
-		Com_sprintf( message, sizeof( message ), "%s %s ^gby ^7%s", verb,
-			objectiveName ? objectiveName : "Objective", actorName );
+		Com_sprintf( message, sizeof( message ), "%s %s ^gby ^7%s", nitmodLastObjectiveEvent.detail == 0 ? "^gPlanted at" : "^gDefused at",
+			objectiveName ? objectiveName : "", actorName );
 	} else if ( nitmodLastObjectiveEvent.type == 4 ) {
 		switch ( nitmodLastObjectiveEvent.detail ) {
 		case 2: verb = "Objective Constructed"; break;
@@ -1462,15 +1490,25 @@ void NITMOD_ObjectiveEventCommand( void ) {
 		default: return;
 		}
 		Com_sprintf( message, sizeof( message ), "^g%s %s ^7%s",
-			objectiveName ? objectiveName : "Objective", verb, actorName );
+			objectiveName ? objectiveName : "", nitmodLastObjectiveEvent.detail == 2 ? "^gconstructed by" : nitmodLastObjectiveEvent.detail == 3 ? "^gdestroyed by" : "^gdamaged by", actorName );
 	} else if ( nitmodLastObjectiveEvent.type == 9 || nitmodLastObjectiveEvent.type == 10 ) {
-		Com_sprintf( message, sizeof( message ), "^7%s ^gcaptured the Flag!", actorName );
+		popupType = (popupMessageType_t)nitmodLastObjectiveEvent.type;
+		Com_sprintf( message, sizeof( message ), "%s ^gcaptured the Flag!", actorName );
 	} else {
 		return;
 	}
 
-	CG_AddPMItem( PM_MESSAGE, message, cgs.media.voiceChatShader );
-	CG_Printf( "%s\n", message );
+	if(verb && nitmodLastObjectiveEvent.actor == cg.clientNum)
+		CG_NitmodObjectiveAnnouncement(verb);
+	CG_AddPMItem(popupType, message, cgs.media.pmImages[popupType]);
+	if(nitmodLastObjectiveEvent.type == 0) {
+		const char *sound;
+		if(nitmodLastObjectiveEvent.detail == 0)
+			sound = nitmodLastObjectiveEvent.meansOfDeath == TEAM_AXIS ? "axis_hq_dynamite_planted" : "allies_hq_dynamite_planted";
+		else
+			sound = nitmodLastObjectiveEvent.meansOfDeath == TEAM_AXIS ? "axis_hq_dynamite_defused" : "allies_hq_dynamite_defused";
+		CG_SoundPlaySoundScript(sound, NULL, -1, qtrue);
+	}
 }
 
 /* Negotiated transport uses the same typed receiver as original event 101. */

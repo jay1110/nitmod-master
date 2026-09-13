@@ -244,18 +244,20 @@ void CG_FragmentBounceSound( localEntity_t *le, trace_t *trace ) {
 	switch( le->leBounceSoundType ) {
 		// Gordon: adding machinegun brass bouncy sound for tk
 		case LEBS_BRASS:
+		case LEBS_SHOTGUN_BRASS: {
+			int surface;
+			sfxHandle_t sound;
 			rnd = rand() % 3;
-
-			if(trace->surfaceFlags & SURF_METAL) {
-				trap_S_StartSoundVControl( trace->endpos, -1, CHAN_AUTO, cgs.media.sfx_brassSound[BRASSSOUND_METAL][rnd], 64 );
-			} else if(trace->surfaceFlags & SURF_WOOD) {
-				trap_S_StartSoundVControl( trace->endpos, -1, CHAN_AUTO, cgs.media.sfx_brassSound[BRASSSOUND_WOOD][rnd], 64 );
-			} else if(trace->surfaceFlags & (SURF_GRAVEL|SURF_SNOW|SURF_CARPET|SURF_GRASS)) {
-				trap_S_StartSoundVControl( trace->endpos, -1, CHAN_AUTO, cgs.media.sfx_brassSound[BRASSSOUND_SOFT][rnd], 64 );
-			} else {
-				trap_S_StartSoundVControl( trace->endpos, -1, CHAN_AUTO, cgs.media.sfx_brassSound[BRASSSOUND_STONE][rnd], 64 );
-			}
+			if(trace->surfaceFlags & SURF_METAL) surface = BRASSSOUND_METAL;
+			else if(trace->surfaceFlags & SURF_WOOD) surface = BRASSSOUND_WOOD;
+			else if(trace->surfaceFlags & (SURF_GRAVEL|SURF_SNOW|SURF_CARPET|SURF_GRASS)) surface = BRASSSOUND_SOFT;
+			else surface = BRASSSOUND_STONE;
+			/* Original 0x7d600 handles distinct casing banks, both at volume 96. */
+			sound = le->leBounceSoundType == LEBS_SHOTGUN_BRASS
+				? cgs.media.sfx_shotgunBrassSound[surface][rnd] : cgs.media.sfx_brassSound[surface][rnd];
+			trap_S_StartSoundVControl(trace->endpos, -1, CHAN_AUTO, sound, 96);
 			break;
+		}
 		case LEBS_ROCK:
 			rnd = rand() % 3;
 
@@ -285,12 +287,15 @@ void CG_ReflectVelocity( localEntity_t *le, trace_t *trace ) {
 	int		hitTime;
 
 	// reflect the velocity on the trace plane
-	hitTime = cg.time - cg.frametime + cg.frametime * trace->fraction;
+	/* Preserve the original intermediate precision until integer truncation. */
+	hitTime = (int)(cg.time - cg.frametime + cg.frametime * (double)trace->fraction);
 	BG_EvaluateTrajectoryDelta( &le->pos, hitTime, velocity, qfalse, -1 );
 	dot = DotProduct( velocity, trace->plane.normal );
 	VectorMA( velocity, -2*dot, trace->plane.normal, le->pos.trDelta );
 
 	VectorScale( le->pos.trDelta, le->bounceFactor, le->pos.trDelta );
+	/* Original CG_ReflectVelocity also damps angular velocity. */
+	VectorScale( le->angles.trDelta, le->bounceFactor, le->angles.trDelta );
 
 	VectorCopy( trace->endpos, le->pos.trBase );
 	le->pos.trTime = cg.time;
@@ -298,19 +303,30 @@ void CG_ReflectVelocity( localEntity_t *le, trace_t *trace ) {
 
 	// check for stop, making sure that even on low FPS systems it doesn't bobble
 
-	if (le->leMarkType == LEMT_BLOOD && trace->startsolid) {
-			//centity_t *cent;
-			//cent = &cg_entities[trace->entityNum];
-			//if (cent && cent->currentState.apos.trType != TR_STATIONARY)
-			//	le->pos.trType = TR_STATIONARY;
-	} else if ( trace->allsolid || ( trace->plane.normal[2] > 0 && ( le->pos.trDelta[2] < 40 || le->pos.trDelta[2] < -cg.frametime * le->pos.trDelta[2] ) ) ) {
-//----(SA)	if it's a fragment and it's not resting on the world...
-//			if(le->leType == LE_DEBRIS && trace->entityNum < (MAX_ENTITIES - 1))
-			if(le->leType == LE_FRAGMENT && trace->entityNum < (MAX_ENTITIES - 1)) {
-				le->pos.trType = TR_GRAVITY_PAUSED;
+	if ( trace->allsolid || ( trace->plane.normal[2] > 0 && ( le->pos.trDelta[2] < 40 || le->pos.trDelta[2] < -cg.frametime * le->pos.trDelta[2] ) ) ) {
+		/* Original pauses fragments only on entities below ENTITYNUM_WORLD. */
+		if (le->leType == LE_FRAGMENT && trace->entityNum < ENTITYNUM_WORLD) {
+			le->pos.trType = TR_GRAVITY_PAUSED;
+		} else {
+			le->pos.trType = TR_STATIONARY;
+		}
+		/* Original CG_ReflectVelocity: align body accessories after settling. */
+		if ((le->effectFlags & 2) && le->refEntity.hModel) {
+			vec3_t mins, maxs;
+			float radius, pitch;
+
+			trap_R_ModelBounds(le->refEntity.hModel, mins, maxs);
+			radius = RadiusFromBounds(mins, maxs);
+			vectoangles(trace->plane.normal, le->angles.trBase);
+			pitch = le->angles.trBase[0] + 90.f;
+			if (pitch > 0.f && pitch < 50.f) {
+				le->pos.trBase[2] -= tan((double)pitch * 3.141592653589793 / 180.0) * radius;
+				le->angles.trBase[0] = pitch + 90.f;
 			} else {
-				le->pos.trType = TR_STATIONARY;
+				le->angles.trBase[0] = 90.f;
 			}
+			AnglesToAxis(le->angles.trBase, le->refEntity.axis);
+		}
 	}
 }
 
@@ -576,8 +592,7 @@ void CG_AddFragment( localEntity_t *le ) {
 			CG_FreeLocalEntity( le );
 			return;
 		} else {
-#if 0
-			// FIXME: re-add gibmodel support?
+/* Original CG_AddFragment: split body fragments on contact. */
 			clientInfo_t		*ci;
 			int					clientNum;
 			localEntity_t		*nle;
@@ -615,7 +630,7 @@ void CG_AddFragment( localEntity_t *le ) {
 			}
 			// we're done
 			CG_FreeLocalEntity( le );
-#endif // 0
+
 			return;
 		}
 	}
@@ -1032,6 +1047,23 @@ These only do simple scaling or modulation before passing to the renderer
 CG_AddFadeRGB
 ====================
 */
+/* Original local-effect dispatcher (0x7fd88..0x80325): truncate to a
+ * signed 16-bit integer, then copy its low byte. FISTP's indefinite result
+ * is 0x8000 for NaN/infinity/overflow, so these produce a zero color byte. */
+static byte CG_LocalEffectColorByte(double component) {
+	return component > -32769.0 && component < 32768.0
+		? (byte)(int)component : 0;
+}
+
+/* Original CG_AddConstRGB (0x7f970): retain RGBA until expiry. */
+static void CG_AddConstRGB( localEntity_t *le ) {
+	int i;
+	for (i = 0; i < 4; ++i) {
+		le->refEntity.shaderRGBA[i] = CG_LocalEffectColorByte((double)le->color[i] * 255.0);
+	}
+	trap_R_AddRefEntityToScene(&le->refEntity);
+}
+
 void CG_AddFadeRGB( localEntity_t *le ) {
 	refEntity_t *re;
 	float c;
@@ -1041,10 +1073,10 @@ void CG_AddFadeRGB( localEntity_t *le ) {
 	c = ( le->endTime - cg.time ) * le->lifeRate;
 	c *= 0xff;
 
-	re->shaderRGBA[0] = le->color[0] * c;
-	re->shaderRGBA[1] = le->color[1] * c;
-	re->shaderRGBA[2] = le->color[2] * c;
-	re->shaderRGBA[3] = le->color[3] * c;
+	re->shaderRGBA[0] = CG_LocalEffectColorByte((double)le->color[0] * c);
+	re->shaderRGBA[1] = CG_LocalEffectColorByte((double)le->color[1] * c);
+	re->shaderRGBA[2] = CG_LocalEffectColorByte((double)le->color[2] * c);
+	re->shaderRGBA[3] = CG_LocalEffectColorByte((double)le->color[3] * c);
 
 	trap_R_AddRefEntityToScene( re );
 }
@@ -1076,7 +1108,7 @@ static void CG_AddMoveScaleFade( localEntity_t *le ) {
 	// Ridah, spark
 	if ( !( le->leFlags & LEF_NOFADEALPHA ) )
 	// done.
-	re->shaderRGBA[3] = 0xff * c * le->color[3];
+	re->shaderRGBA[3] = CG_LocalEffectColorByte(255.0 * c * le->color[3]);
 
 	if ( !( le->leFlags & LEF_PUFF_DONT_SCALE ) ) {
 		c = ( le->endTime - cg.time ) * le->lifeRate;
@@ -1118,7 +1150,7 @@ static void CG_AddScaleFade( localEntity_t *le ) {
 	// fade / grow time
 	c = ( le->endTime - cg.time ) * le->lifeRate;
 
-	re->shaderRGBA[3] = 0xff * c * le->color[3];
+	re->shaderRGBA[3] = CG_LocalEffectColorByte(255.0 * c * le->color[3]);
 	if ( !( le->leFlags & LEF_PUFF_DONT_SCALE ) ) {
 		re->radius = le->radius * ( 1.0 - c ) + 8;
 	}
@@ -1157,7 +1189,7 @@ static void CG_AddFallScaleFade( localEntity_t *le ) {
 	// fade time
 	c = ( le->endTime - cg.time ) * le->lifeRate;
 
-	re->shaderRGBA[3] = 0xff * c * le->color[3];
+	re->shaderRGBA[3] = CG_LocalEffectColorByte(255.0 * c * le->color[3]);
 
 	re->origin[2] = le->pos.trBase[2] - ( 1.0 - c ) * le->pos.trDelta[2];
 
@@ -1227,7 +1259,7 @@ static void CG_AddSpriteExplosion( localEntity_t *le ) {
 	re.shaderRGBA[0] = 0xff;
 	re.shaderRGBA[1] = 0xff;
 	re.shaderRGBA[2] = 0xff;
-	re.shaderRGBA[3] = 0xff * c * 0.33;
+	re.shaderRGBA[3] = CG_LocalEffectColorByte(255.0 * c * 0.33);
 
 	re.reType = RT_SPRITE;
 	re.radius = 42 * ( 1.0 - c ) + 30;
@@ -1339,6 +1371,10 @@ void CG_AddLocalEntities( void ) {
 
 		case LE_FADE_RGB:				// teleporters, railtrails
 			CG_AddFadeRGB( le );
+			break;
+
+		case LE_CONST_RGB:
+			CG_AddConstRGB( le );
 			break;
 
 		case LE_FALL_SCALE_FADE: // gib blood trails

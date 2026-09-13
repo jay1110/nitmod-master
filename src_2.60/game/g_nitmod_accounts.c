@@ -10,7 +10,7 @@
 #include "nitmod_sha1.h"
 #include "nitmod_xp.h"
 static struct {
-    char guid[33],login[33],userinfo[MAX_INFO_STRING];
+    char guid[33],login[33],mac[18],userinfo[MAX_INFO_STRING];
     int loggedIn,requested,xpLoaded,secureShrub,begun,greeted;
     int userinfoPending,userinfoDirty,registerPending,resetPending,waitingMap;
     unsigned int epoch;
@@ -18,16 +18,20 @@ static struct {
 /* Independent of SQLite image epochs: reconnecting with the same GUID must
  * never inherit the completion of an earlier occupant of this slot. */
 static unsigned int connectionGeneration[MAX_CLIENTS],mapGeneration;
-static int mapResetPending;
+static int mapResetPending, clearAllXPPending;
 typedef struct { int client; unsigned int generation; char guid[33]; } accountGuard_t;
 unsigned int G_NITMOD_AccountConnectionGeneration(int n) {
     return n>=0 && n<MAX_CLIENTS?connectionGeneration[n]:0;
 }
 unsigned int G_NITMOD_AccountsMapGeneration(void) { return mapGeneration; }
+const char *G_NITMOD_AccountMAC(int n) {
+    return n>=0 && n<MAX_CLIENTS ? identities[n].mac : "";
+}
 void G_NITMOD_AccountReset(int n) {
     if(n<0 || n>=MAX_CLIENTS) return;
     if(!++connectionGeneration[n]) ++connectionGeneration[n];
     memset(&identities[n],0,sizeof(identities[n]));
+    Q_strncpyz(identities[n].mac,"00-00-00-00-00-00",sizeof(identities[n].mac));
 }
 static void AccountGuard(int n,accountGuard_t *guard) {
     memset(guard,0,sizeof(*guard)); guard->client=n;
@@ -39,7 +43,7 @@ static int AccountCurrent(const accountGuard_t *guard) {
     int n=guard->client;
     return n>=0 && n<MAX_CLIENTS && connectionGeneration[n]==guard->generation &&
         *guard->guid && !Q_stricmp(guard->guid,identities[n].guid) && g_entities[n].client &&
-        g_entities[n].client->pers.connected!=CON_DISCONNECTED && !(g_entities[n].r.svFlags&SVF_BOT);
+        g_entities[n].client->pers.connected!=CON_DISCONNECTED;
 }
 void G_NITMOD_AccountBegin(int n) {
     nitmodDatabaseAccount_t account;
@@ -101,8 +105,7 @@ int G_NITMOD_StoreAccount(const nitmodDatabaseAccount_t *account,int mode) {
     return G_NITMOD_StoreAccountAsync(account,mode,NULL,NULL,0);
 }
 int G_NITMOD_ClientAccount(int n,nitmodDatabaseAccount_t *account) {
-    if(n<0 || n>=MAX_CLIENTS || !*identities[n].guid || !g_entities[n].client ||
-       (g_entities[n].r.svFlags&SVF_BOT)) return 0;
+    if(n<0 || n>=MAX_CLIENTS || !*identities[n].guid || !g_entities[n].client) return 0;
     return NITMOD_DBAccount(identities[n].guid,account)==1;
 }
 static int expirationPending[2];
@@ -111,16 +114,16 @@ static void ExpirationComplete(int success,const void *opaque) {
     expirationPending[mute]=0;
     if(!success) G_LogPrintf("[SQLite] Failed to persist expired %s\n",mute?"mutes":"bans");
 }
-static int PenaltyCheck(int mute,const char *ip,const char *guid,int time,nitmodDatabasePenalty_t *penalty) {
+static int PenaltyCheck(int mute,const char *ip,const char *guid,const char *mac,int time,nitmodDatabasePenalty_t *penalty) {
     nitmodDatabasePenalty_t row; int i,rc,mayExpire=0,expired=0,length=0; void *before=NULL;
     /* Most checks are read-only. Obtain a BEFORE image only when the original
      * checker can remove a row, so an async write never leaks into the cache. */
     for(i=0;i<1024;++i) {
         rc=NITMOD_DBPenaltyAt(mute,i,&row); if(rc<0) return -1; if(!rc) break;
-        if(row.expires && row.expires<=time && (!mute || !Q_stricmp(guid,row.guid))) { mayExpire=1; break; }
+        if(row.expires && row.expires<=time && (!mute || !Q_stricmp(guid,row.guid) || (*mac && !Q_stricmp(mac,row.mac)))) { mayExpire=1; break; }
     }
     if(mayExpire) { before=NITMOD_DBExport(&length); if(!before) return -1; }
-    rc=NITMOD_DBPenaltyCheck(mute,ip,guid,"",time,penalty,&expired);
+    rc=NITMOD_DBPenaltyCheck(mute,ip,guid,mac,time,penalty,&expired);
     if(before) {
         if(rc>=0 && expired && !expirationPending[mute]) {
             expirationPending[mute]=1;
@@ -133,13 +136,14 @@ static int PenaltyCheck(int mute,const char *ip,const char *guid,int time,nitmod
     return rc;
 }
 const char *G_NITMOD_DatabaseBanReason(const char *userinfo) {
-    static char reason[1024]; char guid[64],ip[64],duration[64]; nitmodDatabasePenalty_t penalty;
+    static char reason[1024]; char guid[64],ip[64],mac[18],duration[64]; nitmodDatabasePenalty_t penalty;
     qtime_t now; int rc,time;
     if(NITMOD_DBUserCount()<0) return NULL;
     Q_strncpyz(guid,Info_ValueForKey(userinfo,"n_guid"),sizeof(guid));
     Q_strncpyz(ip,Info_ValueForKey(userinfo,"ip"),sizeof(ip));
     time=trap_RealTime(&now)-946490400;
-    rc=PenaltyCheck(0,ip,guid,time,&penalty);
+    Q_strncpyz(mac,Info_ValueForKey(userinfo,"x"),sizeof(mac));
+    rc=PenaltyCheck(0,ip,guid,mac,time,&penalty);
     if(rc<0) return "Database ban check failed";
     if(!rc) return NULL;
     { unsigned int remaining=(unsigned int)penalty.expires-(unsigned int)time;
@@ -157,21 +161,22 @@ const char *G_NITMOD_DatabaseBanReason(const char *userinfo) {
 int G_NITMOD_AccountMuted(int n) {
     nitmodDatabasePenalty_t penalty; qtime_t now; int rc;
     if(n<0 || n>=MAX_CLIENTS || !*identities[n].guid || NITMOD_DBUserCount()<0) return 0;
-    rc=PenaltyCheck(1,"",identities[n].guid,trap_RealTime(&now)-946490400,&penalty);
+    rc=PenaltyCheck(1,"",identities[n].guid,identities[n].mac,trap_RealTime(&now)-946490400,&penalty);
     return rc!=0;
 }
 static void RestoreXP(int n,const nitmodDatabaseAccount_t *account) {
-    float skills[7]; double total=0; qtime_t now; int age,i; long long elapsed;
+    float skills[7],total; qtime_t now; int age,i; long long elapsed;
     if(identities[n].xpLoaded) return;
     identities[n].xpLoaded=1;
     if(!(g_XPSave.integer&1) || !account->timestamp || !*account->user.xp) return;
     elapsed=(long long)trap_RealTime(&now)-account->timestamp;
     age=elapsed>2147483647?2147483647:elapsed<(-2147483647LL-1)?(-2147483647-1):(int)elapsed;
     if(!(g_XPSave.integer&4) && age>g_XPSaveMaxAge.integer) return;
-    if(!NITMOD_XPDecode(account->user.xp,skills)) { G_LogPrintf("[SQLite] Invalid saved XP for client %d\n",n); return; }
-    for(i=0;i<7;++i) { g_entities[n].client->sess.skillpoints[i]=skills[i]; total+=skills[i]; }
+    total=g_entities[n].client->sess.startxptotal;
+    if(!NITMOD_XPDecodeTotal(account->user.xp,skills,&total)) { G_LogPrintf("[SQLite] Invalid saved XP for client %d\n",n); return; }
+    for(i=0;i<7;++i) { g_entities[n].client->sess.skillpoints[i]=skills[i];  }
     g_entities[n].client->sess.startxptotal=(float)total;
-    NITMOD_SetSnapshotXP(&g_entities[n].client->ps,NITMOD_XPInteger(total));
+    NITMOD_SetSnapshotXP(&g_entities[n].client->ps,NITMOD_OriginalXPInteger(total));
     if((G_NITMOD_LegacyCvarInteger("g_XPDecay",0)&3)==1)
         G_NITMOD_XPDecay(&g_entities[n],age,qtrue);
     G_CalcRank(g_entities[n].client);
@@ -180,15 +185,27 @@ static void RestoreXP(int n,const nitmodDatabaseAccount_t *account) {
     BG_PlayerStateToEntityState(&g_entities[n].client->ps,&g_entities[n].s,qtrue);
 }
 static int UpdateXP(int n) {
-    nitmodDatabaseAccount_t account; qtime_t now;
-    if(n<0 || n>=MAX_CLIENTS || !g_entities[n].client || (g_entities[n].r.svFlags&SVF_BOT) ||
+    nitmodDatabaseAccount_t account; qtime_t now; int existing;
+    if(n<0 || n>=MAX_CLIENTS || !g_entities[n].client ||
        g_entities[n].client->pers.nitmodDemoClient || !*identities[n].guid ||
-       !identities[n].xpLoaded || identities[n].resetPending) return 1;
-    { int rc=NITMOD_DBAccount(identities[n].guid,&account); if(rc!=1) return rc==0; }
-    if((g_XPSave.integer&1) && !NITMOD_XPEncode(g_entities[n].client->sess.skillpoints,account.user.xp)) return 0;
+       !identities[n].xpLoaded || identities[n].resetPending || clearAllXPPending) return 1;
+    existing=NITMOD_DBAccount(identities[n].guid,&account);
+    if(existing<0) return 0;
+    if(!existing) {
+        memset(&account,0,sizeof(account));
+        Q_strncpyz(account.user.guid,identities[n].guid,sizeof(account.user.guid));
+    }
+    /* Original WriteXP refreshes connection metadata even when XP is disabled. */
+    { char ip[64], *port;
+      Q_strncpyz(ip,Info_ValueForKey(identities[n].userinfo,"ip"),sizeof(ip));
+      port=strchr(ip,':'); if(port) *port=0;
+      Q_strncpyz(account.ip,ip,sizeof(account.ip)); }
+    Q_strncpyz(account.mac,identities[n].mac,sizeof(identities[n].mac));
+    if((g_XPSave.integer&1) &&
+       !((g_OmniBotFlags.integer&1) && (g_entities[n].r.svFlags&SVF_BOT)) && !NITMOD_XPEncode(g_entities[n].client->sess.skillpoints,account.user.xp)) return 0;
     account.timestamp=trap_RealTime(&now);
     Q_strncpyz(account.user.name,g_entities[n].client->pers.netname,sizeof(account.user.name));
-    return NITMOD_DBSaveAccount(&account,2);
+    return NITMOD_DBSaveAccount(&account,existing?2:1);
 }
 typedef struct {
     accountGuard_t guard;
@@ -202,14 +219,16 @@ static void ResetXPComplete(int success,const void *opaque) {
         if(success) {
             gclient_t *client=g_entities[n].client; int war;
             memset(client->sess.skillpoints,0,sizeof(client->sess.skillpoints));
-            memset(client->sess.skill,0,sizeof(client->sess.skill)); client->sess.startxptotal=0;
+            memset(client->sess.skill,0,sizeof(client->sess.skill));
             G_CalcRank(client); NITMOD_SetSnapshotXP(&client->ps,0); client->ps.persistant[PERS_SCORE]=0;
             war=G_NITMOD_ConfiguredWarMode();
             if(war<1 || war>4) {
-                int ammo[MAX_WEAPONS],clip[MAX_WEAPONS];
-                memcpy(ammo,client->ps.ammo,sizeof(ammo)); memcpy(clip,client->ps.ammoclip,sizeof(clip));
-                SetWolfSpawnWeapons(client);
-                memcpy(client->ps.ammo,ammo,sizeof(ammo)); memcpy(client->ps.ammoclip,clip,sizeof(clip));
+                /* Original SetWolfSpawnWeapons(client,1) only updates metadata. */
+                client->ps.weapons[0]=0;
+                if(client->sess.sessionTeam!=TEAM_SPECTATOR) {
+                    client->ps.stats[STAT_PLAYER_CLASS]=client->sess.playerType;
+                    client->ps.teamNum=client->sess.sessionTeam;
+                }
             }
             ClientUserinfoChanged(n);
         }
@@ -220,7 +239,7 @@ int G_NITMOD_AccountResetXPAsync(int n,nitmodDbCompletion_t done,const void *opa
     nitmodDatabaseAccount_t account; resetXPContext_t *context;
     float zero[7]={0}; qtime_t now; int result;
     if(contextLength<0 || contextLength>(int)(65536-sizeof(*context)) || (contextLength && !opaque) ||
-       !G_NITMOD_ClientAccount(n,&account) || identities[n].resetPending || !identities[n].xpLoaded)
+       !G_NITMOD_ClientAccount(n,&account) || identities[n].resetPending || clearAllXPPending || !identities[n].xpLoaded)
         return CompleteFailed(done,opaque);
     if(!NITMOD_XPEncode(zero,account.user.xp)) return CompleteFailed(done,opaque);
     context=malloc(sizeof(*context)+contextLength);
@@ -233,6 +252,36 @@ int G_NITMOD_AccountResetXPAsync(int n,nitmodDbCompletion_t done,const void *opa
     free(context); return result;
 }
 int G_NITMOD_AccountResetXP(int n) { return G_NITMOD_AccountResetXPAsync(n,NULL,NULL,0); }
+/* Original G_ClearXP (0xd3fd0): account XP, session cvars, seven XP totals and medals,
+ * then G_deleteStats. This is distinct from the per-player resetxp command. */
+static void ClearAllXPComplete(int success,const void *opaque) {
+    const unsigned int *generation=opaque;
+    int n;
+    clearAllXPPending=0;
+    if(!success) { G_Printf("[SQLite] clearxp failed; player XP was not reset.\n"); return; }
+    if(*generation!=mapGeneration) return;
+    for(n=0;n<g_maxclients.integer && n<MAX_CLIENTS;++n) {
+        gentity_t *ent=&g_entities[n];
+        trap_Cvar_Set(va("sessionstats%i",n),"");
+        trap_Cvar_Set(va("wstats%i",n),"");
+        if(!ent->inuse || !ent->client) continue;
+        memset(ent->client->sess.skillpoints,0,sizeof(ent->client->sess.skillpoints));
+        memset(ent->client->sess.medals,0,sizeof(ent->client->sess.medals));
+        G_deleteStats(n);
+    }
+}
+void G_NITMOD_AccountsClearXP(void) {
+    int length; void *before;
+    unsigned int generation=mapGeneration;
+    if(clearAllXPPending || !G_NITMOD_DatabaseReady()) {
+        G_Printf("[SQLite] clearxp: database operation is pending.\n"); return;
+    }
+    if(NITMOD_DBUserCount()<0) { ClearAllXPComplete(1,&generation); return; }
+    before=NITMOD_DBExport(&length);
+    if(!before) { ClearAllXPComplete(0,&generation); return; }
+    clearAllXPPending=1;
+    CommitChanged(before,length,NITMOD_DBClearXP(),ClearAllXPComplete,&generation,sizeof(generation));
+}
 static void SaveXPComplete(int success,const void *opaque) {
     const int *client=opaque;
     if(!success) {
@@ -248,9 +297,10 @@ void G_NITMOD_AccountSaveXP(int n) {
 }
 void G_NITMOD_AccountsSaveAllXP(void) {
     int i,length,ok=1; void *before;
-    if(!G_NITMOD_DatabaseReady() || NITMOD_DBUserCount()<0) return;
+    if(level.numConnectedClients<=0 || !G_NITMOD_DatabaseReady() || NITMOD_DBUserCount()<0) return;
     before=NITMOD_DBExport(&length); if(!before) { SaveXPComplete(0,NULL); return; }
-    for(i=0;i<MAX_CLIENTS && ok;++i) ok=UpdateXP(i);
+    /* Original WriteAllXP walks the sorted connected-client list. */
+    for(i=0;i<level.numConnectedClients && ok;++i) ok=UpdateXP(level.sortedClients[i]);
     /* One immutable batch is submitted before shutdown starts draining. This
      * callback neither reads client slots nor submits a later save. */
     CommitChanged(before,length,ok,SaveXPComplete,NULL,0);
@@ -344,6 +394,7 @@ static void UserinfoReady(int success,const void *opaque) {
     Q_strncpyz(account.user.name,g_entities[n].client->pers.netname,sizeof(account.user.name));
     Q_strncpyz(ip,Info_ValueForKey(userinfo,"ip"),sizeof(ip)); port=strchr(ip,':'); if(port) *port=0;
     Q_strncpyz(account.ip,ip,sizeof(account.ip));
+    Q_strncpyz(account.mac,identities[n].mac,sizeof(identities[n].mac));
     if(!rc || memcmp(&previous,&account,sizeof(account))) {
         qtime_t now; account.timestamp=trap_RealTime(&now);
         G_NITMOD_StoreAccountAsync(&account,rc?2:1,UserinfoStored,&context,sizeof(context));
@@ -353,7 +404,7 @@ int G_NITMOD_AccountUserinfo(int n,const char *userinfo) {
     gentity_t *ent; accountGuard_t guard; char guid[64],reason[128];
     int i;
     if(n<0 || n>=MAX_CLIENTS || !userinfo) return 0;
-    ent=&g_entities[n]; if(!ent->client || (ent->r.svFlags&SVF_BOT)) return 1;
+    ent=&g_entities[n]; if(!ent->client) return 1;
     Q_strncpyz(guid,Info_ValueForKey(userinfo,"n_guid"),sizeof(guid));
     if(!*guid) {
         if(*identities[n].guid) { G_NITMOD_AccountReset(n); trap_DropClient(n,"Your NGUID has changed",0); return 0; }
@@ -364,7 +415,7 @@ int G_NITMOD_AccountUserinfo(int n,const char *userinfo) {
     if(*identities[n].guid && Q_stricmp(identities[n].guid,guid)) {
         G_NITMOD_AccountReset(n); trap_DropClient(n,"Your NGUID has changed",0); return 0;
     }
-    if(G_NITMOD_LegacyCvarInteger("g_GUIDChecks",1) && !NITMOD_ValidateNGuid(guid,reason,sizeof(reason))) {
+    if(!(ent->r.svFlags&SVF_BOT) && G_NITMOD_LegacyCvarInteger("g_GUIDChecks",1) && !NITMOD_ValidateNGuid(guid,reason,sizeof(reason))) {
         G_NITMOD_AccountReset(n); trap_DropClient(n,reason,0); return 0;
     }
     if(g_XPSave.integer&8) for(i=0;i<MAX_CLIENTS;++i) {
@@ -373,6 +424,12 @@ int G_NITMOD_AccountUserinfo(int n,const char *userinfo) {
         }
     }
     if(!*identities[n].guid) Q_strncpyz(identities[n].guid,guid,sizeof(identities[n].guid));
+    /* Original token loop changes cached MAC only when key x is present. */
+    { const char *cursor=userinfo; char key[MAX_INFO_STRING],value[MAX_INFO_STRING];
+      while(*cursor) {
+        Info_NextPair(&cursor,key,value); if(!*key) break;
+        if(!Q_stricmp(key,"x")) Q_strncpyz(identities[n].mac,value,sizeof(identities[n].mac));
+      } }
     Q_strncpyz(identities[n].userinfo,userinfo,sizeof(identities[n].userinfo));
     if(mapResetPending) { identities[n].waitingMap=1; return 1; }
     if(identities[n].userinfoPending) { identities[n].userinfoDirty=1; return 1; }

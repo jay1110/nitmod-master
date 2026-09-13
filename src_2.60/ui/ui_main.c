@@ -3524,7 +3524,6 @@ UI_ServersSort
 =================
 */
 void UI_ServersSort(int column, qboolean force) {
-	int previous=uiInfo.serverStatus.sortKey;
 	if(uiInfo.serverStatus.numDisplayServers<0 || uiInfo.serverStatus.numDisplayServers>MAX_DISPLAY_SERVERS) return;
 	if(column < SORT_HOST || column > SORT_FAVOURITES) column = SORT_PING;
 
@@ -3536,7 +3535,7 @@ void UI_ServersSort(int column, qboolean force) {
 
 	uiInfo.serverStatus.sortKey = column;
 	trap_Cvar_Set("ui_browserSortKey", va("%d", column));
-	if(column==SORT_CLIENTS && previous!=SORT_CLIENTS) { UI_BuildServerDisplayList(qtrue); return; }
+	/* Original UI_ServersSort 0x20b43..0x20b86 sorts the existing list. */
 	qsort( &uiInfo.serverStatus.displayServers[0], uiInfo.serverStatus.numDisplayServers, sizeof(int), UI_ServersQsortCompare );
 }
 
@@ -3563,6 +3562,7 @@ static void UI_LoadMods() {
 		if(!dirptr || !*dirptr || !descptr) break;
 		uiInfo.modList[uiInfo.modCount].modName = String_Alloc(dirptr);
 		uiInfo.modList[uiInfo.modCount].modDescr = String_Alloc(descptr);
+		UI_SetModDisplayName(&uiInfo.modList[uiInfo.modCount]);
 		uiInfo.modCount++;
 		if (uiInfo.modCount >= MAX_MODS) break;
 	}
@@ -4762,25 +4762,22 @@ UI_MapCountByGameType
 static int UI_MapCountByGameType(qboolean singlePlayer) {
 	int i, c, game;
 	c = 0;
-	/* Reject corrupt catalogs before iterating; clear stale visibility so a
-	 * previous valid filter cannot make an invalid selection look usable. */
-	for(i=0;i<MAX_MAPS;++i) uiInfo.mapList[i].active=qfalse;
 	if(singlePlayer) {
 		if(uiInfo.numGameTypes <= 0 || uiInfo.numGameTypes > MAX_GAMETYPES ||
-		   ui_gameType.integer < 0 || ui_gameType.integer >= uiInfo.numGameTypes) return 0;
+		   ui_gameType.integer < 0 || ui_gameType.integer >= uiInfo.numGameTypes) goto invalid;
 		game = uiInfo.gameTypes[ui_gameType.integer].gtEnum;
-	} else if(!UI_MapListGameType(&game)) return 0;
-	if(game<0 || game>=32) return 0;
+	} else if(!UI_MapListGameType(&game)) goto invalid;
+	if(game<0 || game>=32) goto invalid;
 
 	if( game == GT_WOLF_CAMPAIGN ) {
-		if(uiInfo.campaignCount<0 || uiInfo.campaignCount>MAX_CAMPAIGNS) return 0;
+		if(uiInfo.campaignCount<0 || uiInfo.campaignCount>MAX_CAMPAIGNS) goto invalid;
 		for (i = 0; i < uiInfo.campaignCount; i++) {
 			if( uiInfo.campaignList[i].typeBits & (1 << GT_WOLF) ) {
 				c++;
 			}
 		}
 	} else {
-		if(uiInfo.mapCount<0 || uiInfo.mapCount>MAX_MAPS) return 0;
+		if(uiInfo.mapCount<0 || uiInfo.mapCount>MAX_MAPS) goto invalid;
 		for (i = 0; i < uiInfo.mapCount; i++) {
 			uiInfo.mapList[i].active = qfalse;
 			if ( (unsigned int)uiInfo.mapList[i].typeBits & (1u << game)) {
@@ -4790,6 +4787,11 @@ static int UI_MapCountByGameType(qboolean singlePlayer) {
 		}
 	}
 	return c;
+invalid:
+	/* Invalid input hides stale rows; a valid campaign count leaves map flags
+	 * alone, as in original UI_ListCampaigns_f 0x28c37..0x28c78. */
+	for(i=0;i<MAX_MAPS;++i) uiInfo.mapList[i].active=qfalse;
+	return 0;
 }
 
 /*
@@ -5230,6 +5232,9 @@ const char *UI_FeederItemText( float feederID, int index, int column, qhandle_t 
 		}
 	} else if (feederID == FEEDER_MODS) {
 		if (index >= 0 && index < uiInfo.modCount) {
+			if (uiInfo.modList[index].modDisplayName[0]) {
+				return uiInfo.modList[index].modDisplayName;
+			}
 			if (uiInfo.modList[index].modDescr && *uiInfo.modList[index].modDescr) {
 				return uiInfo.modList[index].modDescr;
 			} else {
@@ -7371,14 +7376,16 @@ static void UI_StopServerRefresh( void )
 		return;
 	}
 	uiInfo.serverStatus.refreshActive = qfalse;
-	Com_Printf("%d servers listed in browser with %d players.\n",
+	Com_Printf("^g%d ^9servers listed in browser with %d players (^7%d ^9humans).\n",
 					uiInfo.serverStatus.numDisplayServers,
-					uiInfo.serverStatus.numPlayersOnServers);
+					uiInfo.serverStatus.numPlayersOnServers, UI_BrowserHumanTotal());
 	count = trap_LAN_GetServerCount(ui_netSource.integer);
 	if (count - uiInfo.serverStatus.numDisplayServers > 0) {
     // TTimo - used to be about cl_maxping filtering, that was Q3 legacy, RTCW browser has much more filtering options
-		Com_Printf("%d servers not listed (filtered out by game browser settings)\n",
-						count - uiInfo.serverStatus.numDisplayServers);
+		Com_Printf("^8%d ^9servers not listed:\n- ^3%d ^9filtered out by game browser settings\n- ^1%d ^9dropped (fake, serverfacades, no or bad statusResponse)\n",
+            count - uiInfo.serverStatus.numDisplayServers,
+            count - uiInfo.serverStatus.numDisplayServers - UI_BrowserDroppedCount(),
+            UI_BrowserDroppedCount());
 	}
 
 }

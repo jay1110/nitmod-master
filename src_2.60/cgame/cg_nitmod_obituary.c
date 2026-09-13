@@ -153,7 +153,7 @@ qboolean CG_NitmodPlanGraphicObituary(const entityState_t *es, int mode,
     const char *message, *suffix;
     if(!plan) return qfalse;
     memset(plan, 0, sizeof(*plan));
-    if(!es || (mode != 3 && mode != 4)) return qfalse;
+    if(!es || (mode != 1 && mode != 3 && mode != 4)) return qfalse;
     target = es->otherEntityNum; attacker = es->otherEntityNum2; cause = es->eventParm;
     if(target < 0 || target >= MAX_CLIENTS || cause == 57) return qfalse;
     CG_NitmodObituaryPair(cause, &message, &suffix);
@@ -169,7 +169,7 @@ qboolean CG_NitmodPlanGraphicObituary(const entityState_t *es, int mode,
             plan->first = cgs.clientinfo[attacker].name;
             plan->second = cgs.clientinfo[target].name;
         }
-        if(cause == 23) VectorSet(plan->color, 0, 1, 0);
+        if(cause == 23) VectorSet(plan->color, mode == 1 ? 1 : 0, 1, mode == 1 ? 1 : 0);
         else if(target != attacker && cgs.gametype != 8 &&
             cgs.clientinfo[target].team == cgs.clientinfo[attacker].team)
             VectorSet(plan->color, 1, 0, 0);
