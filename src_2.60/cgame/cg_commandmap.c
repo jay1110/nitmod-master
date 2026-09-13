@@ -1026,6 +1026,32 @@ void CG_DrawMap( float x, float y, float w, float h, int mEntFilter, mapScissor_
 
         CG_DrawMapEntity( mEnt, x, y, w, h, mEntFilter, scissor, interactive, snap, icon_size );
 	}
+
+	/* Original CG_DrawMap 0x30d7b..0x30f20 draws the followed player
+	 * independently of entnfo, which contains only objectives for spectators. */
+	if( NITMOD_UsesNitmodHud() && snap && cg.clientNum >= 0 &&
+		cg.clientNum < MAX_CLIENTS && cgs.clientinfo[cg.clientNum].team == TEAM_SPECTATOR &&
+		snap->ps.persistant[PERS_TEAM] != TEAM_SPECTATOR &&
+		snap->ps.clientNum >= 0 && snap->ps.clientNum < MAX_CLIENTS ) {
+		bg_playerclass_t *followClass = CG_PlayerClassForClientinfo(
+			&cgs.clientinfo[snap->ps.clientNum], &cg_entities[snap->ps.clientNum]);
+		float px = (cg.predictedPlayerEntity.lerpOrigin[0] - cg.mapcoordsMins[0]) * cg.mapcoordsScale[0] * w;
+		float py = (cg.predictedPlayerEntity.lerpOrigin[1] - cg.mapcoordsMins[1]) * cg.mapcoordsScale[1] * h;
+		float size;
+		if( scissor ) {
+			px = px * scissor->zoomFactor - scissor->tl[0];
+			py = py * scissor->zoomFactor - scissor->tl[1];
+			size = (scissor->zoomFactor / 5.159) * 12.0;
+		} else {
+			size = cgs.ccZoomFactor * 12.0;
+		}
+		px += x - size * 0.5f;
+		py += y - size * 0.5f;
+		CG_DrawPic(px, py, size, size, followClass->icon);
+		CG_DrawRotatedPic(px - 1, py - 1, size + 2, size + 2,
+			followClass->arrow, 0.5 - (cg.predictedPlayerState.viewangles[YAW] - 180.0) / 360.0);
+	}
+
 }
 
 void CG_DrawExpandedAutoMap( void ) {
