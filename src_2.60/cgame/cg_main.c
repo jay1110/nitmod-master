@@ -64,7 +64,7 @@ NITMOD_MODULE_EXPORT int vmMain( int command, int arg0, int arg1, int arg2, int 
 	case CG_CROSSHAIR_PLAYER:
 		return CG_CrosshairPlayer();
 	case CG_LAST_ATTACKER:
-		return CG_LastAttacker();
+		return NITMOD_UsesNitmodHud() ? -1 : CG_LastAttacker();
 	case CG_KEY_EVENT:
 		CG_KeyEvent(arg0, arg1);
 		return 0;

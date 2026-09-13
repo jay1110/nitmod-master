@@ -765,7 +765,8 @@ void NITMOD_RestoreForcedCvars(void) {
 
 void NITMOD_ApplyForcedCvars(void) {
 	int i;
-	char current[256];
+	/* Original CG_DrawActiveFrame reads 128 bytes, including terminator. */
+	char current[128];
 	if(cg.demoPlayback) return;
 	for(i = 0; i < nitmodForcedCvarCount; ++i) {
 		const nitmodForcedCvar_t *entry = &nitmodForcedCvars[i];

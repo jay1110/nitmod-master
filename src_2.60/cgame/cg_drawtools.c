@@ -1354,7 +1354,9 @@ char* CG_TranslateString( const char *string ) {
 
 	buf = staticbuf[bufcount++ % 2];
 
-	trap_TranslateString( string, buf );
+	/* Nitmod renders literal text; retain the rotating copy for callers. */
+	if(NITMOD_UsesNitmodHud()) Q_strncpyz(buf, string, MAX_VA_STRING);
+	else trap_TranslateString( string, buf );
 
 	return buf;
 }

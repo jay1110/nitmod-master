@@ -134,7 +134,7 @@ if(NITMOD_BUILD_QAGAME)
         botai/ai_main.c botai/ai_script.c botai/ai_script_actions.c botai/ai_team.c)
     set(NITMOD_QAGAME_SRC
         game/g_nitmod_lua.c
-        game/g_nitmod_global_stats.c game/nitmod_stats_transport.c
+        game/g_nitmod_global_stats.c game/nitmod_stats_transport.c game/nitmod_stats_udp.c
         game/g_nitmod_shoutcaster.c
         game/g_nitmod_geoip.c
         lua51/lapi.c lua51/lauxlib.c lua51/lbaselib.c lua51/lcode.c lua51/ldblib.c lua51/ldebug.c lua51/ldo.c lua51/ldump.c lua51/lfunc.c lua51/lgc.c lua51/linit.c lua51/liolib.c lua51/llex.c lua51/lmathlib.c lua51/lmem.c lua51/loadlib.c lua51/lobject.c lua51/lopcodes.c lua51/loslib.c lua51/lparser.c lua51/lstate.c lua51/lstring.c lua51/lstrlib.c lua51/ltable.c lua51/ltablib.c lua51/ltm.c lua51/lundump.c lua51/lvm.c lua51/lzio.c

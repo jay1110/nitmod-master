@@ -1446,10 +1446,13 @@ void G_SayTo( gentity_t *ent, gentity_t *other, int mode, int color, const char 
 static const char *G_NITMOD_ShortcutName( const char *name ) {
 	static char clean[150];
 	int i;
+	/* Original sanitizer retains its last result for an empty name. */
+	if( !name || !*name ) return clean;
 	Q_strncpyz(clean, name, sizeof(clean));
 	for( i = 0; clean[i]; ++i ) {
 		if( clean[i] == '[' && clean[i + 1] && clean[i + 2] == ']' &&
-			strchr("adhklnrpsw", clean[i + 1]) ) {
+			strchr("adhklnrpsw", clean[i + 1] >= 'A' && clean[i + 1] <= 'Z' ? clean[i + 1] + ('a' - 'A') : clean[i + 1]) ) {
+			if( clean[i + 1] >= 'A' && clean[i + 1] <= 'Z' ) clean[i + 1] += 'a' - 'A';
 			clean[i] = '(';
 			clean[i + 2] = ')';
 			i += 2;
@@ -1467,6 +1470,12 @@ static const char *G_NITMOD_ShortcutValue( gentity_t *ent, char code )
 	int weapon;
 	int ammo;
 	int clientNum = -1;
+	int team = ent->client->sess.sessionTeam;
+
+	/* Original history and equipment values exist only for playing teams. */
+	if( team != TEAM_AXIS && team != TEAM_ALLIES && strchr("adhkrswt", code) ) {
+		return code == 'w' ? "Nothing" : "*unknown*";
+	}
 
 	switch( code ) {
 	case 'a': clientNum = ent->client->pers.nitmodLastAmmoClient; break;
@@ -1476,11 +1485,19 @@ static const char *G_NITMOD_ShortcutValue( gentity_t *ent, char code )
 	case 'r': clientNum = ent->client->pers.nitmodLastReviverClient; break;
 	case 'p':
 		clientNum = ent->client->ps.identifyClient;
-		if( clientNum >= 0 && clientNum < level.maxclients &&
-			g_entities[clientNum].client && !OnSameTeam(ent, &g_entities[clientNum]) ) {
-			clientNum = -1;
+		if( clientNum < 0 || clientNum >= level.maxclients ||
+			!g_entities[clientNum].inuse || !g_entities[clientNum].client ) return "*unknown*";
+		if( team == g_entities[clientNum].client->sess.sessionTeam ) {
+			return G_NITMOD_ShortcutName(g_entities[clientNum].client->pers.netname);
 		}
-		break;
+		/* Disguised identities take precedence even for a spectator viewer. */
+		if( g_entities[clientNum].client->ps.powerups[PW_OPS_DISGUISED] ) {
+			return G_NITMOD_ShortcutName(g_entities[clientNum].client->disguiseNetname);
+		}
+		if( team == TEAM_SPECTATOR ) {
+			return G_NITMOD_ShortcutName(g_entities[clientNum].client->pers.netname);
+		}
+		return "*unknown*";
 	case 'l':
 		/* G_Shortcuts uses playerState origin and a 32-byte location field. */
 		Q_strncpyz(label, BG_GetLocationString(ent->client->ps.origin), sizeof(label));
@@ -1496,8 +1513,9 @@ static const char *G_NITMOD_ShortcutValue( gentity_t *ent, char code )
 	case 't':
 		weapon = ent->client->ps.weapon;
 		if( weapon <= WP_NONE || weapon >= WP_NUM_WEAPONS ) {
-			return "0";
+			return "*unknown*";
 		}
+		if( !BG_FindItemForWeapon(weapon) ) return "*unknown*";
 		/* Original G_Shortcuts excludes knife reserve, not its clip. */
 		ammo = (weapon == WP_KNIFE ? 0 : ent->client->ps.ammo[BG_FindAmmoForWeapon(weapon)]) +
 			ent->client->ps.ammoclip[BG_FindClipForWeapon(weapon)];
@@ -1505,61 +1523,68 @@ static const char *G_NITMOD_ShortcutValue( gentity_t *ent, char code )
 	default: return NULL;
 	}
 
-	if( clientNum >= 0 && clientNum < level.maxclients &&
-		g_entities[clientNum].inuse && g_entities[clientNum].client &&
-		g_entities[clientNum].client->pers.connected == CON_CONNECTED ) {
-		return G_NITMOD_ShortcutName(g_entities[clientNum].client->pers.netname);
+	/* History slots refer to retained client records, including disconnected ones. */
+	if( clientNum >= 0 && clientNum < level.maxclients ) {
+		return G_NITMOD_ShortcutName(level.clients[clientNum].pers.netname);
 	}
 	return "*unknown*";
+}
+
+/* Precompute in original order: even absent tokens affect the retained name.
+ * Each replacement pass sees results inserted by earlier passes. */
+static void G_NITMOD_ExpandShortcuts( gentity_t *ent, const char *input,
+	char *output, int outputSize, qboolean command )
+{
+	static const char order[] = "adhklnrpswt";
+	char values[11][36];
+	char work[2][1024];
+	const char *read;
+	const char *value;
+	int pass, used, code;
+
+	if( outputSize <= 0 ) return;
+	if( !ent || !ent->client || !G_NITMOD_LegacyCvarInteger("g_shortcuts", 1) ) {
+		Q_strncpyz(output, input, outputSize);
+		return;
+	}
+	for( pass = 0; pass < 11; ++pass ) {
+		Q_strncpyz(values[pass], G_NITMOD_ShortcutValue(ent, order[pass]), sizeof(values[pass]));
+	}
+	for( pass = 0; pass < 11; ++pass ) {
+		read = pass ? work[pass & 1] : input;
+		used = 0;
+		while( *read && used < sizeof(work[0]) - 1 ) {
+			code = read[1];
+			if( code >= 'A' && code <= 'Z' ) code += 'a' - 'A';
+			if( read[0] == '[' && code == order[pass] && read[2] == ']' ) {
+				value = values[pass];
+				while( *value && used < sizeof(work[0]) - 1 ) {
+					char c = *value++;
+					if( !command || (c != ';' && c != '\n' && c != '\r' && c != '"' && c != '\\') ) {
+						work[(pass + 1) & 1][used++] = c;
+					}
+				}
+				read += 3;
+			} else {
+				work[(pass + 1) & 1][used++] = *read++;
+			}
+		}
+		work[(pass + 1) & 1][used] = '\0';
+	}
+	/* Original G_Shortcuts returns a 150-byte buffer. */
+	Q_strncpyz(output, work[1], outputSize < 150 ? outputSize : 150);
 }
 
 static void G_NITMOD_ExpandChatShortcuts( gentity_t *ent, const char *input,
 	char *output, int outputSize )
 {
-	const char *value;
-	int used = 0;
-
-	if( !ent || !ent->client || !G_NITMOD_LegacyCvarInteger("g_shortcuts", 1) ) {
-		Q_strncpyz(output, input, outputSize);
-		return;
-	}
-
-	while( *input && used < outputSize - 1 ) {
-		if( input[0] == '[' && input[1] && input[2] == ']' &&
-			(value = G_NITMOD_ShortcutValue(ent, input[1])) != NULL ) {
-			while( *value && used < outputSize - 1 ) output[used++] = *value++;
-			input += 3;
-			continue;
-		}
-		output[used++] = *input++;
-	}
-	output[used] = '\0';
+	G_NITMOD_ExpandShortcuts(ent, input, output, outputSize, qfalse);
 }
 
 void G_NITMOD_ExpandCommandShortcuts( gentity_t *ent, const char *input,
 	char *output, int outputSize )
 {
-	const char *value;
-	int used = 0;
-
-	if( !ent || !ent->client || !G_NITMOD_LegacyCvarInteger("g_shortcuts", 1) ) {
-		Q_strncpyz(output, input, outputSize);
-		return;
-	}
-
-	while( *input && used < outputSize - 1 ) {
-		if( input[0] == '[' && input[1] && input[2] == ']' &&
-			(value = G_NITMOD_ShortcutValue(ent, input[1])) != NULL ) {
-			while( *value && used < outputSize - 1 ) {
-                char c=*value++;
-                if(c!=';' && c!='\n' && c!='\r' && c!='"' && c!='\\') output[used++]=c;
-            }
-			input += 3;
-			continue;
-		}
-		output[used++] = *input++;
-	}
-	output[used] = '\0';
+	G_NITMOD_ExpandShortcuts(ent, input, output, outputSize, qtrue);
 }
 
 /* G_CensorPenalize, original qagame ELF 0x51660. */

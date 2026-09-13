@@ -2,6 +2,8 @@
 #include "g_nitmod_global_stats.h"
 #include "g_nitmod_lua.h"
 #include "nitmod_stats_transport.h"
+#include "nitmod_stats_udp.h"
+static int nativeUDP;
 #include <errno.h>
 #include <limits.h>
 #include <ctype.h>
@@ -41,7 +43,7 @@ void G_NITMOD_GlobalStatsEvent(int n,int statistic) {
 }
 void G_NITMOD_GlobalStatsReset(int n) {
     if(n<0 || n>=MAX_CLIENTS) return;
-    NITMOD_StatsCancel(n);memset(&stats[n],0,sizeof(stats[n]));
+    NITMOD_StatsCancel(n);NITMOD_StatsUDPCancel(n);memset(&stats[n],0,sizeof(stats[n]));
 }
 void G_NITMOD_GlobalStatsDeath(int victim,int attacker,int mod) {
     int special=-1;
@@ -78,14 +80,20 @@ void G_NITMOD_GlobalStatsUpload(int n) {
     for(i=0;i<16;++i) Q_strcat(packet,sizeof(packet),va(" %i",stats[n].local[i]));
     Q_strcat(packet,sizeof(packet)," ");
     Q_strcat(packet,sizeof(packet),g_entities[n].client->pers.netname);
-    if(NITMOD_StatsUpload(endpoint,packet)) {
+    if(nativeUDP ? NITMOD_StatsUDPUpload(packet) : NITMOD_StatsUpload(endpoint,packet)) {
         memset(stats[n].local,0,sizeof(stats[n].local));stats[n].uploaded=1;
     }
 }
-void G_NITMOD_GlobalStatsShutdown(void) { int i;for(i=0;i<MAX_CLIENTS;++i) { G_NITMOD_GlobalStatsUpload(i);G_NITMOD_GlobalStatsReset(i); } NITMOD_StatsShutdown(); *endpoint=0; }
+void G_NITMOD_GlobalStatsShutdown(void) { int i;for(i=0;i<MAX_CLIENTS;++i) { G_NITMOD_GlobalStatsUpload(i);G_NITMOD_GlobalStatsReset(i); } NITMOD_StatsShutdown(); NITMOD_StatsUDPShutdown(); nativeUDP=0; *endpoint=0; }
 void G_NITMOD_GlobalStatsInit(void) {
     G_NITMOD_GlobalStatsShutdown();
     trap_Cvar_VariableStringBuffer("n_globalStatsBridge",endpoint,sizeof(endpoint));
+    if(!*endpoint) {
+        char bindAddress[MAX_CVAR_VALUE_STRING];
+        trap_Cvar_VariableStringBuffer("net_ip",bindAddress,sizeof(bindAddress));
+        nativeUDP=NITMOD_StatsUDPInit(bindAddress);
+        if(nativeUDP) Q_strncpyz(endpoint,"udp",sizeof(endpoint));
+    }
 }
 void G_NITMOD_GlobalStatsRequest(int n,const char *guid) {
     int i;
@@ -99,7 +107,7 @@ void G_NITMOD_GlobalStatsRequest(int n,const char *guid) {
     }
     if(*endpoint) {
         stats[n].retryAfter=(long long)level.time+3000;
-        stats[n].pending=NITMOD_StatsStart(n,endpoint,guid);
+        stats[n].pending=nativeUDP ? NITMOD_StatsUDPStart(n,guid) : NITMOD_StatsStart(n,endpoint,guid);
     }
 }
 static int Parse(int n,char *packet,int *values,const char **raw) {
@@ -123,8 +131,9 @@ static int Parse(int n,char *packet,int *values,const char **raw) {
 }
 void G_NITMOD_GlobalStatsFrame(void) {
     int n;
-    for(n=0;n<MAX_CLIENTS;++n) if(stats[n].pending) {
-        char packet[1024];int values[15],result=NITMOD_StatsRead(n,packet,sizeof(packet));const char *raw;
+    if(nativeUDP)NITMOD_StatsUDPPoll();
+    for(n=0;n<MAX_CLIENTS;++n) if(stats[n].pending || nativeUDP) {
+        char packet[1024];int values[15],result=nativeUDP ? NITMOD_StatsUDPRead(n,packet,sizeof(packet)) : NITMOD_StatsRead(n,packet,sizeof(packet));const char *raw;
         if(!result) continue;
         stats[n].pending=0;
         if(result<0 || !g_entities[n].client || !Parse(n,packet,values,&raw)) continue;

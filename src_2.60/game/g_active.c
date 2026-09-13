@@ -413,28 +413,33 @@ void	G_TouchTriggers( gentity_t *ent ) {
 SpectatorThink
 =================
 */
+/* Original G_SetIdentifyClient (qagame ELF 0x3d8d0), shared by both
+ * spectator and active think paths. Preserve disguised/followed identities. */
+static void G_SetIdentifyClient( gentity_t *ent ) {
+	gclient_t *client = ent->client;
+	int number = client->ps.identifyClient;
+	gentity_t *target;
+
+	if( number >= 0 && number < MAX_GENTITIES ) {
+		target = &g_entities[number];
+		if( target->inuse && target->client &&
+			(target->team == ent->team || target->client->ps.powerups[PW_OPS_DISGUISED] ||
+			(client->ps.pm_flags & PMF_FOLLOW)) ) {
+			client->ps.identifyClientHealth = target->health;
+			return;
+		}
+	}
+	client->ps.identifyClient = -1;
+	client->ps.identifyClientHealth = 0;
+}
+
 void SpectatorThink( gentity_t *ent, usercmd_t *ucmd ) {
 	pmove_t	pm;
 	gclient_t	*client;
-	gentity_t *crosshairEnt = NULL; // rain - #480
 
 	client = ent->client;
 
-	// rain - #480 - sanity check - check .active in case the client sends us
-	// something completely bogus
-	crosshairEnt = &g_entities[ent->client->ps.identifyClient];
-
-	if (crosshairEnt->inuse && crosshairEnt->client &&
-		(ent->client->sess.sessionTeam == crosshairEnt->client->sess.sessionTeam ||
-		crosshairEnt->client->ps.powerups[PW_OPS_DISGUISED])) {
-
-		// rain - identifyClientHealth sent as unsigned char, so we
-		// can't transmit negative numbers
-		if (crosshairEnt->health >= 0)
-			ent->client->ps.identifyClientHealth = crosshairEnt->health;
-		else
-			ent->client->ps.identifyClientHealth = 0;
-	}
+	G_SetIdentifyClient(ent);
 
 	if ( client->sess.spectatorState != SPECTATOR_FOLLOW ) {
 		client->ps.pm_type = PM_SPECTATOR;
@@ -906,13 +911,12 @@ void WolfFindMedic( gentity_t *self ) {
 	int i, medic=-1;
 	gclient_t	*cl;
 	vec3_t	start, end;
-//	vec3_t	temp;	// rain - unused
 	trace_t	tr;
 	float	bestdist=1024, dist;
 
 	self->client->ps.viewlocked_entNum = 0;
 	self->client->ps.viewlocked = 0;
-	self->client->ps.stats[STAT_DEAD_YAW] = 999;
+	/* Original leaves the death yaw intact while updating the medic lock. */
 
 	VectorCopy( self->s.pos.trBase, start );
 	start[2] += self->client->ps.viewheight;
@@ -943,7 +947,7 @@ void WolfFindMedic( gentity_t *self ) {
 			continue;
 		}
 
-		if( cl->ps.stats[ STAT_PLAYER_CLASS ] != PC_MEDIC ) {
+		if( cl->sess.playerType != PC_MEDIC ) {
 			continue;
 		}
 
@@ -960,10 +964,6 @@ void WolfFindMedic( gentity_t *self ) {
 
 		if ( dist < bestdist ) {
 			medic = cl->ps.clientNum;
-#if 0 // rain - not sure what the point of this is
-			vectoangles( end, temp );
-			self->client->ps.stats[STAT_DEAD_YAW] = temp[YAW];
-#endif
 			bestdist = dist;
 		}
 	}
@@ -1413,12 +1413,7 @@ void ClientThink_real( gentity_t *ent ) {
 	if (ent->flags & FL_NOFATIGUE)
 		ent->client->pmext.sprintTime = SPRINTTIME;
 
-	if ( g_entities[ent->client->ps.identifyClient].team == ent->team && g_entities[ent->client->ps.identifyClient].client ) {
-		ent->client->ps.identifyClientHealth = g_entities[ent->client->ps.identifyClient].health;
-	} else {
-		ent->client->ps.identifyClient = -1;
-		ent->client->ps.identifyClientHealth = 0;
-	}
+	G_SetIdentifyClient(ent);
 
 	// check for respawning
 	if( client->ps.stats[STAT_HEALTH] <= 0 ) {

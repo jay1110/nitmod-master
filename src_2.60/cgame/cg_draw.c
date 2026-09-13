@@ -900,7 +900,7 @@ static void CG_DrawDisconnect( float panelY ) {
 	} else CG_DrawBigString( 320 - w/2, 100, s, 1.0F);
 
 	// blink the icon
-	if ( ( cg.time >> 9 ) & 1 ) {
+	if ( (( cg.time >> 9 ) & 1) || (NITMOD_UsesNitmodHud() && !cg_lagometer.integer) ) {
 		return;
 	}
 

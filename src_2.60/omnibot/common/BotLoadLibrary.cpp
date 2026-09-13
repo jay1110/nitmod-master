@@ -340,31 +340,27 @@ eomnibot_error Omnibot_LoadLibrary(int version, const char *lib, const char *pat
 {
 	eomnibot_error r = BOT_ERROR_NONE;
 #ifdef __EMSCRIPTEN__
-	g_BotLibrary = Omnibot_LL(OB_VA("%s/%s.wasm32.so",
-		(path && path[0]) ? path : ".", lib));
+	const char *suffix = ".wasm32.so";
 #else
-	g_BotLibrary = Omnibot_LL(OB_VA("%s/%s.so",
-		(path && path[0]) ? path : ".", lib));
+	const char *suffix = ".so";
 #endif
+	g_BotLibrary = Omnibot_LL(OB_VA("%s/%s%s",
+		(path && path[0]) ? path : ".", lib, suffix));
 	if(!g_BotLibrary)
 	{
-#ifdef __EMSCRIPTEN__
-		g_BotLibrary = Omnibot_LL(OB_VA("./%s.wasm32.so", lib));
-#else
-		g_BotLibrary = Omnibot_LL(OB_VA("./%s.so", lib));
-#endif
+		g_BotLibrary = Omnibot_LL(OB_VA("./%s%s", lib, suffix));
 	}
 	if(!g_BotLibrary)
 	{
 		char *homeDir = getenv("HOME");
 		if(homeDir)
-			g_BotLibrary = Omnibot_LL(OB_VA("%s/omni-bot/%s.so", homeDir, lib));
+			g_BotLibrary = Omnibot_LL(OB_VA("%s/omni-bot/%s%s", homeDir, lib, suffix));
 	}
 	if(!g_BotLibrary)
 	{
 		char *homeDir = getenv("HOME");
 		if(homeDir)
-			g_BotLibrary = Omnibot_LL(OB_VA("%s.so", lib));
+			g_BotLibrary = Omnibot_LL(OB_VA("%s%s", lib, suffix));
 	}
 	if(!g_BotLibrary)
 	{

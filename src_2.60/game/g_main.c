@@ -610,18 +610,30 @@ NITMOD_MODULE_EXPORT int vmMain( int command, int arg0, int arg1, int arg2, int 
 	switch ( command ) {
     case GAME_NITMOD_DB_PRE_SHUTDOWN:
         return G_NITMOD_DatabasePrepareShutdown();
-	case GAME_INIT:
+	case GAME_INIT: {
+		int initStart = trap_Milliseconds();
+		float botStart;
 		G_NITMOD_ResetBotHandles();
 		Bot_Interface_InitHandles();
 		G_NITMOD_BannersReset();
 		G_InitGame( arg0, arg1, arg2 );
+		G_Printf(S_COLOR_BLUE "Game Initialization completed in %.2f seconds.\n",
+			((double)trap_Milliseconds() - initStart) / 1000.0);
+		/* Original stores the second start timestamp as a float. */
+		botStart = (float)trap_Milliseconds();
 		if (!Bot_Interface_Init()) {
-			G_Printf(S_COLOR_RED "Unable to initialize Omni-bot.\n");
+			G_Printf(S_COLOR_RED "Unable to Initialize Omni-Bot.\n");
 		}
+		G_Printf(S_COLOR_BLUE "Omni-Bot Initialization completed in %.2f seconds.\n",
+			((double)trap_Milliseconds() - botStart) / 1000.0);
 		return 0;
+	}
 	case GAME_SHUTDOWN:
-		Bot_Interface_Shutdown();
+		/* Original vmMain keeps Omni-bot available through game shutdown. */
 		G_ShutdownGame( arg0 );
+		if (!Bot_Interface_Shutdown()) {
+			G_Printf(S_COLOR_RED "Error shutting down Omni-Bot.\n");
+		}
 		return 0;
 	case GAME_CLIENT_CONNECT:
 		return (int)ClientConnect( arg0, arg1, arg2 );
