@@ -276,7 +276,7 @@ CG_ParseMapEntityInfo
 */
 void CG_ParseMapEntityInfo( int axis_number, int allied_number ) {
 	int i, offset;
-	if(NITMOD_UsesOriginalProtocol()) {
+	if(NITMOD_UsesNitmodHud()) {
 		CG_ParseOriginalMapEntityInfo();
 		return;
 	}
@@ -747,10 +747,12 @@ void CG_DrawMapEntity( mapEntityData_t *mEnt, float x, float y, float w, float h
 			trap_R_SetColor( colorRed );
 		} else if( mEnt->type == ME_COMMANDMAP_MARKER ) {
 			pic = 0;
-		} else if( mEnt->type == ME_DESTRUCT_2 ) {
+		} else if( mEnt->type == ME_DESTRUCT_2 && !original ) {
 			pic = 0;
 		} else {
-			if( mEntFilter & CC_FILTER_DESTRUCTIONS ) {
+			/* Original 0x2c702: type 5 bypasses the destruction filter,
+			 * but still selects its weapon-class icon before custom overrides. */
+			if( (mEntFilter & CC_FILTER_DESTRUCTIONS) && (!original || mEnt->type != ME_DESTRUCT_2) ) {
 				return;
 			}
 			pic = mEnt->team == TEAM_AXIS ? cgs.media.ccDestructIcon[cent->currentState.effect1Time][0] : cgs.media.ccDestructIcon[cent->currentState.effect1Time][1];
@@ -974,6 +976,8 @@ void CG_DrawMap( float x, float y, float w, float h, int mEntFilter, mapScissor_
 			vec4_t color;
 			Vector4Set( color, 1.f, 1.f, 1.f, alpha );
 			trap_R_SetColor( color );
+			/* Original CG_DrawMap writes depth before the depth-equal flag shaders. */
+			if(NITMOD_UsesNitmodHud()) CG_DrawPic(x, y, w, h, cgs.media.commandCentreBlackMaskShader);
 			if( cgs.ccLayers ) {
 				CG_DrawPic(x, y, w, h, cgs.media.commandCentreMapShaderTrans[cgs.ccSelectedLayer] );
 			} else {
@@ -996,8 +1000,12 @@ void CG_DrawMap( float x, float y, float w, float h, int mEntFilter, mapScissor_
 	exspawn = CG_DrawSpawnPointInfo( x, y, w, h, qfalse, scissor, -1 );
 
 	for(i = 0, mEnt = &mapEntities[0]; i < mapEntityCount; i++, mEnt++ ) {
-		if( mEnt->team != CG_LimboPanel_GetRealTeam() &&
-			!(NITMOD_UsesNitmodHud() && snap->ps.persistant[PERS_TEAM] == TEAM_SPECTATOR) ) {
+		/* Original CG_DrawMap: the non-interactive map follows the snapshot
+		 * team; only the limbo map also applies the selected team. */
+		if( NITMOD_UsesNitmodHud() ) {
+			if( (interactive && mEnt->team != CG_LimboPanel_GetRealTeam()) ||
+				(mEnt->team != snap->ps.persistant[PERS_TEAM] && snap->ps.persistant[PERS_TEAM] != TEAM_SPECTATOR) ) continue;
+		} else if( mEnt->team != CG_LimboPanel_GetRealTeam() ) {
 			continue;
 		}
 
@@ -1014,8 +1022,9 @@ void CG_DrawMap( float x, float y, float w, float h, int mEntFilter, mapScissor_
 	CG_DrawMortarMarker( x, y, w, h, qtrue, scissor, exspawn );
 
 	for(i = 0, mEnt = &mapEntities[0]; i < mapEntityCount; i++, mEnt++ ) {
+		/* Original player pass also admits distant disguised opponents. */
 		if( mEnt->team != CG_LimboPanel_GetRealTeam() &&
-			!(NITMOD_UsesNitmodHud() && snap->ps.persistant[PERS_TEAM] == TEAM_SPECTATOR) ) {
+			(!NITMOD_UsesNitmodHud() || !CG_DisguiseMapCheck(mEnt)) ) {
 			continue;
 		}
 

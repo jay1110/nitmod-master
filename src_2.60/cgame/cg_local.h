@@ -1391,6 +1391,7 @@ typedef struct {
 	qhandle_t	waypointCompassDefendShader;
 	qhandle_t	waypointCompassRegroupShader;
 	qhandle_t	commandCentreWoodShader;
+	qhandle_t	commandCentreBlackMaskShader;
 	qhandle_t	commandCentreMapShader[MAX_COMMANDMAP_LAYERS];
 	qhandle_t	commandCentreMapShaderTrans[MAX_COMMANDMAP_LAYERS];
 	qhandle_t	commandCentreAutomapShader[MAX_COMMANDMAP_LAYERS];

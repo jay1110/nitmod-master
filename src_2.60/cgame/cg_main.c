@@ -1555,6 +1555,7 @@ static void CG_RegisterGraphics( void ) {
 	cgs.media.commandCentreAutomapCornerShader = trap_R_RegisterShaderNoMip( "ui/assets2/maptrim_edge.tga" );
 	cgs.media.commandCentreAxisMineShader	= trap_R_RegisterShaderNoMip( "sprites/landmine_axis" );
 	cgs.media.commandCentreAlliedMineShader	= trap_R_RegisterShaderNoMip( "sprites/landmine_allied" );
+	cgs.media.commandCentreBlackMaskShader = trap_R_RegisterShaderNoMip( "images/blackmask" );
 	cgs.media.commandCentreSpawnShader[0] = trap_R_RegisterShaderNoMip( "gfx/limbo/cm_flagaxis" );
 	cgs.media.commandCentreSpawnShader[1] = trap_R_RegisterShaderNoMip( "gfx/limbo/cm_flagallied" );
 	cgs.media.compassConstructShader =		trap_R_RegisterShaderNoMip( "sprites/construct.tga" );
